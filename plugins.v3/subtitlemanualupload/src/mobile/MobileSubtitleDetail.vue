@@ -19,7 +19,7 @@ const bulkActionsOpen = ref(false)
         title="返回资源列表"
         @click="actions.resetSelection()"
       />
-      <span>海拉鲁字幕大师</span>
+      <span>海拉鲁字幕大师(NEO自用版)</span>
       <VBtn
         icon="mdi-refresh"
         variant="text"

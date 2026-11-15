@@ -29,7 +29,7 @@ const pageRef = ref(null)
 <template>
   <div class="subtitlemanualupload-page-wrapper">
     <VToolbar density="comfortable" class="sticky-toolbar">
-      <div class="text-h6 ms-3">海拉鲁字幕大师</div>
+      <div class="text-h6 ms-3">海拉鲁字幕大师(NEO自用版)</div>
       <VSpacer />
       <VTooltip v-if="props.show_switch" text="插件设置" location="bottom">
         <template #activator="{ props: tooltipProps }">

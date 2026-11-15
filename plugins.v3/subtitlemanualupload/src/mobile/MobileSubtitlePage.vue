@@ -43,7 +43,7 @@ defineProps({
           <VBtn
             icon="mdi-arrow-left"
             variant="text"
-            title="返回海拉鲁字幕大师"
+            title="返回海拉鲁字幕大师(NEO自用版)"
             @click="actions.home.setRootTab('match')"
           />
           <h2>匹配历史</h2>

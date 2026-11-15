@@ -65,6 +65,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "subhd_url": DEFAULT_PROVIDER_ROOTS["subhd"],
     "subtitlecat_include_translations": False,
     "subdl_api_key": "",
+    "subhd_bypass_url": "",
     "assrt_url": DEFAULT_PROVIDER_ROOTS["assrt"],
     "assrt_api_key": "",
     "assrt_api_url": DEFAULT_ASSRT_API_URL,
@@ -239,6 +240,7 @@ def normalize_plugin_config(
         "online_use_proxy": False if legacy_proxy_default else bool(raw_config.get("online_use_proxy", False)),
         "online_site_urls": normalize_online_site_urls(raw_config),
         "subdl_api_key": normalize_text(raw_config.get("subdl_api_key")),
+        "subhd_bypass_url": normalize_text(raw_config.get("subhd_bypass_url")).rstrip("/"),
         "subtitlecat_include_translations": bool(raw_config.get("subtitlecat_include_translations", False)),
         "assrt_api_key": assrt_api_key,
         "assrt_api_url": normalize_root_url(raw_config.get("assrt_api_url"), DEFAULT_ASSRT_API_URL),
@@ -526,6 +528,7 @@ def build_config_form(
                         },
                         md=6,
                     ),
+                    _col("VTextField", {"model": "subhd_bypass_url", "label": "SubHD CF 服务地址", "placeholder": "http://NAS地址:18089", "hint": "CloudflareBypassForScraping 转发服务，留空直接访问", "persistent-hint": True}, md=6),
                     _col("VTextField", {"model": "subdl_api_key", "label": "SubDL API Key", "type": "password", "placeholder": "填写后在自动字幕源中选择 SubDL"}, md=6),
                     _col("VSwitch", {"model": "subtitlecat_include_translations", "label": "接受 SubtitleCat 已有中文站点翻译（默认关闭）"}, md=6),
                     _col(

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import http.cookiejar
+import io
 import json
 import re
 import ssl
 import time
 import urllib.error
 import urllib.request
+import urllib.response
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import unquote, urlparse, urlunparse
@@ -15,6 +17,7 @@ from app.sdk.config import settings
 from app.sdk.logging import logger
 
 from .models import CaptchaRequiredError
+from .cloudflare import is_challenge, browser_session
 
 
 USER_AGENT = (
@@ -48,16 +51,75 @@ class OnlinePageClient:
         engine: str = DEFAULT_ENGINE,
         use_proxy: bool = False,
         timeout: int = 60,
+        bypass_url: str = "",
     ):
         self.engine = normalize_online_engine(engine)
         self.use_proxy = use_proxy
         self.timeout = timeout
+        self.bypass_url = bypass_url.strip().rstrip("/")
         self.cookie_jar = http.cookiejar.CookieJar()
+        self.user_agent = USER_AGENT
         handlers = [urllib.request.HTTPCookieProcessor(self.cookie_jar)]
         proxies = getattr(settings, "PROXY", None) if use_proxy else None
-        if proxies:
-            handlers.append(urllib.request.ProxyHandler(proxies))
+        handlers.append(urllib.request.ProxyHandler(proxies or {}))
         self.opener = urllib.request.build_opener(*handlers)
+
+    def _open(self, request, *, referer: str = ""):
+        """Retry only a confirmed challenge, retaining the original method/body."""
+        if self.bypass_url:
+            from .cloudflare import mirror_request
+            response = mirror_request(self.bypass_url, request, self.cookie_jar,
+                                      proxy=_browser_proxy(self.use_proxy), timeout=max(60, self.timeout))
+            if is_challenge(response.headers, response.peek_body):
+                response.close()
+                raise CaptchaRequiredError("CF 服务仍返回验证页，请检查服务日志或手动下载后上传。", verify_url=referer or request.full_url)
+            return response
+        for attempt in range(2):
+            request.add_header("User-Agent", self.user_agent)
+            # CookieProcessor must rebuild this header after clearance is refreshed.
+            request.remove_header("Cookie")
+            error = None
+            try:
+                response = self.opener.open(request, timeout=self.timeout)
+            except urllib.error.HTTPError as exc:
+                response = error = exc
+            with response:
+                raw = response.read()
+                headers = response.headers
+                final_url = response.geturl()
+                status = response.code
+            if not is_challenge(headers, raw):
+                if error is not None:
+                    raise urllib.error.HTTPError(final_url, status, error.reason, headers, io.BytesIO(raw))
+                return urllib.response.addinfourl(io.BytesIO(raw), headers, final_url, status)
+            verify_url = referer if referer and urlparse(referer).netloc == urlparse(final_url).netloc else final_url
+            if attempt:
+                raise CaptchaRequiredError(
+                    "Cloudflare 验证后请求仍被拦截，请在站点手动下载字幕包后上传。",
+                    verify_url=verify_url,
+                )
+            logger.info("[SubtitleManualUpload] 检测到 Cloudflare 验证，尝试浏览器恢复 host=%s", _host(final_url))
+            try:
+                cookies, user_agent = browser_session(
+                    verify_url, self.cookie_jar, proxy=_browser_proxy(self.use_proxy), timeout=self.timeout,
+                )
+            except Exception as exc:
+                raise CaptchaRequiredError(
+                    "Cloudflare 验证未完成，请检查 MoviePilot 浏览器组件和代理；也可手动下载后上传。",
+                    verify_url=verify_url,
+                ) from exc
+            self.user_agent = user_agent
+            for cookie in cookies:
+                domain = cookie["domain"]
+                expires = cookie.get("expires", -1)
+                self.cookie_jar.set_cookie(http.cookiejar.Cookie(
+                    version=0, name=cookie["name"], value=cookie["value"], port=None,
+                    port_specified=False, domain=domain, domain_specified=domain.startswith("."),
+                    domain_initial_dot=domain.startswith("."), path=cookie.get("path") or "/",
+                    path_specified=True, secure=bool(cookie.get("secure")),
+                    expires=int(expires) if expires > 0 else None, discard=expires <= 0,
+                    comment=None, comment_url=None, rest={"HttpOnly": cookie.get("httpOnly", False)},
+                ))
 
     def status(self) -> Dict[str, Any]:
         return {
@@ -82,7 +144,7 @@ class OnlinePageClient:
             headers["Referer"] = referer
         request = urllib.request.Request(url, headers=headers)
         try:
-            with self.opener.open(request, timeout=self.timeout) as response:
+            with self._open(request, referer=referer) as response:
                 raw = response.read()
                 charset = response.headers.get_content_charset()
                 return response.status, _decode_bytes(raw, charset), response.geturl()
@@ -104,7 +166,7 @@ class OnlinePageClient:
         last_error: Optional[Exception] = None
         for attempt in range(3):
             try:
-                with self.opener.open(request, timeout=self.timeout) as response:
+                with self._open(request, referer=referer) as response:
                     content = response.read()
                     filename = OnlineDirectDownloader._filename_from_response(response.headers, response.geturl() or url)
                     logger.info(
@@ -138,10 +200,16 @@ class OnlinePageClient:
         }
         if referer:
             headers["Referer"] = referer
+            origin = urlparse(referer)
+            headers["Origin"] = f"{origin.scheme}://{origin.netloc}"
+            headers["X-Requested-With"] = "XMLHttpRequest"
+            headers["Sec-Fetch-Site"] = "same-origin" if origin.netloc == urlparse(url).netloc else "cross-site"
+            headers["Sec-Fetch-Mode"] = "cors"
+            headers["Sec-Fetch-Dest"] = "empty"
         data = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(url, data=data, headers=headers, method="POST")
         try:
-            with self.opener.open(request, timeout=self.timeout) as response:
+            with self._open(request, referer=referer) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
             detail = _decode_bytes(exc.read()[:500], exc.headers.get_content_charset())

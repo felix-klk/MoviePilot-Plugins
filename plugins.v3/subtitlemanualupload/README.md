@@ -1,4 +1,4 @@
-# 海拉鲁字幕大师
+# 海拉鲁字幕大师(NEO自用版)
 
 ## 📘 [立即查看：完整功能使用教学](https://github.com/ifsherlock/MoviePilot-Plugins/blob/main/docs/SubtitleManualUpload%E5%8A%9F%E8%83%BD%E4%BD%BF%E7%94%A8%E6%95%99%E5%AD%A6.md)
 
@@ -7,6 +7,16 @@
 MoviePilot V3 专用字幕管理插件，脱胎自 [ChineseSubFinder](https://github.com/ChineseSubFinder/ChineseSubFinder)，提供在线搜索、手动上传、自动匹配、规范改名与智能调轴能力。V2 版本保留在 `plugins.v2/subtitlemanualupload`。
 
 详细配置、额外 STRM 实时监控和字幕写入说明见：[功能使用教学](../../docs/SubtitleManualUpload功能使用教学.md)。
+
+## v1.2.20 更新
+
+- SubHD 新增“CF 服务地址”，支持 CloudflareBypassForScraping 的 `x-hostname` 转发模式（已验证服务接口版本 2.0.0）。填写后搜索、下载准备、验证码接口和文件请求统一经过服务；留空直接访问，遇到明确 CF 验证时尝试 V3 浏览器 SDK。
+- 修复 SubHD 下载 API 缺少 Origin、X-Requested-With 和 Sec-Fetch 请求头导致的 403；使用页面重定向后的域名构建接口，避免旧域名重定向丢失 POST。
+- CF 服务连接不经过系统代理；开启插件代理时，通过 `x-proxy` 传递目标站代理。Cookie 按目标站域名隔离，重定向最多 5 次，不记录 Cookie 内容。
+
+配置：在插件“设置 → 在线字幕 → SubHD”中填写站点地址 `https://subhd.me`，在“SubHD CF 服务地址”填写 MoviePilot 容器可访问的服务基础地址，例如 `http://NAS地址:18089`，保存。地址不要附加 `/cookies`、`/html` 或 `/v1`；此配置不是 FlareSolverr 协议。本版未提供服务 `x-auth-token` 配置。
+
+2026-11-16 验证：81 项定向测试通过，V3 前端构建通过；通过用户 NAS 的 2.0.0 服务完成 SubHD `/a/FpF1hG` 下载，得到 220,012 字节 ASS 文件。未替换用户正在运行的插件，未写入媒体库；实测仅覆盖这一字幕样本，不能保证所有站点挑战均可自动通过。
 
 ## v1.2.19 更新
 
@@ -162,7 +172,7 @@ MoviePilot V3 专用字幕管理插件，脱胎自 [ChineseSubFinder](https://gi
 
 ## v0.1.82 更新
 
-- 字幕匹配插件品牌升级为“海拉鲁字幕大师”，桌面端、手机端、配置页和插件市场显示名同步更新。
+- 字幕匹配插件品牌升级为“海拉鲁字幕大师(NEO自用版)”，桌面端、手机端、配置页和插件市场显示名同步更新。
 - 启用全新像素风海拉鲁图标，并使用独立资源文件名避免旧图缓存。
 - 补充“脱胎自 ChineseSubFinder”的项目说明；保留 `SubtitleManualUpload` 插件 ID、配置前缀、API 路径和现有功能兼容性。
 

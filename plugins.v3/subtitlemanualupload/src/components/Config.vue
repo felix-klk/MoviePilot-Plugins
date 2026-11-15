@@ -42,6 +42,7 @@ const localConfig = ref({
   timeline_allow_risky_offset: false,
   subhd_url: 'https://subhd.tv',
   subdl_api_key: '',
+  subhd_bypass_url: '',
   subtitlecat_include_translations: false,
   assrt_url: 'https://2.assrt.net',
   assrt_api_key: '',
@@ -262,6 +263,7 @@ function normalizeConfig(input) {
     timeline_allow_risky_offset: Boolean(input?.timeline_allow_risky_offset),
     subhd_url: normalizeRootUrl(input?.subhd_url, 'https://subhd.tv'),
     subdl_api_key: String(input?.subdl_api_key || '').trim(),
+    subhd_bypass_url: String(input?.subhd_bypass_url || '').trim().replace(/\/+$/, ''),
     subtitlecat_include_translations: Boolean(input?.subtitlecat_include_translations),
     assrt_url: normalizeRootUrl(input?.assrt_url, 'https://2.assrt.net'),
     assrt_api_key: assrtApiKey,
@@ -302,7 +304,7 @@ onMounted(() => {
   <div class="subtitlemanualupload-config">
     <div class="config-toolbar-sticky">
       <VToolbar density="comfortable" color="transparent">
-        <div class="text-subtitle-1 ms-3 config-toolbar-title" title="海拉鲁字幕大师配置">海拉鲁字幕大师配置</div>
+        <div class="text-subtitle-1 ms-3 config-toolbar-title" title="海拉鲁字幕大师(NEO自用版)配置">海拉鲁字幕大师(NEO自用版)配置</div>
         <VSpacer />
         <VBtn
           href="https://github.com/ifsherlock/MoviePilot-Plugins/blob/main/docs/SubtitleManualUpload%E5%8A%9F%E8%83%BD%E4%BD%BF%E7%94%A8%E6%95%99%E5%AD%A6.md"
@@ -560,6 +562,15 @@ onMounted(() => {
                     variant="outlined"
                     density="comfortable"
                     hide-details
+                  />
+                  <VTextField
+                    v-model="localConfig.subhd_bypass_url"
+                    label="SubHD CF 服务地址"
+                    placeholder="http://NAS地址:18089"
+                    hint="CloudflareBypassForScraping 转发服务；填写后 SubHD 搜索和下载均经过此服务。留空使用直接访问。"
+                    persistent-hint
+                    variant="outlined"
+                    density="comfortable"
                   />
                 </div>
               </div>

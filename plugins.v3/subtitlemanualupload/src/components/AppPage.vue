@@ -868,7 +868,7 @@ defineExpose({
 
 <template>
   <VToolbar v-if="!props.hideTitle" density="comfortable" color="transparent">
-    <div class="text-subtitle-1 ms-3">海拉鲁字幕大师</div>
+    <div class="text-subtitle-1 ms-3">海拉鲁字幕大师(NEO自用版)</div>
     <VSpacer />
     <VTooltip text="插件设置" location="bottom">
       <template #activator="{ props: tooltipProps }">

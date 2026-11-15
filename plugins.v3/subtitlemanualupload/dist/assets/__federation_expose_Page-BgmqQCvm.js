@@ -1,6 +1,6 @@
 import { importShared } from './__federation_fn_import-JrT3xvdd.js';
-import { _ as _export_sfc } from './__federation_expose_Config-QKXZRFi0.js';
-import AppPage from './__federation_expose_AppPage-B92hs61W.js';
+import { _ as _export_sfc } from './__federation_expose_Config-7MJoWITE.js';
+import AppPage from './__federation_expose_AppPage-CvUzq1PZ.js';
 
 const {createElementVNode:_createElementVNode,resolveComponent:_resolveComponent,createVNode:_createVNode,mergeProps:_mergeProps,withCtx:_withCtx,openBlock:_openBlock,createBlock:_createBlock,createCommentVNode:_createCommentVNode,createElementBlock:_createElementBlock} = await importShared('vue');
 
@@ -51,7 +51,7 @@ return (_ctx, _cache) => {
       class: "sticky-toolbar"
     }, {
       default: _withCtx(() => [
-        _cache[3] || (_cache[3] = _createElementVNode("div", { class: "text-h6 ms-3" }, "海拉鲁字幕大师", -1)),
+        _cache[3] || (_cache[3] = _createElementVNode("div", { class: "text-h6 ms-3" }, "海拉鲁字幕大师(NEO自用版)", -1)),
         _createVNode(_component_VSpacer),
         (props.show_switch)
           ? (_openBlock(), _createBlock(_component_VTooltip, {
@@ -98,6 +98,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-16b4ebf1"]]);
+const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-2fc5cccf"]]);
 
 export { Page as default };

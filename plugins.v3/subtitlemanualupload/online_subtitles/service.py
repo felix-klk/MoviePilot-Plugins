@@ -15,6 +15,7 @@ class OnlineSubtitleSearchService:
         *,
         engine: str = DEFAULT_ENGINE,
         use_proxy: bool = False,
+        subhd_bypass_url: str = "",
         provider_roots: Optional[Dict[str, str]] = None,
         subdl_api_key: str = "",
         subtitlecat_include_translations: bool = False,
@@ -31,8 +32,9 @@ class OnlineSubtitleSearchService:
             timeout=ONLINE_PAGE_TIMEOUT_SECONDS,
         )
         roots = normalize_provider_roots(provider_roots)
+        subhd_fetcher = OnlinePageClient(use_proxy=use_proxy, timeout=60, bypass_url=subhd_bypass_url) if subhd_bypass_url else self.fetcher
         self.providers: Dict[str, BaseSubtitleProvider] = {
-            "subhd": SubHDProvider(self.fetcher, root_url=roots["subhd"]),
+            "subhd": SubHDProvider(subhd_fetcher, root_url=roots["subhd"]),
             "subtitlecat": SubtitleCatProvider(self.fetcher, root_url=roots["subtitlecat"], include_translations=subtitlecat_include_translations),
             "subdl": SubDLProvider(self.fetcher, root_url=roots["subdl"], api_key=subdl_api_key),
             "assrt": AssrtProvider(
