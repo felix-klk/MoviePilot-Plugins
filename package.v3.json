@@ -9,7 +9,7 @@
     "author_url": "https://github.com/ifsherlock",
     "level": 1,
     "system_version": ">=3.0.0",
-    "release": true,
+    "release": false,
     "history": {
       "v1.2.20": "SubHD 支持 CloudflareBypassForScraping 转发服务；补齐下载 API 来源请求头，保留重定向后的站点地址和 Cookie 域隔离，明确提示 CF 验证失败。",
       "v1.2.19": "修复桌面端空队列时自动入库入口被隐藏的问题；入口始终显示，空队列展示“暂无自动入库任务”。",
