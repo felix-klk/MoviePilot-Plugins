@@ -567,7 +567,7 @@ onMounted(() => {
                     v-model="localConfig.subhd_bypass_url"
                     label="SubHD CF 服务地址"
                     placeholder="http://NAS地址:18089"
-                    hint="CloudflareBypassForScraping 转发服务；填写后 SubHD 搜索和下载均经过此服务。留空使用直接访问。"
+                    hint="填写后 SubHD 通过此服务自身网络访问，不继承 MP 系统代理。Turnstile 下载验证需要服务支持 /turnstile；留空直接访问。"
                     persistent-hint
                     variant="outlined"
                     density="comfortable"

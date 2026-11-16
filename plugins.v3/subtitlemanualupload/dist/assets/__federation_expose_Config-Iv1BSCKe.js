@@ -866,7 +866,7 @@ return (_ctx, _cache) => {
                         "onUpdate:modelValue": _cache[21] || (_cache[21] = $event => ((localConfig.value.subhd_bypass_url) = $event)),
                         label: "SubHD CF 服务地址",
                         placeholder: "http://NAS地址:18089",
-                        hint: "CloudflareBypassForScraping 转发服务；填写后 SubHD 搜索和下载均经过此服务。留空使用直接访问。",
+                        hint: "填写后 SubHD 通过此服务自身网络访问，不继承 MP 系统代理。Turnstile 下载验证需要服务支持 /turnstile；留空直接访问。",
                         "persistent-hint": "",
                         variant: "outlined",
                         density: "comfortable"
@@ -1134,6 +1134,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-6508f981"]]);
+const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-d390fdd7"]]);
 
 export { _export_sfc as _, onlineLanguageItems as a, onlineProviderItems as b, onlineResultKey as c, defaultOnlineProviderIds as d, Config as default, isForeignOnlineResult as e, providerPriority as f, onlineResultLanguagePriority as g, onlineResultIdentityPriority as h, isOnlineResultDownloadable as i, onlineResultMeta as j, providerProgressText as k, providerProgressColor as l, onlineResultLanguageFilterCategory as o, providerName as p };

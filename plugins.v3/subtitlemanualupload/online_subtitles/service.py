@@ -32,7 +32,9 @@ class OnlineSubtitleSearchService:
             timeout=ONLINE_PAGE_TIMEOUT_SECONDS,
         )
         roots = normalize_provider_roots(provider_roots)
-        subhd_fetcher = OnlinePageClient(use_proxy=use_proxy, timeout=60, bypass_url=subhd_bypass_url) if subhd_bypass_url else self.fetcher
+        # The remote service has its own network namespace and egress. An MP
+        # proxy (especially localhost) is not necessarily reachable from there.
+        subhd_fetcher = OnlinePageClient(use_proxy=False, timeout=60, bypass_url=subhd_bypass_url) if subhd_bypass_url else self.fetcher
         self.providers: Dict[str, BaseSubtitleProvider] = {
             "subhd": SubHDProvider(subhd_fetcher, root_url=roots["subhd"]),
             "subtitlecat": SubtitleCatProvider(self.fetcher, root_url=roots["subtitlecat"], include_translations=subtitlecat_include_translations),

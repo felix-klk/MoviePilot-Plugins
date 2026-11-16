@@ -2,10 +2,70 @@
 from concurrent.futures import ThreadPoolExecutor
 import time
 import io
+import json
+import gzip
+import zlib
 import urllib.request
 import urllib.response
 import urllib.error
 from urllib.parse import urlparse, urljoin, quote
+
+
+def _proxy_url(proxy):
+    if not proxy:
+        return ""
+    server = urlparse(proxy["server"])
+    auth = ""
+    if proxy.get("username"):
+        auth = quote(proxy["username"], safe="") + ":" + quote(proxy.get("password", ""), safe="") + "@"
+    return server._replace(netloc=auth + server.netloc).geturl()
+
+
+def request_turnstile(service_url, url, *, sitekey, action, proxy, timeout):
+    """Require a real token API; a mirror endpoint cannot generate form tokens."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+    try:
+        with opener.open(service_url + "/openapi.json", timeout=15) as response:
+            capabilities = json.load(response)
+    except Exception as exc:
+        raise ValueError("无法读取 CF 服务能力，请检查服务地址与连通性") from exc
+    endpoint = capabilities.get("paths", {}).get("/turnstile", {})
+    if "post" not in endpoint:
+        version = str(capabilities.get("info", {}).get("version", "未知"))[:30]
+        raise ValueError(f"当前 CF 服务 {version} 不支持 /turnstile；Cookie/网页转发不能完成 SubHD 下载表单验证。请升级到支持该接口的版本，或手动下载上传。")
+    payload = {"url": url, "sitekey": sitekey, "action": action}
+    if proxy:
+        payload["proxy"] = _proxy_url(proxy)
+    request = urllib.request.Request(service_url + "/turnstile", data=json.dumps(payload).encode(),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            result = json.load(response)
+    except Exception as exc:
+        raise ValueError("CF 服务未完成 Turnstile 验证，请检查服务日志或手动下载上传") from exc
+    if not isinstance(result, dict) or not isinstance(result.get("token"), str) or not result["token"].strip() or not result.get("user_agent"):
+        raise ValueError("CF 服务没有返回有效的 Turnstile token 和 User-Agent")
+    return result
+
+
+def _decode_response_body(headers, body):
+    encoding = str(headers.get("Content-Encoding", "")).strip().lower()
+    if encoding == "gzip" and body.startswith(b"\x1f\x8b"):
+        return gzip.decompress(body)
+    if encoding == "deflate":
+        try:
+            return zlib.decompress(body)
+        except zlib.error:
+            if body.lstrip().startswith((b"<", b"{", b"[")):
+                return body  # Some mirror versions retain stale encoding headers.
+            return zlib.decompress(body, -zlib.MAX_WBITS)
+    if encoding == "br" and not body.lstrip().startswith((b"<", b"{", b"[")):
+        try:
+            import brotli
+            return brotli.decompress(body)
+        except Exception as exc:
+            raise ValueError("CF 服务返回了无法解码的 Brotli 内容，请检查服务转发设置") from exc
+    return body
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -28,11 +88,7 @@ def mirror_request(service_url, request, cookie_jar, *, proxy, timeout):
         headers["x-hostname"] = target.netloc
         headers["Accept-Encoding"] = "identity"
         if proxy:
-            server = urlparse(proxy["server"])
-            auth = ""
-            if proxy.get("username"):
-                auth = quote(proxy["username"], safe="") + ":" + quote(proxy.get("password", ""), safe="") + "@"
-            headers["x-proxy"] = server._replace(netloc=auth + server.netloc).geturl()
+            headers["x-proxy"] = _proxy_url(proxy)
         url = service_url + (target.path or "/") + ("?" + target.query if target.query else "")
         forwarded = urllib.request.Request(url, data=request.data, headers=headers, method=request.get_method())
         try:
@@ -41,6 +97,7 @@ def mirror_request(service_url, request, cookie_jar, *, proxy, timeout):
             response = exc
         with response:
             body, status, response_headers = response.read(), response.code, response.headers
+        body = _decode_response_body(response_headers, body)
         result = urllib.response.addinfourl(io.BytesIO(body), response_headers, request.full_url, status)
         cookie_jar.extract_cookies(result, request)
         if status in {301, 302, 303, 307, 308} and response_headers.get("Location"):
@@ -56,7 +113,7 @@ def mirror_request(service_url, request, cookie_jar, *, proxy, timeout):
             continue
         if status >= 400 and not is_challenge(response_headers, body):
             result.close()
-            raise urllib.error.HTTPError(request.full_url, status, "CF 服务或目标站请求失败", response_headers, io.BytesIO(b"CF service/upstream request failed"))
+            raise urllib.error.HTTPError(request.full_url, status, "CF 服务或目标站请求失败", response_headers, io.BytesIO(body))
         result.peek_body = body
         return result
     raise ValueError("CF 转发重定向次数过多")

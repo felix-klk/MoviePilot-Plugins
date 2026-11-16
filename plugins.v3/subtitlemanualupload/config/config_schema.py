@@ -528,7 +528,7 @@ def build_config_form(
                         },
                         md=6,
                     ),
-                    _col("VTextField", {"model": "subhd_bypass_url", "label": "SubHD CF 服务地址", "placeholder": "http://NAS地址:18089", "hint": "CloudflareBypassForScraping 转发服务，留空直接访问", "persistent-hint": True}, md=6),
+                    _col("VTextField", {"model": "subhd_bypass_url", "label": "SubHD CF 服务地址", "placeholder": "http://NAS地址:18089", "hint": "使用 CF 服务自身网络，不继承 MP 系统代理；Turnstile 验证需支持 /turnstile", "persistent-hint": True}, md=6),
                     _col("VTextField", {"model": "subdl_api_key", "label": "SubDL API Key", "type": "password", "placeholder": "填写后在自动字幕源中选择 SubDL"}, md=6),
                     _col("VSwitch", {"model": "subtitlecat_include_translations", "label": "接受 SubtitleCat 已有中文站点翻译（默认关闭）"}, md=6),
                     _col(

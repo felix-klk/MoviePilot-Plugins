@@ -2,6 +2,7 @@ import importlib.util
 import importlib
 import io
 import json
+import gzip
 from email.message import Message
 from pathlib import Path
 import sys
@@ -25,6 +26,7 @@ def clients(monkeypatch):
     config.settings = types.SimpleNamespace(PROXY=None, PROXY_SERVER=None)
     log = types.ModuleType("app.sdk.logging")
     log.logger = types.SimpleNamespace(info=lambda *a, **k: None)
+    log.logger.warning = lambda *a, **k: None
     monkeypatch.setitem(sys.modules, "app.sdk.config", config)
     monkeypatch.setitem(sys.modules, "app.sdk.logging", log)
     spec = importlib.util.spec_from_file_location("cf_test.online_subtitles.clients", root / "clients.py")
@@ -49,6 +51,8 @@ class Opener:
         self.calls = []
 
     def open(self, request, timeout):
+        if isinstance(request, str):
+            request = urllib.request.Request(request)
         self.calls.append((request.get_method(), request.data, dict(request.header_items()), request.full_url))
         result = next(self.responses)
         if isinstance(result, Exception):
@@ -160,3 +164,123 @@ def test_subhd_download_uses_redirected_domain(clients):
             return "file.zip", b"PKzip", url
     provider = provider_module.SubHDProvider(Fetcher())
     assert provider.download({"page_url": "https://subhd.tv/a/abc"}) == ("file.zip", b"PKzip")
+
+
+@pytest.mark.parametrize("http_error", [False, True])
+@pytest.mark.parametrize("reject_token", [False, True])
+def test_turnstile_submits_fresh_token_once(clients, http_error, reject_token):
+    provider_module = importlib.import_module("cf_test.online_subtitles.providers.subhd")
+    class Fetcher:
+        calls = []
+        solves = []
+        def get_text(self, url, **kwargs):
+            if "/a/" in url:
+                return 200, '<a href="/down/abc">Download</a>', url
+            return 200, 'const turnstileConfig = {"siteKey":"public-key","required":false,"words":{}};', url
+        def post_json(self, url, payload, **kwargs):
+            self.calls.append(dict(payload))
+            if len(self.calls) == 1 or reject_token:
+                data = {"success": False, "pass": False, "turnstileRequired": True, "msg": "请先完成人机验证"}
+                if http_error:
+                    raise provider_module.OnlineJSONError(403, data)
+                return data
+            return {"success": True, "url": "/file.ass"}
+        def solve_turnstile(self, url, **kwargs):
+            self.solves.append((url, kwargs))
+            return "single-use-token"
+        def get_bytes(self, url, **kwargs):
+            return "file.ass", b"[Script Info]\n", url
+    fetcher = Fetcher()
+    provider = provider_module.SubHDProvider(fetcher)
+    if reject_token:
+        with pytest.raises(provider_module.CaptchaRequiredError, match="未接受"):
+            provider.download({"page_url": "https://subhd.me/a/abc"})
+    else:
+        assert provider.download({"page_url": "https://subhd.me/a/abc"})[0] == "file.ass"
+    assert len(fetcher.calls) == 2
+    assert len(fetcher.solves) == 1
+    assert fetcher.solves[0] == ("https://subhd.me/down/abc", {"sitekey": "public-key", "action": "download"})
+    assert "turnstileToken" not in fetcher.calls[0]
+    assert fetcher.calls[1]["turnstileToken"] == "single-use-token"
+    assert fetcher.calls[1]["cap"] == ""
+
+
+def test_http_403_retains_structured_turnstile_error(clients):
+    client = clients.OnlinePageClient()
+    client.opener = Opener(response(b'{"turnstileRequired":true,"msg":"verify"}',403))
+    with pytest.raises(clients.OnlineJSONError) as error:
+        client.post_json("https://subhd.me/api/sub/down", {"sid":"abc"})
+    assert error.value.status == 403
+    assert error.value.payload["turnstileRequired"] is True
+
+
+def test_old_mirror_cannot_claim_turnstile_support(clients, monkeypatch):
+    cf = importlib.import_module("cf_test.online_subtitles.cloudflare")
+    opener = Opener(response(b'{"info":{"version":"2.0.0"},"paths":{"/{path}":{"post":{}}}}'))
+    monkeypatch.setattr(cf.urllib.request,"build_opener",lambda *a:opener)
+    with pytest.raises(ValueError, match="2.0.0 不支持 /turnstile"):
+        cf.request_turnstile("http://nas:18089","https://subhd.me/down/abc",sitekey="key",action="download",proxy=None,timeout=120)
+    assert len(opener.calls) == 1
+
+
+def test_turnstile_service_receives_page_action_and_proxy(clients, monkeypatch):
+    cf = importlib.import_module("cf_test.online_subtitles.cloudflare")
+    opener = Opener(response(b'{"paths":{"/turnstile":{"post":{}}}}'), response(b'{"token":"fresh","user_agent":"Browser UA"}'))
+    monkeypatch.setattr(cf.urllib.request,"build_opener",lambda *a:opener)
+    result=cf.request_turnstile("http://nas:18089","https://subhd.me/down/abc",sitekey="key",action="download",proxy={"server":"http://proxy:7890"},timeout=120)
+    assert result["token"] == "fresh"
+    assert json.loads(opener.calls[1][1]) == {"url":"https://subhd.me/down/abc","sitekey":"key","action":"download","proxy":"http://proxy:7890"}
+
+
+def test_mirror_decompresses_html_and_keeps_application_error(clients,monkeypatch):
+    cf = importlib.import_module("cf_test.online_subtitles.cloudflare")
+    compressed=response(gzip.compress(b'<html>search results</html>'))
+    compressed.headers['Content-Encoding']='gzip'
+    opener=Opener(compressed,response(b'{"turnstileRequired":true}',403))
+    monkeypatch.setattr(cf.urllib.request,"build_opener",lambda *a:opener)
+    client=clients.OnlinePageClient(bypass_url="http://nas:18089")
+    assert client.get_text("https://subhd.me/search/test")[1] == '<html>search results</html>'
+    with pytest.raises(clients.OnlineJSONError) as error:
+        client.post_json("https://subhd.me/api/sub/down",{})
+    assert error.value.payload['turnstileRequired'] is True
+
+
+def test_search_500_is_not_a_zero_results_success(clients):
+    provider_module=importlib.import_module("cf_test.online_subtitles.providers.subhd")
+    fetcher=types.SimpleNamespace(get_text=lambda *a,**k:(500,'service unavailable',a[0]))
+    provider=provider_module.SubHDProvider(fetcher)
+    with pytest.raises(ValueError,match='HTTP 500'):
+        provider._search_keyword('Tulsa King S04E05',[])
+
+
+def test_search_uses_direct_fallback_only_for_failed_mirror(clients,monkeypatch):
+    client=clients.OnlinePageClient(bypass_url="http://nas:18089",use_proxy=True)
+    client.get_text=lambda *a,**k:(500,"upstream error",a[0])
+    calls=[]
+    class Direct:
+        def __init__(self,**kwargs):
+            calls.append(kwargs)
+        def get_text(self,url,**kwargs):
+            return 200,"<html>results</html>",url
+        def close(self):
+            calls.append("closed")
+    monkeypatch.setattr(clients,"OnlinePageClient",Direct)
+    assert client.get_search_text("https://subhd.me/search/test")[0] == 200
+    assert calls==[{"use_proxy":True,"timeout":15},"closed"]
+    assert client.bypass_url == "http://nas:18089"
+    client.get_text=lambda *a,**k:(404,"missing",a[0])
+    calls.clear()
+    assert client.get_search_text("https://subhd.me/search/test")[0] == 404
+    assert not calls
+
+
+def test_remote_subhd_does_not_inherit_mp_proxy(clients):
+    service_module=importlib.import_module("cf_test.online_subtitles.service")
+    service=service_module.OnlineSubtitleSearchService(use_proxy=True,subhd_bypass_url="http://nas:18089")
+    assert service.fetcher.use_proxy is True
+    assert service.providers["subhd"].fetcher.use_proxy is False
+    assert service.providers["subhd"].fetcher.bypass_url == "http://nas:18089"
+    assert service.providers["subtitlecat"].fetcher.use_proxy is True
+    direct=service_module.OnlineSubtitleSearchService(use_proxy=True)
+    assert direct.providers["subhd"].fetcher is direct.fetcher
+    assert direct.providers["subhd"].fetcher.use_proxy is True

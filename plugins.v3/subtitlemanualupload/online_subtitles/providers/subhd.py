@@ -88,7 +88,12 @@ class SubHDProvider(BaseSubtitleProvider):
     def _search_keyword(self, keyword: str, targets: List[Dict[str, Any]]) -> List[OnlineSubtitleResult]:
         if not keyword:
             return []
-        status, text, final_url = self.fetcher.get_text(self.manual_url(keyword), referer=self.root_url)
+        fetch = getattr(self.fetcher, "get_search_text", self.fetcher.get_text)
+        status, text, final_url = fetch(self.manual_url(keyword), referer=self.root_url)
+        if status >= 400 and status != 404:
+            raise ValueError(f"SubHD 搜索请求失败 HTTP {status}，请检查 CF 服务、站点地址及代理配置")
+        if status < 400 and text and "<" not in text:
+            raise ValueError("SubHD 搜索返回内容不是网页，请检查 CF 服务响应格式")
         if status >= 400 or not text:
             logger.warning(
                 "[SubtitleManualUpload] SubHD 标题搜索页面不可用 keyword=%s status=%s",
@@ -169,7 +174,10 @@ class SubHDProvider(BaseSubtitleProvider):
         if not detail_id:
             return []
         page_url = f"{self.root_url}/d/{quote(detail_id)}"
-        status, text, final_url = self.fetcher.get_text(page_url, referer=self.root_url)
+        fetch = getattr(self.fetcher, "get_search_text", self.fetcher.get_text)
+        status, text, final_url = fetch(page_url, referer=self.root_url)
+        if status >= 400 and status != 404:
+            raise ValueError(f"SubHD 详情请求失败 HTTP {status}，请检查 CF 服务、站点地址及代理配置")
         if status >= 400 or not text:
             if status == 404:
                 logger.info(
@@ -384,10 +392,32 @@ class SubHDProvider(BaseSubtitleProvider):
         root_url = f"{parsed_down.scheme}://{parsed_down.netloc}"
         payload = {"sid": sid, "cap": captcha_code or ""}
         api_url = f"{root_url}/api/sub/down"
-        data = self.fetcher.post_json(api_url, payload, referer=down_url)
-        if data.get("pass") is False and not payload["cap"]:
+
+        def submit():
+            try:
+                return self.fetcher.post_json(api_url, payload, referer=down_url)
+            except OnlineJSONError as exc:
+                if exc.status == 403 and exc.payload.get("turnstileRequired") is True:
+                    return exc.payload
+                raise
+
+        data = submit()
+        if data.get("turnstileRequired") is True:
+            config_match = re.search(r'\bturnstileConfig\s*=\s*(\{[^\n]+\})\s*;', down_text or "")
+            try:
+                config = json.loads(config_match.group(1)) if config_match else {}
+            except ValueError:
+                config = {}
+            sitekey = config.get("siteKey")
+            if not sitekey:
+                raise CaptchaRequiredError("SubHD 要求 Turnstile 验证，但下载页未提供 siteKey；请在站点完成验证后下载。", provider="subhd", verify_url=down_url)
+            payload["turnstileToken"] = self.fetcher.solve_turnstile(down_url, sitekey=sitekey, action="download")
+            data = submit()
+            if data.get("turnstileRequired") is True:
+                raise CaptchaRequiredError("SubHD 未接受本次 Turnstile 令牌，请确认服务和下载使用同一代理出口；本次已停止重试。", provider="subhd", verify_url=down_url)
+        if data.get("pass") is False and not payload["cap"] and "<svg" in str(data.get("msg") or "").lower():
             payload["cap"] = SubHDSvgCaptchaSolver().solve(str(data.get("msg") or ""))
-            data = self.fetcher.post_json(api_url, payload, referer=down_url)
+            data = submit()
         if not data.get("success"):
             raise ValueError("SubHD 下载验证码校验失败或接口未返回下载地址")
         file_url = self._extract_api_download_url(data)

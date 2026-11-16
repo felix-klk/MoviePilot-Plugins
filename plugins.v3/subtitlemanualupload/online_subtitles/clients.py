@@ -16,7 +16,7 @@ from urllib.parse import unquote, urlparse, urlunparse
 from app.sdk.config import settings
 from app.sdk.logging import logger
 
-from .models import CaptchaRequiredError
+from .models import CaptchaRequiredError, OnlineJSONError
 from .cloudflare import is_challenge, browser_session
 
 
@@ -66,6 +66,7 @@ class OnlinePageClient:
 
     def _open(self, request, *, referer: str = ""):
         """Retry only a confirmed challenge, retaining the original method/body."""
+        request.add_header("User-Agent", self.user_agent)
         if self.bypass_url:
             from .cloudflare import mirror_request
             response = mirror_request(self.bypass_url, request, self.cookie_jar,
@@ -154,6 +155,26 @@ class OnlinePageClient:
         except (urllib.error.URLError, OSError, ssl.SSLError) as exc:
             raise ValueError(_format_network_error(url, exc)) from exc
 
+    def get_search_text(self, url: str, *, referer: str = "") -> Tuple[int, str, str]:
+        """A broken optional mirror must not disable otherwise accessible search."""
+        result = None
+        try:
+            result = self.get_text(url, referer=referer)
+        except ValueError:
+            if not self.bypass_url:
+                raise
+        if result is not None and result[0] < 500:
+            return result
+        if not self.bypass_url:
+            return result
+        logger.warning("[SubtitleManualUpload] SubHD CF 搜索服务异常，尝试直接搜索 service_host=%s proxy=%s status=%s",
+                       _host(self.bypass_url), self.use_proxy, result[0] if result else "network-error")
+        direct = OnlinePageClient(use_proxy=self.use_proxy, timeout=min(self.timeout, 15))
+        try:
+            return direct.get_text(url, referer=referer)
+        finally:
+            direct.close()
+
     def get_bytes(self, url: str, *, referer: str = "") -> Tuple[str, bytes, str]:
         headers = {
             "User-Agent": USER_AGENT,
@@ -212,7 +233,13 @@ class OnlinePageClient:
             with self._open(request, referer=referer) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
-            detail = _decode_bytes(exc.read()[:500], exc.headers.get_content_charset())
+            detail = _decode_bytes(exc.read(65536), exc.headers.get_content_charset())
+            try:
+                error_payload = json.loads(detail)
+            except (ValueError, TypeError):
+                error_payload = None
+            if isinstance(error_payload, dict):
+                raise OnlineJSONError(exc.code, error_payload) from exc
             raise ValueError(f"请求失败 HTTP {exc.code}: {_compact_error_message(detail)}") from exc
         except (urllib.error.URLError, OSError, ssl.SSLError) as exc:
             raise ValueError(_format_network_error(url, exc)) from exc
@@ -221,6 +248,21 @@ class OnlinePageClient:
         except Exception as exc:
             raise ValueError("接口返回内容不是 JSON") from exc
         return payload if isinstance(payload, dict) else {}
+
+    def solve_turnstile(self, url: str, *, sitekey: str, action: str = "download") -> str:
+        from .cloudflare import request_turnstile
+        if not self.bypass_url:
+            raise CaptchaRequiredError(
+                "SubHD 要求 Turnstile 验证，请配置支持 /turnstile 的 CF 服务，或在站点完成验证后手动下载上传。",
+                provider="subhd", verify_url=url,
+            )
+        try:
+            result = request_turnstile(self.bypass_url, url, sitekey=sitekey, action=action,
+                                       proxy=_browser_proxy(self.use_proxy), timeout=120)
+        except Exception as exc:
+            raise CaptchaRequiredError(str(exc), provider="subhd", verify_url=url) from exc
+        self.user_agent = result["user_agent"]
+        return result["token"]
 
     def get_bytes_interactive(self, url: str, *, referer: str = "", captcha_code: str = "") -> Tuple[str, bytes, str]:
         raise CaptchaRequiredError(

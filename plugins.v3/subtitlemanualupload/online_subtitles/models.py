@@ -76,6 +76,14 @@ class HtmlLink:
     text: str
 
 
+class OnlineJSONError(ValueError):
+    """An HTTP error carrying a site's structured application response."""
+    def __init__(self, status: int, payload: Dict[str, Any]):
+        self.status = status
+        self.payload = payload
+        super().__init__(f"请求失败 HTTP {status}: {str(payload.get('msg') or payload.get('message') or '接口拒绝请求')[:160]}")
+
+
 class CaptchaRequiredError(ValueError):
     def __init__(
         self,

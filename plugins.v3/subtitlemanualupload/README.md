@@ -8,6 +8,19 @@ MoviePilot V3 专用字幕管理插件，脱胎自 [ChineseSubFinder](https://gi
 
 详细配置、额外 STRM 实时监控和字幕写入说明见：[功能使用教学](../../docs/SubtitleManualUpload功能使用教学.md)。
 
+## v1.2.21 更新
+
+- 修复外部 CF 服务错误继承 MP 系统代理：配置 CF 服务后，SubHD 使用服务自身网络，不再把 MP 的代理地址传入另一个容器。其他字幕源和未配置外部服务时的直接访问仍使用原代理开关。
+- CF 搜索服务返回 5xx 或网络错误时尝试直接搜索；两条路径均失败会明确提示，避免把请求失败当成正常零结果。解码 gzip/deflate 等压缩响应。
+- SubHD 下载表单的 Turnstile 与 CF 网页挑战分开处理。保留 HTTP 403 的 JSON，读取下载页的 siteKey，以 action=download 请求服务的 `/turnstile`，使用返回的 User-Agent 和单次 token 提交 `turnstileToken`。每次下载至多请求一次新 token 并重试一次，不将该响应交给旧 SVG 验证码解析器。
+- 调用前检查真实接口能力。2.0.0 服务没有 `/turnstile`，会明确提示需要升级或手动完成验证；普通搜索、未触发 Turnstile 的下载仍可使用该版本。
+
+配置说明：MP 的“使用系统代理”可继续用于其他字幕源；外部 CF 服务如需代理，应在该服务的部署网络中配置。不要将 MP 容器内的 localhost 代理地址当成另一个容器能访问的地址。
+
+验证范围：92 项定向测试覆盖代理隔离、搜索 500 兜底、200/403 Turnstile 响应、旧服务能力不足、令牌再次被拒绝和压缩响应。Turnstile token 接口为模拟测试，尚未在支持 `/turnstile` 的真实服务上验证，不能据此承诺所有人机验证都能自动通过。
+
+2026-11-16 实测：用户反馈关闭 MP 系统代理后恢复下载；独立测试中 `/search/Tulsa%20King%20S04E05` 可返回 6 条字幕。对用户提供的 `/a/Z3ZEoM` 复测时实际触发了 Turnstile，新版确认运行中的服务为 2.0.0 且缺少 `/turnstile`，明确停止并提示升级；本轮尚未完成带真实 Turnstile token 的下载验证。
+
 ## v1.2.20 更新
 
 - SubHD 新增“CF 服务地址”，支持 CloudflareBypassForScraping 的 `x-hostname` 转发模式（已验证服务接口版本 2.0.0）。填写后搜索、下载准备、验证码接口和文件请求统一经过服务；留空直接访问，遇到明确 CF 验证时尝试 V3 浏览器 SDK。
