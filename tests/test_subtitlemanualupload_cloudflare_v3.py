@@ -60,6 +60,34 @@ class Opener:
         return result
 
 
+@pytest.mark.parametrize("direct_body", [b"PK\x03\x04subtitle", b"<html>unavailable</html>", None])
+def test_cdn_download_tries_direct_before_mirror(clients, monkeypatch, direct_body):
+    client = clients.OnlinePageClient(use_proxy=False, bypass_url="http://nas:18089")
+    client.user_agent = "Session UA"
+    calls = []
+    def fake_open(self, request, *, referer=""):
+        calls.append((self.bypass_url, self.user_agent, referer, len(list(self.cookie_jar))))
+        if not self.bypass_url:
+            if direct_body is None:
+                raise ValueError("direct unavailable")
+            return response(direct_body, url=request.full_url)
+        return response(b"PK\x03\x04fallback", url=request.full_url)
+    monkeypatch.setattr(clients.OnlinePageClient, "_open", fake_open)
+    result = client.get_bytes("https://dlus.subhd.me/sub.zip", referer="https://subhd.tv/down/abc")
+    assert calls[0] == ("", "Session UA", "https://subhd.tv/down/abc", 0)
+    assert len(calls) == (1 if direct_body and direct_body.startswith(b"PK") else 2)
+    assert result[1].startswith(b"PK")
+
+
+def test_same_host_download_keeps_mirror(clients, monkeypatch):
+    client = clients.OnlinePageClient(bypass_url="http://nas:18089")
+    def fake_open(self, request, *, referer=""):
+        assert self is client
+        return response(b"subtitle", url=request.full_url)
+    monkeypatch.setattr(clients.OnlinePageClient, "_open", fake_open)
+    assert client.get_bytes("https://subhd.tv/file", referer="https://subhd.tv/down/abc")[1] == b"subtitle"
+
+
 @pytest.mark.parametrize("method", ["get_text", "post_json", "get_bytes"])
 @pytest.mark.parametrize("status", [200, 403, 503])
 def test_challenge_retries_original_request(clients, monkeypatch, method, status):

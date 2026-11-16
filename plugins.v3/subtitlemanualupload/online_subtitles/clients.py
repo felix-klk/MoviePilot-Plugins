@@ -176,6 +176,19 @@ class OnlinePageClient:
             direct.close()
 
     def get_bytes(self, url: str, *, referer: str = "") -> Tuple[str, bytes, str]:
+        # Download hosts serve attachments, not browser challenge documents.
+        # Keep site API/session requests on the mirror, but fetch CDN bytes first.
+        if self.bypass_url and referer and urlparse(url).netloc != urlparse(referer).netloc:
+            direct = OnlinePageClient(use_proxy=self.use_proxy, timeout=self.timeout)
+            direct.user_agent = self.user_agent
+            try:
+                result = direct.get_bytes(url, referer=referer)
+                if not _looks_like_html_content(result[1]):
+                    return result
+            except ValueError:
+                logger.warning("[SubtitleManualUpload] 字幕文件直连失败，尝试 CF 转发 host=%s", _host(url))
+            finally:
+                direct.close()
         headers = {
             "User-Agent": USER_AGENT,
             "Accept": "*/*",
