@@ -326,3 +326,40 @@ def test_remote_subhd_does_not_inherit_mp_proxy(clients):
     direct=service_module.OnlineSubtitleSearchService(use_proxy=True)
     assert direct.providers["subhd"].fetcher is direct.fetcher
     assert direct.providers["subhd"].fetcher.use_proxy is True
+
+
+@pytest.mark.parametrize("outcome", ["success", "challenge", "http_error"])
+def test_download_session_switch_isolated_and_bounded(clients, monkeypatch, outcome):
+    mod = importlib.import_module("cf_test.online_subtitles.providers.subhd")
+    shared = types.SimpleNamespace(bypass_url="http://nas:18089", timeout=20)
+    made, calls = [], []
+    class Client:
+        def __init__(self, **kwargs):
+            self.bypass_url = kwargs.get("bypass_url", "")
+            self.closed = False
+            self.cookies = []
+            assert kwargs["use_proxy"] is False
+            made.append(self)
+        def close(self):
+            self.closed = True
+    def session(self, result, code=""):
+        calls.append(self.fetcher.bypass_url)
+        assert self.fetcher.cookies == []
+        self.fetcher.cookies.append("session")
+        if not self.fetcher.bypass_url:
+            if outcome == "challenge":
+                raise mod.CaptchaRequiredError("verification", verify_url=result["page_url"])
+            if outcome == "http_error":
+                raise ValueError("HTTP 500")
+        return "test.ass", b"subtitle"
+    monkeypatch.setattr(mod, "OnlinePageClient", Client)
+    monkeypatch.setattr(mod.SubHDProvider, "_download_session", session)
+    provider = mod.SubHDProvider(shared)
+    if outcome == "http_error":
+        with pytest.raises(ValueError, match="HTTP 500"):
+            provider.download({"page_url": "https://subhd.me/a/test"})
+    else:
+        assert provider.download({"page_url": "https://subhd.me/a/test"}) == ("test.ass", b"subtitle")
+    assert calls == (["", "http://nas:18089"] if outcome == "challenge" else [""])
+    assert all(c.closed for c in made)
+    assert provider.fetcher is shared

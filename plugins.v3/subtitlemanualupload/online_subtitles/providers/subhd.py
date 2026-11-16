@@ -356,12 +356,32 @@ class SubHDProvider(BaseSubtitleProvider):
         return None
 
     def download(self, result: Dict[str, Any], captcha_code: str = "") -> Tuple[str, bytes]:
+        bypass_url = getattr(self.fetcher, "bypass_url", "")
+        if not bypass_url:
+            return self._download_session(result, captcha_code)
+        # Never replace the shared fetcher: concurrent downloads need separate jars.
+        direct = OnlinePageClient(use_proxy=False, timeout=self.fetcher.timeout, browser_recovery=False)
+        try:
+            logger.info("[SubtitleManualUpload] SubHD 下载开始 mode=direct")
+            return SubHDProvider(direct, root_url=self.root_url)._download_session(result, captcha_code)
+        except CaptchaRequiredError:
+            logger.info("[SubtitleManualUpload] SubHD 直连需要验证，从详情页重新开始 mode=cf")
+        finally:
+            direct.close()
+        remote = OnlinePageClient(use_proxy=False, timeout=self.fetcher.timeout, bypass_url=bypass_url)
+        try:
+            return SubHDProvider(remote, root_url=self.root_url)._download_session(result, captcha_code)
+        finally:
+            remote.close()
+
+    def _download_session(self, result: Dict[str, Any], captcha_code: str = "") -> Tuple[str, bytes]:
         page_url = str(result.get("page_url") or result.get("download_url") or "").replace("subhd-page:", "", 1)
         if not page_url:
             raise ValueError("SubHD 缺少下载页面")
         status, text, final_page_url = self.fetcher.get_text(page_url, referer=self.root_url)
         if status >= 400 or not text:
-            raise ValueError("SubHD 下载页面不可访问")
+            mode = "cf" if getattr(self.fetcher, "bypass_url", "") else "direct"
+            raise ValueError(f"SubHD 详情页不可访问 mode={mode} HTTP {status} host={_host(page_url)}")
         page_url = final_page_url or page_url
         parsed_page = urlparse(page_url)
         root_url = f"{parsed_page.scheme}://{parsed_page.netloc}"
@@ -386,7 +406,8 @@ class SubHDProvider(BaseSubtitleProvider):
             raise ValueError("SubHD 下载按钮缺少 sid")
         down_status, down_text, down_final_url = self.fetcher.get_text(down_url, referer=page_url)
         if down_status >= 400 or not down_text:
-            raise ValueError(f"SubHD 下载确认页面不可访问 HTTP {down_status}")
+            mode = "cf" if getattr(self.fetcher, "bypass_url", "") else "direct"
+            raise ValueError(f"SubHD 下载确认页不可访问 mode={mode} HTTP {down_status} host={_host(down_url)}")
         down_url = down_final_url or down_url
         parsed_down = urlparse(down_url)
         root_url = f"{parsed_down.scheme}://{parsed_down.netloc}"
