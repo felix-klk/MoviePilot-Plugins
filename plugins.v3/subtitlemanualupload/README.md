@@ -8,6 +8,10 @@ MoviePilot V3 专用字幕管理插件，脱胎自 [ChineseSubFinder](https://gi
 
 详细配置、额外 STRM 实时监控和字幕写入说明见：[功能使用教学](../../docs/SubtitleManualUpload功能使用教学.md)。
 
+## v1.2.23 更新
+
+SubHD 搜索优先直接访问（不使用 MP 系统代理），成功或普通 404 不调用 CF 服务。网络错误、验证页及其他 HTTP 错误回退 CF，直连探测不启动本地浏览器。下载表单的 CF 会话保持原样；无需修改 CF 容器 HTTP_PROXY，也不改变其他应用的 /html 代理行为。
+
 ## v1.2.22 更新
 
 修复 SubHD 验证通过、下载接口返回成功后，最终 ZIP 仍因 CF 服务浏览器导航失败而报 500 的问题。跨域字幕文件优先直接下载，保留 Referer 和会话 User-Agent；直连失败时尝试 CF 转发。网页和下载表单继续使用原验证链路。

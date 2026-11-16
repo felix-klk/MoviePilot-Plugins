@@ -281,25 +281,39 @@ def test_search_500_is_not_a_zero_results_success(clients):
         provider._search_keyword('Tulsa King S04E05',[])
 
 
-def test_search_uses_direct_fallback_only_for_failed_mirror(clients,monkeypatch):
-    client=clients.OnlinePageClient(bypass_url="http://nas:18089",use_proxy=True)
-    client.get_text=lambda *a,**k:(500,"upstream error",a[0])
-    calls=[]
+@pytest.mark.parametrize("status", [200, 404, 403, 429, 500, "network", "challenge"])
+def test_search_direct_first_with_bounded_mirror_fallback(clients, monkeypatch, status):
+    client = clients.OnlinePageClient(bypass_url="http://nas:18089", use_proxy=True)
+    calls = []
+    def mirror(*a, **k):
+        calls.append("mirror")
+        return 200, "mirror results", a[0]
+    client.get_text = mirror
     class Direct:
-        def __init__(self,**kwargs):
-            calls.append(kwargs)
-        def get_text(self,url,**kwargs):
-            return 200,"<html>results</html>",url
+        def __init__(self, **kwargs):
+            assert kwargs == {"use_proxy": False, "timeout": 15, "browser_recovery": False}
+        def get_text(self, url, **kwargs):
+            calls.append("direct")
+            if status == "network":
+                raise ValueError("unavailable")
+            if status == "challenge":
+                raise clients.CaptchaRequiredError("challenge", verify_url=url)
+            return status, "direct results", url
         def close(self):
             calls.append("closed")
-    monkeypatch.setattr(clients,"OnlinePageClient",Direct)
-    assert client.get_search_text("https://subhd.me/search/test")[0] == 200
-    assert calls==[{"use_proxy":True,"timeout":15},"closed"]
-    assert client.bypass_url == "http://nas:18089"
-    client.get_text=lambda *a,**k:(404,"missing",a[0])
-    calls.clear()
-    assert client.get_search_text("https://subhd.me/search/test")[0] == 404
-    assert not calls
+    monkeypatch.setattr(clients, "OnlinePageClient", Direct)
+    result = client.get_search_text("https://subhd.me/search/test")
+    assert calls == (["direct", "closed"] if status in (200, 404) else ["direct", "closed", "mirror"])
+    assert result[0] == (404 if status == 404 else 200)
+
+
+def test_search_probe_does_not_launch_local_browser(clients, monkeypatch):
+    client = clients.OnlinePageClient(browser_recovery=False)
+    client.opener = Opener(response(b"challenge", challenge=True))
+    monkeypatch.setattr(clients, "browser_session", lambda *a, **k: pytest.fail("unexpected local browser"))
+    with pytest.raises(clients.CaptchaRequiredError):
+        client.get_text("https://subhd.me/search/test")
+
 
 
 def test_remote_subhd_does_not_inherit_mp_proxy(clients):

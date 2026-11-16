@@ -52,11 +52,13 @@ class OnlinePageClient:
         use_proxy: bool = False,
         timeout: int = 60,
         bypass_url: str = "",
+        browser_recovery: bool = True,
     ):
         self.engine = normalize_online_engine(engine)
         self.use_proxy = use_proxy
         self.timeout = timeout
         self.bypass_url = bypass_url.strip().rstrip("/")
+        self.browser_recovery = browser_recovery
         self.cookie_jar = http.cookiejar.CookieJar()
         self.user_agent = USER_AGENT
         handlers = [urllib.request.HTTPCookieProcessor(self.cookie_jar)]
@@ -94,7 +96,7 @@ class OnlinePageClient:
                     raise urllib.error.HTTPError(final_url, status, error.reason, headers, io.BytesIO(raw))
                 return urllib.response.addinfourl(io.BytesIO(raw), headers, final_url, status)
             verify_url = referer if referer and urlparse(referer).netloc == urlparse(final_url).netloc else final_url
-            if attempt:
+            if attempt or not self.browser_recovery:
                 raise CaptchaRequiredError(
                     "Cloudflare 验证后请求仍被拦截，请在站点手动下载字幕包后上传。",
                     verify_url=verify_url,
@@ -156,24 +158,23 @@ class OnlinePageClient:
             raise ValueError(_format_network_error(url, exc)) from exc
 
     def get_search_text(self, url: str, *, referer: str = "") -> Tuple[int, str, str]:
-        """A broken optional mirror must not disable otherwise accessible search."""
-        result = None
-        try:
-            result = self.get_text(url, referer=referer)
-        except ValueError:
-            if not self.bypass_url:
-                raise
-        if result is not None and result[0] < 500:
-            return result
+        """Read public search pages directly; reserve the mirror for failures."""
         if not self.bypass_url:
-            return result
-        logger.warning("[SubtitleManualUpload] SubHD CF 搜索服务异常，尝试直接搜索 service_host=%s proxy=%s status=%s",
-                       _host(self.bypass_url), self.use_proxy, result[0] if result else "network-error")
-        direct = OnlinePageClient(use_proxy=self.use_proxy, timeout=min(self.timeout, 15))
+            return self.get_text(url, referer=referer)
+        direct = OnlinePageClient(use_proxy=False, timeout=min(self.timeout, 15), browser_recovery=False)
+        status = "network-or-challenge"
         try:
-            return direct.get_text(url, referer=referer)
+            result = direct.get_text(url, referer=referer)
+            status = result[0]
+            if 200 <= status < 400 or status == 404:
+                return result
+        except (ValueError, CaptchaRequiredError):
+            pass
         finally:
             direct.close()
+        logger.info("[SubtitleManualUpload] SubHD 直接搜索不可用，尝试 CF 服务 host=%s status=%s",
+                    _host(url), status)
+        return self.get_text(url, referer=referer)
 
     def get_bytes(self, url: str, *, referer: str = "") -> Tuple[str, bytes, str]:
         # Download hosts serve attachments, not browser challenge documents.
