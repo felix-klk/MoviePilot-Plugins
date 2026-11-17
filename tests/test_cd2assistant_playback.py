@@ -205,45 +205,26 @@ class PlaybackTests(unittest.TestCase):
     def test_numeric_status_support(self):
         self.assertEqual(m.upload_status({'statusEnum': 4}), 'Pause')
 
-    def test_rpc_pagination_auth_metadata_and_deadline(self):
+    def test_rpc_pagination_and_task_keys(self):
         rows = [dict(key=str(i), **task()) for i in range(201)]
-        def listing(request, *, metadata, timeout):
-            self.assertEqual(metadata, [('authorization', 'test')])
-            self.assertEqual(timeout, 15)
+        def rpc(name, request, *, stopping):
+            if name != 'GetUploadFileList':
+                return
             self.assertFalse(request.getAll)
             return NS(totalCount=201, uploadFiles=rows[request.pageNumber*200:(request.pageNumber+1)*200])
-        stub = NS(GetUploadFileList=listing, PauseUploadFiles=Mock(), ResumeUploadFiles=Mock())
-        client = NS(stub=stub, metadata=[('authorization', 'test')])
+        client = NS(rpc=Mock(side_effect=rpc))
         proto = NS(GetUploadFileListRequest=NS, MultpleUploadFileKeyRequest=NS)
         api = m.CloudUploadAPI(client, proto)
         self.assertEqual(len(api.list_uploads()), 201)
         api.pause('0')
         api.resume('0')
-        self.assertEqual(stub.PauseUploadFiles.call_args.args[0].keys, ['0'])
+        self.assertEqual([(call.args[0], call.args[1].keys) for call in client.rpc.call_args_list[-2:]],
+                         [('PauseUploadFiles', ['0']), ('ResumeUploadFiles', ['0'])])
 
     def test_incomplete_pagination_raises(self):
-        client = NS(stub=NS(GetUploadFileList=lambda *a, **kw: NS(totalCount=2, uploadFiles=[])), metadata=[])
+        client = NS(rpc=Mock(return_value=NS(totalCount=2, uploadFiles=[])))
         with self.assertRaises(ValueError):
             m.CloudUploadAPI(client, NS(GetUploadFileListRequest=NS)).list_uploads()
-
-    def test_expired_token_refreshes_once_and_retries(self):
-        class Expired(Exception):
-            def code(self):
-                return NS(name='UNAUTHENTICATED')
-        stub = NS(PauseUploadFiles=Mock(side_effect=[Expired(), None]),
-                  GetToken=Mock(return_value=NS(success=True, token='new')))
-        client = NS(stub=stub, metadata=[], username='u', password='p')
-        api = m.CloudUploadAPI(client, NS(GetTokenRequest=NS, MultpleUploadFileKeyRequest=NS))
-        api.pause('key')
-        self.assertEqual(stub.PauseUploadFiles.call_count, 2)
-        self.assertEqual(client.metadata, [('authorization', 'Bearer new')])
-
-    def test_shutdown_prevents_further_upload_mutations(self):
-        stub = NS(PauseUploadFiles=Mock())
-        api = m.CloudUploadAPI(NS(stub=stub), NS(MultpleUploadFileKeyRequest=NS), stopping=lambda: True)
-        with self.assertRaises(RuntimeError):
-            api.pause('key')
-        stub.PauseUploadFiles.assert_not_called()
 
 
 if __name__ == '__main__':

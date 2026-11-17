@@ -1,6 +1,8 @@
 # CloudDrive2助手：MoviePilot V3 外网播放暂停上传补丁
 
-基于用户提供的 Cd2Assistant 3.0.1 修改，补丁版本 3.0.3。只修改 V3 的 CloudDrive2助手；CloudDriveDisk 无需替换。
+基于用户提供的 Cd2Assistant 3.0.1 修改，补丁版本 3.0.4。只修改 V3 的 CloudDrive2助手；CloudDriveDisk 无需替换。
+
+3.0.4 更换 CloudDrive2 gRPC 客户端，修复 Windows 上的 `MSG_DONTWAIT` 导入错误。插件恢复原来的站点认证等级 2，MoviePilot 会按此等级显示插件。
 
 ## 行为
 
@@ -21,7 +23,7 @@
 
    `https://github.com/felix-klk/MoviePilot-Plugins`
 
-2. 刷新插件商城，搜索 **CloudDrive2助手**，选择来自本仓库的 **3.0.3** 版本安装或更新。
+2. 刷新插件商城，搜索 **CloudDrive2助手**，选择来自本仓库的 **3.0.4** 版本安装或更新。
 3. 打开配置，保留或填写 CloudDrive2 连接信息，开启“启用插件”和“外网播放时暂停上传（忽略内网）”。
 4. 默认每 10 秒检查，所有外网播放停止或暂停后等待 45 秒恢复。
 

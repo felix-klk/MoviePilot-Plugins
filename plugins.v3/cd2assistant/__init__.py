@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import re
 import hashlib
 import threading
@@ -11,8 +10,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from clouddrive import Client, CloudDriveClient
-from clouddrive.proto import CloudDrive_pb2
 from google.protobuf.json_format import MessageToDict
 from pydantic import BaseModel, ConfigDict
 
@@ -25,7 +22,8 @@ from app.sdk.events import Event, eventmanager
 from app.sdk.logging import logger
 from app.sdk.services import MediaServerHelper
 
-from .playback import CloudUploadAPI, UploadGuard, detect_external_playback
+from .cd2client import CloudDriveConnection, proto
+from .playback import CloudUploadAPI, UploadGuard, detect_external_playback, upload_status
 
 
 class CloudDriveInfo(BaseModel):
@@ -52,12 +50,12 @@ class Cd2Assistant(_PluginBase):
     plugin_name = "CloudDrive2助手"
     plugin_desc = "监控CloudDrive2，外网播放时暂停上传，停止后自动恢复，忽略内网播放。"
     plugin_icon = "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/icons/clouddrive.png"
-    plugin_version = "3.0.3"
+    plugin_version = "3.0.4"
     plugin_author = "thsrite"
     author_url = "https://github.com/thsrite"
     plugin_config_prefix = "cd2assistant_"
     plugin_order = 5
-    auth_level = 1
+    auth_level = 2
 
     def __init__(self) -> None:
         """初始化实例状态，避免不同插件实例共享 CloudDrive 客户端。"""
@@ -72,8 +70,7 @@ class Cd2Assistant(_PluginBase):
         self._black_dir = ""
         self._cloud_path = ""
         self._cd2_confs: Optional[str] = None
-        self._cd2_clients: Dict[str, CloudDriveClient] = {}
-        self._clients: Dict[str, Client] = {}
+        self._clients: Dict[str, CloudDriveConnection] = {}
         self._cd2_url: Dict[str, str] = {}
         self._info: Dict[str, Dict[str, Any]] = {}
         self._scheduler: Optional[BackgroundScheduler] = None
@@ -88,7 +85,7 @@ class Cd2Assistant(_PluginBase):
     def init_plugin(self, config: dict | None = None) -> None:
         """读取配置并建立客户端；周期任务由宿主调度器统一管理。"""
         self.stop_service()
-        if self._scheduler is not None or self._cd2_clients or self._clients:
+        if self._scheduler is not None or self._clients:
             logger.error("旧 CloudDrive2 资源未完全停止，跳过重新初始化")
             return
         self._info = {}
@@ -119,7 +116,7 @@ class Cd2Assistant(_PluginBase):
 
         self.__create_clients()
         self._playback_stopping = False
-        if not self._cd2_clients:
+        if not self._clients:
             return
 
         if self._onlyonce or self._cd2_restart:
@@ -160,24 +157,22 @@ class Cd2Assistant(_PluginBase):
 
             name, url, username, password = parts
             try:
-                cd2_client = CloudDriveClient(url, username, password)
-                client = Client(url, username, password)
+                client = CloudDriveConnection(url, username, password)
             except Exception as error:
                 logger.error("CloudDrive2助手连接失败，请检查配置 %s：%s", name, error)
                 continue
 
-            old_cd2_client = self._cd2_clients.get(name)
             old_client = self._clients.get(name)
-            if old_cd2_client:
-                old_cd2_client.close()
             if old_client:
                 old_client.close()
-            self._cd2_clients[name] = cd2_client
+                self._playback_targets = {
+                    key: target for key, target in self._playback_targets.items() if target[0] != name
+                }
             self._clients[name] = client
             self._cd2_url[name] = url
             target_id = hashlib.sha256(f"{url.rstrip('/')}\n{username}".encode()).hexdigest()
             self._playback_targets[target_id] = (
-                name, CloudUploadAPI(client, CloudDrive_pb2, lambda: self._playback_stopping))
+                name, CloudUploadAPI(client, proto, lambda: self._playback_stopping))
 
     def __sync_old_config(self) -> None:
         """把历史单实例配置转换为当前多实例配置。"""
@@ -212,44 +207,25 @@ class Cd2Assistant(_PluginBase):
             }
         )
 
-    @staticmethod
-    async def __await_rpc(method, *args, **kwargs):
-        """等待 CloudDrive2 的异步 RPC，同时兼容确定性的测试替身。"""
-        result = method(*args, **kwargs)
-        return await result if inspect.isawaitable(result) else result
-
-    @staticmethod
-    async def __listdir(fs: Any, path: str = "") -> list[str]:
-        """把 CloudDrive2 同步文件系统查询移出宿主事件循环。"""
-        if not fs:
-            return []
-        result = await asyncio.to_thread(fs.listdir, path)
-        return list(result or [])
-
     async def check(self) -> None:
         """检查所有配置实例的云盘状态和上传任务。"""
-        for name, cd2_client in tuple(self._cd2_clients.items()):
+        for name, client in tuple(self._clients.items()):
             try:
-                await self.__check_cookie(name, cd2_client)
-                await self.__check_task(name, cd2_client)
+                await self.__check_cookie(name, client)
+                await self.__check_task(name, client)
             except Exception as error:
                 logger.error("检查 CloudDrive2 实例 %s 失败：%s", name, error)
 
-    async def __check_cookie(self, name: str, cd2_client: CloudDriveClient) -> None:
+    async def __check_cookie(self, name: str, client: CloudDriveConnection) -> None:
         """检查云盘根目录是否可读，以识别登录失效和访问频控。"""
         logger.info("开始检查 %s cookie", name)
-        fs = cd2_client.fs
-        if not fs:
-            logger.error("CloudDrive2连接失败，请检查配置")
-            return
-
         blacklist = {item.strip() for item in self._black_dir.split(",") if item.strip()}
-        for path in await self.__listdir(fs):
+        for path in await asyncio.to_thread(client.listdir):
             if not path or path in blacklist:
                 continue
             error_msg = None
             try:
-                if not await self.__listdir(fs, path):
+                if not await asyncio.to_thread(client.listdir, f"/{path}"):
                     logger.warning("云盘 %s 为空", path)
                     error_msg = f"云盘 {path} cookie过期"
             except Exception as error:
@@ -262,22 +238,20 @@ class Cd2Assistant(_PluginBase):
             if self._notify and error_msg:
                 self.__send_notify(error_msg)
 
-    async def __check_task(self, name: str, cd2_client: CloudDriveClient) -> None:
+    async def __check_task(self, name: str, client: CloudDriveConnection) -> None:
         """检查上传任务并按关键词通知异常任务。"""
         logger.info("开始检查 %s 上传任务", name)
-        task_list = await self.__await_rpc(
-            cd2_client.upload_tasklist.list,
-            page=0,
-            page_size=10,
-            filter="",
-            async_=True,
+        response = await asyncio.to_thread(
+            client.rpc, "GetUploadFileList",
+            proto.GetUploadFileListRequest(itemsPerPage=10, pageNumber=0),
         )
+        task_list = response.uploadFiles
         if not task_list:
             logger.info("没有发现上传任务")
             return
 
         for task in task_list:
-            status = self.__field(task, "status")
+            status = upload_status(task)
             error_message = self.__field(task, "errorMessage", "") or ""
             try:
                 matched = bool(self._keyword and re.search(self._keyword, str(error_message)))
@@ -325,7 +299,7 @@ class Cd2Assistant(_PluginBase):
                 continue
             found = True
             try:
-                await self.__await_rpc(client.RestartService, async_=True)
+                await asyncio.to_thread(client.rpc, "RestartService")
             except Exception as error:
                 logger.error("%s CloudDrive2重启失败：%s", name, error)
                 if payload is not None:
@@ -384,10 +358,9 @@ class Cd2Assistant(_PluginBase):
         logger.info("获取到离线云盘路径：%s", cloud_path)
         logger.info("开始离线下载：%s", args)
         try:
-            result = await self.__await_rpc(
-                client.AddOfflineFiles,
-                CloudDrive_pb2.AddOfflineFileRequest(urls=args, toFolder=cloud_path),
-                async_=True,
+            result = await asyncio.to_thread(
+                client.rpc, "AddOfflineFiles",
+                proto.AddOfflineFileRequest(urls=args, toFolder=cloud_path),
             )
         except Exception as error:
             logger.error("离线下载失败：%s", error)
@@ -428,9 +401,8 @@ class Cd2Assistant(_PluginBase):
             if args and args.casefold() != str(name).casefold():
                 continue
             found = True
-            cd2_client = self._cd2_clients.get(name)
             try:
-                info = await self.__get_cd2_info(event=event, client=client, cd2_client=cd2_client)
+                info = await self.__get_cd2_info(event=event, client=client)
                 self._info[name] = info
             except Exception as error:
                 logger.error("获取 %s CloudDrive2 信息失败：%s", name, error)
@@ -458,22 +430,16 @@ class Cd2Assistant(_PluginBase):
         except (TypeError, ValueError):
             return default
 
-    async def __get_cloud_space(self, cd2_client: CloudDriveClient | None) -> Optional[str]:
+    async def __get_cloud_space(self, client: CloudDriveConnection) -> Optional[str]:
         """异步读取各云盘空间，且将目录枚举放进线程边界。"""
-        if not cd2_client or not cd2_client.fs:
-            logger.error("CloudDrive2连接失败，请检查配置")
-            return None
-
         blacklist = {item.strip() for item in self._black_dir.split(",") if item.strip()}
         space_info_text = "\n"
-        for path in await self.__listdir(cd2_client.fs):
+        for path in await asyncio.to_thread(client.listdir):
             if not path or path in blacklist:
                 continue
             try:
-                result = await self.__await_rpc(
-                    cd2_client.GetSpaceInfo,
-                    CloudDrive_pb2.FileRequest(path=path),
-                    async_=True,
+                result = await asyncio.to_thread(
+                    client.rpc, "GetSpaceInfo", proto.FileRequest(path=f"/{path}"),
                 )
                 values = self.__message_to_dict(result)
                 total = self.__convert_bytes(self.__number(values.get("totalSpace")))
@@ -486,29 +452,27 @@ class Cd2Assistant(_PluginBase):
     async def __get_cd2_info(
         self,
         event: Event | None = None,
-        client: Client | None = None,
-        cd2_client: CloudDriveClient | None = None,
+        client: CloudDriveConnection | None = None,
     ) -> dict[str, Any]:
         """读取 CloudDrive2 系统状态并保持旧接口字段名。"""
-        if not client or not cd2_client:
+        if not client:
             return {}
         system_info = self.__message_to_dict(
-            await self.__await_rpc(client.GetRunningInfo, async_=True)
+            await asyncio.to_thread(client.rpc, "GetRunningInfo")
         )
         task_count = self.__message_to_dict(
-            await self.__await_rpc(client.GetAllTasksCount, async_=True)
+            await asyncio.to_thread(client.rpc, "GetAllTasksCount")
         )
         download_files = self.__message_to_dict(
-            await self.__await_rpc(client.GetDownloadFileList, async_=True)
+            await asyncio.to_thread(client.rpc, "GetDownloadFileList")
         )
         upload_files = self.__message_to_dict(
-            await self.__await_rpc(
-                client.GetUploadFileList,
-                CloudDrive_pb2.GetUploadFileListRequest(getAll=True),
-                async_=True,
+            await asyncio.to_thread(
+                client.rpc, "GetUploadFileList",
+                proto.GetUploadFileListRequest(itemsPerPage=1, pageNumber=0),
             )
         )
-        cloud_space = await self.__get_cloud_space(cd2_client)
+        cloud_space = await self.__get_cloud_space(client)
 
         cpu_usage = self.__number(system_info.get("cpuUsage"))
         memory_kb = self.__number(system_info.get("memUsageKB"))
@@ -558,7 +522,7 @@ class Cd2Assistant(_PluginBase):
         for cd2_name, client in self._clients.items():
             if name and str(cd2_name) != name:
                 continue
-            info = await self.__get_cd2_info(client=client, cd2_client=self._cd2_clients.get(cd2_name))
+            info = await self.__get_cd2_info(client=client)
             self._info[cd2_name] = info
             return CloudDriveInfo.model_validate(info)
         return CloudDriveInfo()
@@ -569,7 +533,6 @@ class Cd2Assistant(_PluginBase):
             try:
                 self._info[name] = await self.__get_cd2_info(
                     client=client,
-                    cd2_client=self._cd2_clients.get(name),
                 )
             except Exception as error:
                 logger.error("获取 %s CloudDrive2 信息失败：%s", name, error)
@@ -672,7 +635,7 @@ class Cd2Assistant(_PluginBase):
                 "trigger": "interval", "func": self.check_playback,
                 "kwargs": {"seconds": self._playback_interval, "max_instances": 1, "coalesce": True},
             })
-        if not self._enabled or not self._cron or not self._cd2_clients:
+        if not self._enabled or not self._cron or not self._clients:
             return services
         try:
             trigger = CronTrigger.from_crontab(self._cron, timezone=settings.TZ)
@@ -1001,17 +964,14 @@ class Cd2Assistant(_PluginBase):
             else:
                 self._scheduler = None
 
-        for clients in (self._cd2_clients, self._clients):
-            for name, client in tuple(clients.items()):
-                try:
-                    client.close()
-                except Exception as error:
-                    logger.debug("关闭 CloudDrive2 连接失败：%s", error)
-                    continue
-                clients.pop(name, None)
-        for name in tuple(self._cd2_url):
-            if name not in self._cd2_clients and name not in self._clients:
-                self._cd2_url.pop(name, None)
+        for name, client in tuple(self._clients.items()):
+            try:
+                client.close()
+            except Exception as error:
+                logger.debug("关闭 CloudDrive2 连接失败：%s", error)
+                continue
+            self._clients.pop(name, None)
+            self._cd2_url.pop(name, None)
 
     def __run_check(self) -> None:
         """为同步 APScheduler 一次性任务桥接异步检测。"""

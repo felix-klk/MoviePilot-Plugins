@@ -9,6 +9,8 @@ import unittest
 from unittest.mock import Mock, patch
 from enum import Enum
 
+import grpc
+
 
 class Base:
     def __init__(self):
@@ -43,10 +45,6 @@ def load_plugin():
     module('pytz')
     module('apscheduler.schedulers.background', BackgroundScheduler=Mock())
     module('apscheduler.triggers.cron', CronTrigger=Mock())
-    module('clouddrive', Client=Mock(side_effect=lambda *a: Mock()),
-           CloudDriveClient=Mock(side_effect=lambda *a: Mock()))
-    module('clouddrive.proto', CloudDrive_pb2=Mock())
-    module('google.protobuf.json_format', MessageToDict=Mock())
     module('pydantic', BaseModel=type('BaseModel', (), {}), ConfigDict=dict)
     module('app.schemas')
     module('app.plugins', _PluginBase=Base)
@@ -65,6 +63,7 @@ def load_plugin():
     modules['cd2_test_plugin'] = plugin
     with patch.dict(sys.modules, modules):
         spec.loader.exec_module(plugin)
+        plugin.connection_module = sys.modules['cd2_test_plugin.cd2client']
     return plugin
 
 
@@ -75,7 +74,8 @@ class PluginContractTests(unittest.TestCase):
 
     def make_plugin(self, **config):
         p = self.module.Cd2Assistant()
-        p.init_plugin(dict(enabled=True, playback_pause=True, cd2_confs='test#http://cd2:19798#u#p', **config))
+        with patch.object(self.module, 'CloudDriveConnection', return_value=Mock()):
+            p.init_plugin(dict(enabled=True, playback_pause=True, cd2_confs='test#http://cd2:19798#u#p', **config))
         return p
 
     def test_playback_schedule_independent_of_monitor_cron(self):
@@ -97,7 +97,8 @@ class PluginContractTests(unittest.TestCase):
     def test_disabled_plugin_schedules_pending_recovery(self):
         p = self.module.Cd2Assistant()
         p.data['playback_owned_uploads'] = {'pending': {'k': {'path': '/x', 'size': '1'}}}
-        p.init_plugin({'enabled': False, 'cd2_confs': 'test#http://cd2:19798#u#p'})
+        with patch.object(self.module, 'CloudDriveConnection', return_value=Mock()):
+            p.init_plugin({'enabled': False, 'cd2_confs': 'test#http://cd2:19798#u#p'})
         self.assertEqual(p.get_service()[0]['id'], 'Cd2AssistantPlayback')
         p.stop_service()
         self.assertTrue(p.data['playback_owned_uploads'])
@@ -119,6 +120,37 @@ class PluginContractTests(unittest.TestCase):
         self.assertEqual(p._playback_resume_delay, 0)
         self.assertIn('忽略内网', str(form))
         p.stop_service()
+
+    def test_expired_token_refreshes_once_and_retries(self):
+        class Expired(grpc.RpcError):
+            def code(self):
+                return grpc.StatusCode.UNAUTHENTICATED
+
+        proto = self.module.proto
+        transport = Mock()
+        transport.stub.GetToken.side_effect = [proto.JWTToken(success=True, token=token)
+                                              for token in ('old', 'new')]
+        transport.stub.PauseUploadFiles.side_effect = [Expired(), None]
+        with patch.object(self.module.connection_module, 'CloudDriveClient', return_value=transport) as factory:
+            client = self.module.CloudDriveConnection('http://[::1]:19798', 'user', 'pass')
+        factory.assert_called_once_with('[::1]:19798')
+        api = self.module.CloudUploadAPI(client, proto)
+        api.pause('key')
+        self.assertEqual(transport.stub.GetToken.call_count, 2)
+        calls = transport.stub.PauseUploadFiles.call_args_list
+        self.assertEqual([call.kwargs['metadata'] for call in calls],
+                         [(('authorization', 'Bearer old'),), (('authorization', 'Bearer new'),)])
+        self.assertEqual([call.kwargs['timeout'] for call in calls], [15, 15])
+
+    def test_shutdown_prevents_further_upload_mutations(self):
+        transport = Mock()
+        with patch.object(self.module.connection_module, 'CloudDriveClient', return_value=transport):
+            client = self.module.CloudDriveConnection('cd2:19798', 'user', 'pass')
+        api = self.module.CloudUploadAPI(client, self.module.proto, stopping=lambda: True)
+        with self.assertRaises(RuntimeError):
+            api.pause('key')
+        transport.stub.GetToken.assert_not_called()
+        transport.stub.PauseUploadFiles.assert_not_called()
 
 
 if __name__ == '__main__':

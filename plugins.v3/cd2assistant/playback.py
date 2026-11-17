@@ -218,23 +218,7 @@ class CloudUploadAPI:
         self.stopping = stopping
 
     def rpc(self, name, request):
-        if self.stopping():
-            raise RuntimeError("插件正在停止")
-        method = getattr(self.client.stub, name)
-        try:
-            return method(request, metadata=self.client.metadata, timeout=15)
-        except Exception as error:
-            code = getattr(error, "code", lambda: None)()
-            if getattr(code, "name", "") != "UNAUTHENTICATED":
-                raise
-            if self.stopping():
-                raise RuntimeError("插件正在停止") from None
-            token = self.client.stub.GetToken(self.proto.GetTokenRequest(
-                userName=self.client.username, password=self.client.password), timeout=15)
-            if not token.success or not token.token:
-                raise RuntimeError("CloudDrive2 登录失败") from None
-            self.client.metadata[:] = [("authorization", "Bearer " + token.token)]
-            return method(request, metadata=self.client.metadata, timeout=15)
+        return self.client.rpc(name, request, stopping=self.stopping)
 
     def list_uploads(self):
         tasks = {}
