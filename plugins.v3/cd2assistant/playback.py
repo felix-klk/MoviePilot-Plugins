@@ -140,6 +140,9 @@ ACTIVE = {"WaitforPreprocessing", "Preprocessing", "Transfer", "Inqueue", "Error
 
 
 def upload_status(task):
+    numeric = field(task, "statusEnum")
+    if isinstance(numeric, int) and numeric != 0:
+        return STATUSES[numeric] if 0 <= numeric < len(STATUSES) else "Unknown"
     value = field(task, "status")
     if isinstance(value, str) and value:
         return value

@@ -153,5 +153,101 @@ class PluginContractTests(unittest.TestCase):
         transport.stub.PauseUploadFiles.assert_not_called()
 
 
+class HealthTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.module = load_plugin()
+
+    def client(self):
+        p = self.module.proto
+        c = Mock()
+        c.public_system_info.return_value = p.CloudDriveSystemInfo(IsLogin=True, SystemReady=True)
+        c._username = 'user'
+        def rpc(name, request=None, **kwargs):
+            if name == 'GetAllCloudApis':
+                return p.CloudAPIList(apis=[p.CloudAPI(name='disk', path='/disk')])
+            if name == 'GetSubFiles':
+                return []
+            if name == 'GetUploadFileList':
+                rows = [p.UploadFileInfo(key=str(i), destPath='/disk/'+str(i), statusEnum=3) for i in range(201)]
+                rows[-1].statusEnum = 10
+                rows[-1].status = 'localized text'
+                rows[-1].errorMessage = 'failure'
+                return p.GetUploadFileListResult(totalCount=201, uploadFiles=rows[request.pageNumber*200:(request.pageNumber+1)*200])
+            raise AssertionError(name)
+        c.rpc.side_effect = rpc
+        return c
+
+    def plugin(self):
+        p = self.module.Cd2Assistant()
+        p._clients = {'test': self.client()}
+        p._cd2_url = {'test': 'http://cd2:19798'}
+        p._playback_stopping = False
+        p._notify = True
+        p.post_message = Mock()
+        return p
+
+    def test_settings_only_entry(self):
+        self.assertNotIn('get_page', self.module.Cd2Assistant.__dict__)
+        self.assertTrue(self.module.Cd2Assistant().get_form()[0])
+
+    def test_all_pages_numeric_error_and_empty_cloud_valid(self):
+        p = self.plugin()
+        p._Cd2Assistant__check_health()
+        self.assertEqual(p.post_message.call_count, 1)
+        self.assertIn('/disk/200', p.post_message.call_args.kwargs['text'])
+        self.assertEqual(p.post_message.call_args.kwargs['mtype'].name, 'Manual')
+        p._clients['test'].probe_directory.assert_called_once()
+        p._Cd2Assistant__check_health()
+        self.assertEqual(p.post_message.call_count, 1)
+
+    def test_query_failure_does_not_clear_upload_failures(self):
+        p = self.plugin()
+        p._Cd2Assistant__check_health()
+        p._clients['test'].rpc.side_effect = RuntimeError('secret password')
+        p._Cd2Assistant__check_health()
+        state = next(v for k,v in p._health_alerts.items() if k.endswith(':uploads'))
+        self.assertIn('200', state)
+        self.assertIn('query', state)
+        self.assertNotIn('secret password', str(p.post_message.call_args_list))
+
+    def test_disabled_notifications_and_failed_delivery(self):
+        p = self.plugin()
+        p._notify = False
+        p._Cd2Assistant__check_health()
+        p.post_message.assert_not_called()
+        p._notify = True
+        p.post_message.side_effect = RuntimeError()
+        p._Cd2Assistant__check_health()
+        self.assertFalse(any(v for v in p._health_alerts.values()))
+        p.post_message.side_effect = None
+        p._Cd2Assistant__check_health()
+        self.assertIn('/disk/200', p.post_message.call_args.kwargs['text'])
+
+    def test_recovery_and_manual_pause_not_failure(self):
+        p = self.plugin()
+        p._Cd2Assistant__check_health()
+        original = p._clients['test'].rpc.side_effect
+        def rpc(name, request=None, **kwargs):
+            result = original(name, request, **kwargs)
+            if name == 'GetUploadFileList':
+                for task in result.uploadFiles:
+                    task.statusEnum = 4
+            return result
+        p._clients['test'].rpc.side_effect = rpc
+        p._Cd2Assistant__check_health()
+        self.assertEqual(p.post_message.call_count, 2)
+        self.assertIn('已不再出现', p.post_message.call_args.kwargs['text'])
+
+    def test_cloud_failure_does_not_block_upload_check(self):
+        p = self.plugin()
+        p._clients['test'].probe_directory.side_effect = TimeoutError()
+        p._Cd2Assistant__check_health()
+        text = str(p.post_message.call_args_list)
+        self.assertIn('/disk/200', text)
+        self.assertIn('TimeoutError', text)
+        self.assertNotIn('Cookie过期', text)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -23,6 +23,7 @@ from app.sdk.logging import logger
 from app.sdk.services import MediaServerHelper
 
 from .cd2client import CloudDriveConnection, proto
+from .health import inspect_health
 from .playback import CloudUploadAPI, UploadGuard, detect_external_playback, upload_status
 
 
@@ -50,7 +51,7 @@ class Cd2Assistant(_PluginBase):
     plugin_name = "CloudDrive2助手"
     plugin_desc = "监控CloudDrive2，外网播放时暂停上传，停止后自动恢复，忽略内网播放。"
     plugin_icon = "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/icons/clouddrive.png"
-    plugin_version = "3.0.5"
+    plugin_version = "3.1.0"
     plugin_author = "thsrite"
     author_url = "https://github.com/thsrite"
     plugin_config_prefix = "cd2assistant_"
@@ -77,6 +78,8 @@ class Cd2Assistant(_PluginBase):
         self._playback_pause = False
         self._playback_interval = 10
         self._playback_resume_delay = 45
+        self._health_lock = threading.Lock()
+        self._health_alerts = {}
         self._playback_lock = threading.Lock()
         self._playback_stopping = True
         self._upload_guard = None
@@ -96,7 +99,8 @@ class Cd2Assistant(_PluginBase):
         self._msgtype = config.get("msgtype")
         self._onlyonce = bool(config.get("onlyonce", False))
         self._cd2_restart = bool(config.get("cd2_restart", False))
-        self._cron = config.get("cron")
+        self._cron = config.get("cron", "*/10 * * * *")
+        self._health_alerts = self.get_data("health_alerts") or {}
         self._keyword = config.get("keyword")
         self._cd2_confs = config.get("cd2_confs")
         self._black_dir = config.get("black_dir") or ""
@@ -208,61 +212,47 @@ class Cd2Assistant(_PluginBase):
         )
 
     async def check(self) -> None:
-        """检查所有配置实例的云盘状态和上传任务。"""
-        for name, client in tuple(self._clients.items()):
-            try:
-                await self.__check_cookie(name, client)
-                await self.__check_task(name, client)
-            except Exception as error:
-                logger.error("检查 CloudDrive2 实例 %s 失败：%s", name, error)
+        await asyncio.to_thread(self.__check_health)
 
-    async def __check_cookie(self, name: str, client: CloudDriveConnection) -> None:
-        """检查云盘根目录是否可读，以识别登录失效和访问频控。"""
-        logger.info("开始检查 %s cookie", name)
-        blacklist = {item.strip() for item in self._black_dir.split(",") if item.strip()}
-        for path in await asyncio.to_thread(client.listdir):
-            if not path or path in blacklist:
-                continue
-            error_msg = None
-            try:
-                if not await asyncio.to_thread(client.listdir, f"/{path}"):
-                    logger.warning("云盘 %s 为空", path)
-                    error_msg = f"云盘 {path} cookie过期"
-            except Exception as error:
-                logger.error("云盘 %s cookie过期：%s", path, error)
-                error_msg = (
-                    f"云盘 {path} 访问频率过高，请稍后再试"
-                    if "429" in str(error)
-                    else f"云盘 {path} cookie过期"
-                )
-            if self._notify and error_msg:
-                self.__send_notify(error_msg)
-
-    async def __check_task(self, name: str, client: CloudDriveConnection) -> None:
-        """检查上传任务并按关键词通知异常任务。"""
-        logger.info("开始检查 %s 上传任务", name)
-        response = await asyncio.to_thread(
-            client.rpc, "GetUploadFileList",
-            proto.GetUploadFileListRequest(itemsPerPage=10, pageNumber=0),
-        )
-        task_list = response.uploadFiles
-        if not task_list:
-            logger.info("没有发现上传任务")
+    def __check_health(self):
+        if self._playback_stopping or not self._health_lock.acquire(blocking=False):
             return
-
-        for task in task_list:
-            status = upload_status(task)
-            error_message = self.__field(task, "errorMessage", "") or ""
-            try:
-                matched = bool(self._keyword and re.search(self._keyword, str(error_message)))
-            except re.error as error:
-                logger.error("CloudDrive2检测关键字配置错误：%s", error)
-                return
-            if status == "FatalError" and matched:
-                logger.info("发现异常上传任务：%s", error_message)
-                if self._notify:
-                    self.__send_notify(str(error_message))
-                    break
+        try:
+            blacklist = {item.strip() for item in self._black_dir.split(',') if item.strip()}
+            for name, client in tuple(self._clients.items()):
+                instance = hashlib.sha256((self._cd2_url[name] + '\n' + client._username).encode()).hexdigest()
+                for scope, complete, issues in inspect_health(client, proto, blacklist, lambda: self._playback_stopping):
+                    if self._playback_stopping:
+                        return
+                    key = instance + ':' + scope
+                    previous = self._health_alerts.get(key, {})
+                    # Query failure replaces only its own alert; it cannot clear task failures.
+                    current = issues if complete else {**previous, **issues}
+                    logger.info('%s：%s 检测%s，异常 %s 项', name, scope.split(':')[0],
+                                '完成' if complete else '未能确认', len(issues))
+                    if not self._notify:
+                        continue
+                    changed = [value for item, value in current.items() if previous.get(item) != value]
+                    recovered = [item for item in previous if item not in current] if complete else []
+                    if changed or recovered:
+                        text = name + '｜' + ('上传检测' if scope == 'uploads' else '网盘/服务检测')
+                        if changed:
+                            text += '\n' + '\n\n'.join(changed[:20])
+                            if len(changed) > 20:
+                                text += f'\n另有 {len(changed) - 20} 项异常，请在 CloudDrive2 查看。'
+                        if recovered:
+                            text += f'\n{len(recovered)} 项此前异常已不再出现（上传任务可能已恢复、完成或移除）。'
+                        if len(text) > 3000:
+                            text = text[:2900] + f'\n本次新增或变化异常共 {len(changed)} 项，完整内容请在 CloudDrive2 查看。'
+                        try:
+                            self.__send_notify(text)
+                        except Exception as error:
+                            logger.warning('CloudDrive2 通知提交失败（%s），下次重试', type(error).__name__)
+                            continue
+                    self._health_alerts[key] = current
+                    self.save_data('health_alerts', self._health_alerts)
+        finally:
+            self._health_lock.release()
 
     @staticmethod
     def __field(value: Any, name: str, default: Any = None) -> Any:
@@ -648,7 +638,7 @@ class Cd2Assistant(_PluginBase):
                 "name": "CloudDrive2助手检测服务",
                 "trigger": trigger,
                 "func": self.check,
-                "kwargs": {},
+                "kwargs": {"max_instances": 1, "coalesce": True},
             }
         ]
 
@@ -753,7 +743,6 @@ class Cd2Assistant(_PluginBase):
                         "component": "VRow",
                         "content": [
                             self.__field_control("VCronField", "cron", "检测周期", 4, "5位cron表达式"),
-                            self.__field_control("VTextField", "keyword", "检测关键字", 4),
                             {
                                 "component": "VCol",
                                 "props": {"cols": 12, "md": 4},
@@ -791,7 +780,7 @@ class Cd2Assistant(_PluginBase):
                                         "props": {
                                             "type": "info",
                                             "variant": "tonal",
-                                            "text": "周期检测CloudDrive2上传任务，检测是否命中检测关键词，发送通知。",
+                                            "text": "检查全部上传任务：Error 为可重试错误，FatalError 为上传失败。暂停、排队、取消不报失败；相同异常只通知一次，恢复后通知。旧版关键词不再限制错误检测。",
                                         },
                                     }
                                 ],
@@ -810,7 +799,7 @@ class Cd2Assistant(_PluginBase):
                                         "props": {
                                             "type": "info",
                                             "variant": "tonal",
-                                            "text": "周期检测CloudDrive2云盘CK是否过期，发送通知（挂载的本地路径可添加黑名单）。",
+                                            "text": "检测服务登录与就绪状态、网盘锁定及强制刷新目录。空目录属于正常；超时、权限不足等单独报告，不推断 Cookie 过期。通知使用 MP 已配置渠道（如 Telegram），请在 MP 通知设置中开启对应消息类型。",
                                         },
                                     }
                                 ],
@@ -851,7 +840,7 @@ class Cd2Assistant(_PluginBase):
             "onlyonce": False,
             "cd2_restart": False,
             "cron": "*/10 * * * *",
-            "keyword": "账号异常",
+            "keyword": "",
             "cd2_confs": "",
             "msgtype": "Manual",
             "black_dir": "",
@@ -927,11 +916,6 @@ class Cd2Assistant(_PluginBase):
         cards.extend(self.__metric_card(label, value) for label, value in values)
         return {"component": "VRow", "content": cards}
 
-    def get_page(self) -> List[dict]:
-        """刷新状态后返回插件详情页。"""
-        self.__refresh_info_sync()
-        return [self.__render_instance(name, self._info.get(name, {})) for name in self._clients]
-
     def get_dashboard(self, key: str | None = None, **kwargs) -> Optional[Tuple[Dict[str, Any], Dict[str, Any], List[dict]]]:
         """刷新状态后返回仪表板布局。"""
         if not self._clients:
@@ -948,7 +932,7 @@ class Cd2Assistant(_PluginBase):
         self._playback_stopping = True
         # The worker uses only synchronous SDK/RPC calls, so joining it does not
         # depend on the host event loop. Keep ownership persisted across restarts.
-        with self._playback_lock:
+        with self._health_lock, self._playback_lock:
             self._playback_targets = {}
             self.__close_services()
 

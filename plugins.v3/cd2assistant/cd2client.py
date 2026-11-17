@@ -24,6 +24,23 @@ class CloudDriveConnection:
     def close(self):
         self._client.close()
 
+    def public_system_info(self):
+        return self._client.stub.GetSystemInfo(Empty(), timeout=15)
+
+    def probe_directory(self, path, stopping=lambda: False):
+        token = self._token or self._authenticate(None, stopping)
+        if stopping():
+            raise RuntimeError('插件正在停止')
+        call = self._client.stub.GetSubFiles(
+            proto.ListSubFileRequest(path=path, forceRefresh=True),
+            metadata=(("authorization", f"Bearer {token}"),), timeout=15)
+        try:
+            for _ in call:
+                if stopping():
+                    raise RuntimeError('插件正在停止')
+        finally:
+            call.cancel()
+
     def _authenticate(self, previous, stopping):
         with self._token_lock:
             if stopping():
