@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import hashlib
+import ipaddress
 import threading
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -24,7 +25,7 @@ from app.sdk.services import MediaServerHelper
 
 from .cd2client import CloudDriveConnection, proto
 from .health import inspect_health
-from .playback import CloudUploadAPI, UploadGuard, detect_external_playback, upload_status
+from .playback import CloudCopyAPI, CloudUploadAPI, UploadGuard, detect_external_playback, upload_status
 
 
 class CloudDriveInfo(BaseModel):
@@ -51,7 +52,7 @@ class Cd2Assistant(_PluginBase):
     plugin_name = "CloudDrive2助手 NEO(自用版)"
     plugin_desc = "监控CloudDrive2，外网播放时暂停上传，停止后自动恢复，忽略内网播放。"
     plugin_icon = "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/icons/clouddrive.png"
-    plugin_version = "3.1.2"
+    plugin_version = "3.2.0"
     plugin_author = "thsrite"
     author_url = "https://github.com/thsrite"
     plugin_config_prefix = "cd2assistant_"
@@ -78,6 +79,10 @@ class Cd2Assistant(_PluginBase):
         self._playback_pause = False
         self._playback_interval = 10
         self._playback_resume_delay = 45
+        self._playback_upload_limit = 0
+        self._playback_proxy_sources = ""
+        self._playback_proxy_networks = []
+        self._last_playback = "unchecked"
         self._health_lock = threading.Lock()
         self._health_alerts = {}
         self._playback_lock = threading.Lock()
@@ -108,11 +113,25 @@ class Cd2Assistant(_PluginBase):
         self._playback_pause = bool(config.get("playback_pause", False))
         self._playback_interval = self.__bounded_int(config.get("playback_interval"), 10, 5, 300)
         self._playback_resume_delay = self.__bounded_int(config.get("playback_resume_delay"), 45, 0, 3600)
-        self._upload_guard = UploadGuard(self.get_data("playback_owned_uploads") or {},
-                                        lambda state: self.save_data("playback_owned_uploads", state), logger)
+        self._last_playback = "unchecked"
+        self._playback_upload_limit = self.__bounded_int(config.get("playback_upload_limit"), 0, 0, 1000000)
+        self._playback_proxy_sources = str(config.get("playback_proxy_sources") or "")
+        self._playback_proxy_networks = []
+        for value in re.split(r"[,，\s]+", self._playback_proxy_sources.strip()):
+            if value:
+                try:
+                    self._playback_proxy_networks.append(ipaddress.ip_network(value))
+                except ValueError:
+                    logger.warning("外网播放来源配置包含无效的 IP/CIDR，已跳过")
+        self._upload_guard = UploadGuard(
+            self.get_data("playback_owned_uploads") or {},
+            lambda state: self.save_data("playback_owned_uploads", state), logger,
+            limits=self.get_data("playback_owned_limits"),
+            save_limits=lambda limits: self.save_data("playback_owned_limits", limits),
+        )
         self.__sync_old_config()
 
-        if not (self._enabled or self._onlyonce or self._cd2_restart or self._upload_guard.state):
+        if not (self._enabled or self._onlyonce or self._cd2_restart or self._upload_guard.state or self._upload_guard.limits):
             return
         if not self._cd2_confs:
             logger.error("CloudDrive2助手配置错误，请检查配置")
@@ -123,8 +142,18 @@ class Cd2Assistant(_PluginBase):
         if not self._clients:
             return
 
-        if self._onlyonce or self._cd2_restart:
+        recover_uploads = not self._enabled and any(
+            self._upload_guard.pending(target) for target in self._playback_targets
+        )
+        if self._onlyonce or self._cd2_restart or recover_uploads:
             self._scheduler = BackgroundScheduler(timezone=settings.TZ)
+
+        if recover_uploads:
+            # MoviePilot skips get_service() for disabled plugins, so recovery runs here.
+            self._scheduler.add_job(
+                self.check_playback, "interval", id="recover_uploads",
+                seconds=self._playback_interval, max_instances=1, coalesce=True,
+            )
 
         if self._onlyonce:
             logger.info("CloudDrive2助手定时任务，立即运行一次")
@@ -177,12 +206,14 @@ class Cd2Assistant(_PluginBase):
             if old_client:
                 old_client.close()
                 self._playback_targets = {
-                    key: target for key, target in self._playback_targets.items() if target[0] != name
+                    key: target for key, target in self._playback_targets.items() if target[0] not in (name, name + "（复制/移动）")
                 }
             self._clients[name] = client
             self._cd2_url[name] = url
             identity = username if username is not None else f"token\n{name}"
             target_id = hashlib.sha256(f"{url.rstrip('/')}\n{identity}".encode()).hexdigest()
+            self._playback_targets[target_id + ":copy"] = (
+                name + "（复制/移动）", CloudCopyAPI(client, proto, lambda: self._playback_stopping))
             self._playback_targets[target_id] = (
                 name, CloudUploadAPI(client, proto, lambda: self._playback_stopping))
 
@@ -216,6 +247,8 @@ class Cd2Assistant(_PluginBase):
                 "playback_pause": self._playback_pause,
                 "playback_interval": self._playback_interval,
                 "playback_resume_delay": self._playback_resume_delay,
+                "playback_upload_limit": self._playback_upload_limit,
+                "playback_proxy_sources": self._playback_proxy_sources,
             }
         )
 
@@ -627,11 +660,11 @@ class Cd2Assistant(_PluginBase):
     def get_service(self) -> List[Dict[str, Any]]:
         """把周期检测注册到宿主调度器。"""
         services = []
-        if self._clients and self._upload_guard and (
-            (self._enabled and self._playback_pause) or self._upload_guard.state
+        if self._enabled and self._clients and self._upload_guard and (
+            self._playback_pause or self._upload_guard.state or self._upload_guard.limits
         ):
             services.append({
-                "id": "Cd2AssistantPlayback", "name": "CloudDrive2外网播放暂停上传",
+                "id": "Cd2AssistantPlayback", "name": "CloudDrive2外网播放传输保护",
                 "trigger": "interval", "func": self.check_playback,
                 "kwargs": {"seconds": self._playback_interval, "max_instances": 1, "coalesce": True},
             })
@@ -670,13 +703,23 @@ class Cd2Assistant(_PluginBase):
             playing = None
             if enabled:
                 try:
-                    playing = detect_external_playback(MediaServerHelper().get_services(), logger)
+                    playing = detect_external_playback(
+                        MediaServerHelper().get_services(), logger, self._playback_proxy_networks
+                    )
                 except Exception:
                     logger.warning("获取媒体服务器失败，保持 CloudDrive2 上传状态")
             if self._playback_stopping:
                 return
-            self._upload_guard.tick(playing, self._playback_targets,
-                                    self._playback_resume_delay, enabled=enabled)
+            if enabled and playing != self._last_playback:
+                descriptions = {True: "检测到外网视频播放", False: "没有外网视频播放", None: "无法确认外网播放状态"}
+                logger.info("CloudDrive2 播放检测：%s", descriptions[playing])
+                self._last_playback = playing
+            self._upload_guard.tick(playing, self._playback_targets, self._playback_resume_delay,
+                                    enabled=enabled, limit=self._playback_upload_limit)
+            if not self._enabled and self._scheduler:
+                recovery = self._scheduler.get_job("recover_uploads")
+                if recovery and not any(self._upload_guard.pending(target) for target in self._playback_targets):
+                    recovery.remove()
         except Exception as error:
             logger.warning("外网播放检查失败（%s），下次重试", type(error).__name__)
         finally:
@@ -718,16 +761,25 @@ class Cd2Assistant(_PluginBase):
                     {
                         "component": "VRow",
                         "content": [
-                            self.__field_control("VSwitch", "playback_pause", "外网播放时暂停上传（忽略内网）", 6),
+                            self.__field_control("VSwitch", "playback_pause", "外网播放传输保护（忽略内网）", 6),
                             self.__field_control("VTextField", "playback_interval", "播放检查间隔（秒，5～300）", 3),
                             self.__field_control("VTextField", "playback_resume_delay", "无人外网播放后恢复延迟（秒）", 3),
                         ],
                     },
                     {
+                        "component": "VRow",
+                        "content": [
+                            self.__field_control("VTextField", "playback_upload_limit", "播放时上传上限（KB/s，0=暂停）", 6),
+                            self.__field_control("VTextField", "playback_proxy_sources", "视为外网的代理来源 IP/CIDR", 6,
+                                                 "例如 192.168.1.5/32，多个用逗号分隔"),
+                        ],
+                    },
+                    {
                         "component": "VAlert",
                         "props": {"type": "info", "variant": "tonal", "text":
-                            "读取 MP 已配置的 Emby/Jellyfin/Plex。内网播放不暂停上传；所有外网视频停止或暂停后延迟恢复。"
-                            "只恢复本功能暂停的任务。反向代理必须让媒体服务器识别真实客户端 IP。关闭本功能后会在下一次检查恢复其暂停的任务。"},
+                            "读取 MP 已配置的 Emby/Jellyfin/Plex。默认暂停上传和文件夹复制/移动，播放结束后仅恢复本插件暂停的任务。"
+                            "正数使用 CloudDrive2 全局上传限速，需令牌具有读取和修改系统设置权限；限速失败时改为暂停。"
+                            "只填写专供外网接入的代理来源；如果内外网共用代理，应先让媒体服务器识别真实客户端 IP。"},
                     },
                     {
                         "component": "VRow",
@@ -860,6 +912,8 @@ class Cd2Assistant(_PluginBase):
             "playback_pause": False,
             "playback_interval": 10,
             "playback_resume_delay": 45,
+            "playback_upload_limit": 0,
+            "playback_proxy_sources": "",
         }
 
     @staticmethod

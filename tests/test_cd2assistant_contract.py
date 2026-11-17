@@ -109,10 +109,15 @@ class PluginContractTests(unittest.TestCase):
 
     def test_disabled_plugin_schedules_pending_recovery(self):
         p = self.module.Cd2Assistant()
-        p.data['playback_owned_uploads'] = {'pending': {'k': {'path': '/x', 'size': '1'}}}
-        with patch.object(self.module, 'CloudDriveConnection', return_value=Mock()):
+        import hashlib
+        target = hashlib.sha256(b'http://cd2:19798\nu').hexdigest()
+        p.data['playback_owned_uploads'] = {target: {'k': {'path': '/x', 'size': '1'}}}
+        scheduler = Mock()
+        with patch.object(self.module, 'CloudDriveConnection', return_value=Mock()), \
+             patch.object(self.module, 'BackgroundScheduler', return_value=scheduler):
             p.init_plugin({'enabled': False, 'cd2_confs': 'test#http://cd2:19798#u#p'})
-        self.assertEqual(p.get_service()[0]['id'], 'Cd2AssistantPlayback')
+        self.assertEqual(p.get_service(), [])
+        self.assertEqual(scheduler.add_job.call_args.kwargs['id'], 'recover_uploads')
         p.stop_service()
         self.assertTrue(p.data['playback_owned_uploads'])
 
@@ -356,6 +361,36 @@ class APITokenTests(unittest.TestCase):
                 self.assertEqual(connect.call_args_list[2].kwargs, {'api_token': 'second'})
                 self.assertEqual(plugin._playback_targets[target][0], 'home')
                 plugin.stop_service()
+
+
+class CopyTaskTests(unittest.TestCase):
+    def test_copy_keeps_original_paths_and_does_not_resume_replaced_or_manual_tasks(self):
+        module = load_plugin()
+        p = module.proto
+        copy = p.CopyTask(sourcePath='/Source：A/A:B', destPath='/Target/Title', status=2)
+        copy.startTime.seconds = 10
+        manual = p.CopyTask(sourcePath='/Source/Manual', destPath='/Target/Manual', status=1, paused=True)
+        replaced = p.CopyTask(sourcePath='/Source/Replaced', destPath='/Target/Replaced', status=1)
+        replaced.startTime.seconds = 20
+        rows = [copy, manual, replaced]
+        requests = []
+        def rpc(name, request, **kwargs):
+            if name == 'GetCopyTasks':
+                return p.GetCopyTaskResult(copyTasks=rows)
+            self.assertEqual(name, 'PauseCopyTask')
+            task = next(row for row in rows if row.sourcePath == request.sourcePath)
+            self.assertEqual(task.destPath, request.destPath)
+            task.paused = request.pause
+            requests.append((task.sourcePath, request.pause))
+        api = module.CloudCopyAPI(types.SimpleNamespace(rpc=rpc), p)
+        guard = module.UploadGuard({}, Mock(), Mock())
+        targets = {'instance:copy': ('test', api)}
+        guard.tick(True, targets)
+        replaced.startTime.seconds = 21
+        guard.tick(False, targets, delay=0)
+        self.assertEqual(requests, [(copy.sourcePath, True), (replaced.sourcePath, True),
+                                    (copy.sourcePath, False)])
+        self.assertTrue(manual.paused)
 
 
 if __name__ == '__main__':

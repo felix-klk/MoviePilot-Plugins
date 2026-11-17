@@ -204,6 +204,48 @@ class PlaybackTests(unittest.TestCase):
 
     def test_numeric_status_support(self):
         self.assertEqual(m.upload_status({'statusEnum': 4}), 'Pause')
+        self.assertEqual(m.upload_status({'statusEnum': 0, 'status': '等待预处理'}), 'WaitforPreprocessing')
+
+    def test_only_explicit_proxy_source_counts_as_external(self):
+        proxy = [m.ipaddress.ip_network('192.168.50.18/32')]
+        session = {'RemoteEndPoint': '[::ffff:192.168.50.18]:4567', 'NowPlayingItem': {'MediaType': 'Video'}}
+        self.assertFalse(m.video_session(session))
+        self.assertTrue(m.video_session(session, proxy_networks=proxy))
+        session['RemoteEndPoint'] = '192.168.50.10:8080'
+        self.assertFalse(m.video_session(session, proxy_networks=proxy))
+
+    def test_upload_limit_persists_and_restores_after_restart(self):
+        speed = 400
+        self.api.upload_limit = lambda: speed
+        def set_limit(value):
+            nonlocal speed
+            speed = value
+        self.api.set_upload_limit = Mock(side_effect=set_limit)
+        saved = {}
+        def save_limits(value):
+            saved.clear()
+            saved.update(copy.deepcopy(value))
+        guard = m.UploadGuard({}, self.save, self.log, limits={}, save_limits=save_limits)
+        targets = {'server': ('cloud', self.api)}
+        guard.tick(True, targets, limit=200)
+        self.assertEqual(speed, 200)
+        self.assertFalse(self.api.actions)
+        guard = m.UploadGuard({}, self.save, self.log, limits=copy.deepcopy(saved), save_limits=save_limits)
+        guard.tick(False, targets, delay=0, limit=200)
+        self.assertEqual(speed, 400)
+        self.assertFalse(saved)
+
+    def test_limit_failure_falls_back_to_pause_without_overwriting_manual_cap(self):
+        self.api.upload_limit = Mock(return_value=400)
+        self.api.set_upload_limit = Mock(side_effect=PermissionError)
+        guard = m.UploadGuard({}, self.save, self.log, limits={}, save_limits=Mock())
+        targets = {'server': ('cloud', self.api)}
+        guard.tick(True, targets, limit=200)
+        self.assertEqual(self.api.actions, [('pause', 'auto')])
+        self.api.upload_limit.return_value = 150
+        guard.tick(False, targets, delay=0)
+        self.assertEqual(self.api.actions[-1], ('resume', 'auto'))
+        self.api.set_upload_limit.assert_called_once_with(200)
 
     def test_rpc_pagination_and_task_keys(self):
         rows = [dict(key=str(i), **task()) for i in range(201)]
