@@ -1,4 +1,4 @@
-"""Load the actual V3 plugin with host boundary doubles, not a running MoviePilot."""
+"""Load both plugin builds with MoviePilot host boundary doubles."""
 import asyncio
 import copy
 import importlib.util
@@ -35,7 +35,7 @@ class Base(ABC):
         self.config = value
 
 
-def load_plugin():
+def load_plugin(version="v3"):
     modules = {}
     def module(name, **attrs):
         parts = name.split('.')
@@ -53,15 +53,23 @@ def load_plugin():
     module('pydantic', BaseModel=type('BaseModel', (), {}), ConfigDict=dict)
     module('app.schemas')
     module('app.plugins', _PluginBase=Base)
-    module('app.schemas.event', PluginActionEventData=type('Payload', (), {}))
+    settings = types.SimpleNamespace(TZ='Asia/Shanghai')
+    events = dict(Event=type('Event', (), {}), eventmanager=types.SimpleNamespace(register=lambda *a: lambda f: f))
+    notification_type = 'NotificationType' if version == 'v2' else 'MessageType'
     module('app.schemas.types', EventType=Enum('EventType', 'PluginAction WebhookMessage'),
-           MessageType=Enum('MessageType', {'Manual': '手动处理'}))
-    module('app.sdk.config', settings=types.SimpleNamespace(TZ='Asia/Shanghai'))
-    module('app.sdk.events', Event=type('Event', (), {}),
-           eventmanager=types.SimpleNamespace(register=lambda *a: lambda f: f))
-    module('app.sdk.logging', logger=Mock())
-    module('app.sdk.services', MediaServerHelper=Mock())
-    path = Path(__file__).resolve().parents[1] / 'plugins.v3/cd2assistant/__init__.py'
+           **{notification_type: Enum(notification_type, {'Manual': '手动处理'})})
+    if version == 'v2':
+        module('app.core.config', settings=settings)
+        module('app.core.event', **events)
+        module('app.log', logger=Mock())
+        module('app.helper.mediaserver', MediaServerHelper=Mock())
+    else:
+        module('app.schemas.event', PluginActionEventData=type('Payload', (), {}))
+        module('app.sdk.config', settings=settings)
+        module('app.sdk.events', **events)
+        module('app.sdk.logging', logger=Mock())
+        module('app.sdk.services', MediaServerHelper=Mock())
+    path = Path(__file__).resolve().parents[1] / f'plugins.{version}/cd2assistant/__init__.py'
     spec = importlib.util.spec_from_file_location('cd2_test_plugin', path,
                                                   submodule_search_locations=[str(path.parent)])
     plugin = importlib.util.module_from_spec(spec)
@@ -254,6 +262,56 @@ class HealthTests(unittest.TestCase):
         self.assertIn('/disk/200', text)
         self.assertIn('TimeoutError', text)
         self.assertNotIn('Cookie过期', text)
+
+
+class V2ContractTests(HealthTests):
+    @classmethod
+    def setUpClass(cls):
+        cls.module = load_plugin("v2")
+
+    def test_v2_post_message_uses_host_notification_type(self):
+        plugin = self.plugin()
+        plugin._Cd2Assistant__check_health()
+        sent_type = plugin.post_message.call_args.kwargs['mtype']
+        self.assertIs(sent_type, self.module.NotificationType.Manual)
+
+    def test_v2_webhook_and_action_payloads(self):
+        plugin = self.plugin()
+        plugin._enabled = True
+        plugin._playback_pause = True
+        plugin.check_playback = Mock()
+        for data in ({'event': 'playback.start'}, types.SimpleNamespace(event='media.stop')):
+            asyncio.run(plugin.playback_webhook(types.SimpleNamespace(event_data=data)))
+        self.assertEqual(plugin.check_playback.call_count, 2)
+
+        command = types.SimpleNamespace(event_data=dict(action='cd2_restart', arg_str='test',
+                                                        channel='telegram', user='operator'))
+        asyncio.run(plugin.restart_cd2(command))
+        plugin._clients['test'].rpc.assert_called_once_with('RestartService')
+        self.assertEqual(plugin.post_message.call_args.kwargs['userid'], 'operator')
+
+    def test_disabled_v2_plugin_recovers_owned_uploads_using_local_scheduler(self):
+        import hashlib
+
+        plugin = self.module.Cd2Assistant()
+        target = hashlib.sha256(b'http://cd2:19798\nu').hexdigest()
+        plugin.data['playback_owned_uploads'] = {target: {'key': {'path': '/x', 'size': '1'}}}
+        client = Mock()
+        task = self.module.proto.UploadFileInfo(key='key', destPath='/x', size=1, statusEnum=4)
+        client.rpc.return_value = self.module.proto.GetUploadFileListResult(totalCount=1, uploadFiles=[task])
+        scheduler = Mock()
+        with patch.object(self.module, 'CloudDriveConnection', return_value=client), \
+             patch.object(self.module, 'BackgroundScheduler', return_value=scheduler):
+            plugin.init_plugin(dict(enabled=False, cd2_confs='test#http://cd2:19798#u#p'))
+        self.assertFalse(plugin.get_state())
+        self.assertEqual(plugin.get_service(), [])
+        scheduler.add_job.assert_called_once()
+        recovery = scheduler.add_job.call_args.args[0]
+        recovery()
+        self.assertEqual(client.rpc.call_args.args[0], 'ResumeUploadFiles')
+        self.assertEqual(plugin.data['playback_owned_uploads'], {})
+        scheduler.get_job.return_value.remove.assert_called_once()
+        plugin.stop_service()
 
 
 if __name__ == '__main__':
