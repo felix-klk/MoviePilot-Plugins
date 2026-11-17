@@ -7,7 +7,7 @@ from .playback import CloudUploadAPI, upload_status
 def error_text(error):
     if isinstance(error, RpcError):
         labels = {
-            StatusCode.UNAUTHENTICATED: '认证失败，请检查登录凭据',
+            StatusCode.UNAUTHENTICATED: '认证失败，请检查 API 令牌有效期或账号凭据',
             StatusCode.PERMISSION_DENIED: '访问被拒绝，请检查账户或令牌权限',
             StatusCode.RESOURCE_EXHAUSTED: '请求受限或资源不足',
             StatusCode.DEADLINE_EXCEEDED: '请求超时，暂时无法确认状态',
@@ -20,6 +20,7 @@ def error_text(error):
 
 def safe_text(value):
     text = re.sub(r'https?://\S+', '[链接已隐藏]', str(value))
+    text = re.sub(r'(?i)\bBearer\s+[^\s,;]+', 'Bearer [隐藏]', text)
     text = re.sub(r'(?i)(authorization|cookie|password|token)\s*[:=]\s*[^\s,;]+', r'\1=[隐藏]', text)
     return text[:500]
 

@@ -20,8 +20,9 @@ proto = SimpleNamespace(**{
 })
 
 class CloudDriveClient:
-    def __init__(self, address):
-        self.channel = grpc.insecure_channel(address)
+    def __init__(self, address, *, tls=False):
+        self.channel = (grpc.secure_channel(address, grpc.ssl_channel_credentials())
+                        if tls else grpc.insecure_channel(address))
         self.stub = SimpleNamespace()
         service = DESCRIPTOR.services_by_name['CloudDriveFileSrv']
         for method in service.methods:

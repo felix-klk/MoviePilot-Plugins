@@ -51,7 +51,7 @@ class Cd2Assistant(_PluginBase):
     plugin_name = "CloudDrive2助手 NEO(自用版)"
     plugin_desc = "监控CloudDrive2，外网播放时暂停上传，停止后自动恢复，忽略内网播放。"
     plugin_icon = "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/icons/clouddrive.png"
-    plugin_version = "3.1.1"
+    plugin_version = "3.1.2"
     plugin_author = "thsrite"
     author_url = "https://github.com/thsrite"
     plugin_config_prefix = "cd2assistant_"
@@ -153,17 +153,24 @@ class Cd2Assistant(_PluginBase):
 
     def __create_clients(self) -> None:
         """按一行一个配置建立 CloudDrive2 客户端，隔离单条坏配置。"""
-        for line in (self._cd2_confs or "").splitlines():
+        for line_number, line in enumerate((self._cd2_confs or "").splitlines(), 1):
+            if not line.strip():
+                continue
             parts = line.split("#", 3)
-            if len(parts) != 4 or not all(parts[:3]):
-                logger.error("CloudDrive2助手配置格式错误，已跳过：%s", line.split("#", 1)[0])
+            if len(parts) not in (3, 4) or not all(part.strip() for part in parts[:3]):
+                logger.error("CloudDrive2 第 %s 行配置格式错误，请检查实例名、地址与认证信息", line_number)
                 continue
 
-            name, url, username, password = parts
+            name, url = parts[:2]
+            username = parts[2] if len(parts) == 4 else None
             try:
-                client = CloudDriveConnection(url, username, password)
-            except Exception as error:
-                logger.error("CloudDrive2助手连接失败，请检查配置 %s：%s", name, error)
+                if username is None:
+                    name, url = name.strip(), url.strip()
+                    client = CloudDriveConnection(url, api_token=parts[2])
+                else:
+                    client = CloudDriveConnection(url, username, parts[3])
+            except Exception:
+                logger.error("CloudDrive2 第 %s 行连接配置无效，请检查 gRPC 地址和认证信息", line_number)
                 continue
 
             old_client = self._clients.get(name)
@@ -174,7 +181,8 @@ class Cd2Assistant(_PluginBase):
                 }
             self._clients[name] = client
             self._cd2_url[name] = url
-            target_id = hashlib.sha256(f"{url.rstrip('/')}\n{username}".encode()).hexdigest()
+            identity = username if username is not None else f"token\n{name}"
+            target_id = hashlib.sha256(f"{url.rstrip('/')}\n{identity}".encode()).hexdigest()
             self._playback_targets[target_id] = (
                 name, CloudUploadAPI(client, proto, lambda: self._playback_stopping))
 
@@ -220,7 +228,9 @@ class Cd2Assistant(_PluginBase):
         try:
             blacklist = {item.strip() for item in self._black_dir.split(',') if item.strip()}
             for name, client in tuple(self._clients.items()):
-                instance = hashlib.sha256((self._cd2_url[name] + '\n' + client._username).encode()).hexdigest()
+                username = client._username
+                identity = username if username is not None else f"token\n{name}"
+                instance = hashlib.sha256((self._cd2_url[name] + '\n' + identity).encode()).hexdigest()
                 for scope, complete, issues in inspect_health(client, proto, blacklist, lambda: self._playback_stopping):
                     if self._playback_stopping:
                         return
@@ -730,9 +740,11 @@ class Cd2Assistant(_PluginBase):
                                         "component": "VTextarea",
                                         "props": {
                                             "model": "cd2_confs",
-                                            "label": "cd2配置",
+                                            "label": "CloudDrive2 连接配置",
                                             "rows": 2,
-                                            "placeholder": "cd2配置1#http://127.0.0.1:19798#admin#123456（一行一个配置）",
+                                            "placeholder": "家里#http://127.0.0.1:19798#API令牌",
+                                            "hint": "每行一台：名称#地址#API令牌。旧的名称#地址#用户名#密码格式也可用。",
+                                            "persistent-hint": True,
                                         },
                                     }
                                 ],

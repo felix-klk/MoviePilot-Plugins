@@ -205,7 +205,7 @@
     "name": "CloudDrive2助手 NEO(自用版)",
     "description": "监控 CloudDrive2 网盘和上传异常，通过 MP 通知；外网播放暂停上传，忽略内网。",
     "labels": "云盘,播放联动",
-    "version": "2.1.0",
+    "version": "2.1.1",
     "icon": "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/icons/clouddrive.png",
     "author": "thsrite",
     "author_url": "https://github.com/thsrite",
@@ -214,6 +214,7 @@
     "system_version": ">=2.10.0,<3.0.0",
     "plugin_readme": "https://github.com/felix-klk/MoviePilot-Plugins/blob/main/plugins.v2/cd2assistant/README.md",
     "history": {
+      "v2.1.1": "按官方 gRPC 规范支持 API 令牌直连和 HTTPS，兼容原账号密码配置。",
       "v2.1.0": "适配 MoviePilot V2 2.10.0+：原生设置、上传和网盘健康检测、MP 通知、仅外网播放暂停上传。"
     }
   }

@@ -9,16 +9,24 @@ from grpc import RpcError, StatusCode
 
 
 class CloudDriveConnection:
-    def __init__(self, url, username, password):
+    def __init__(self, url, username=None, password=None, *, api_token=None):
         address = url.strip()
         parsed = urlsplit(address if "://" in address else f"//{address}")
         if not parsed.hostname or parsed.username is not None or parsed.scheme not in ("", "http", "https"):
             raise ValueError("CloudDrive2 地址应为主机名和 gRPC 端口")
         host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
-        self._client = CloudDriveClient(f"{host}:{parsed.port or 19798}")
+        if api_token is not None:
+            api_token = api_token.strip()
+            if not api_token or any(not 33 <= ord(char) <= 126 for char in api_token):
+                raise ValueError("请填写 CloudDrive2 创建的 API 令牌")
+        if parsed.scheme == "https":
+            self._client = CloudDriveClient(f"{host}:{parsed.port or 443}", tls=True)
+        else:
+            self._client = CloudDriveClient(f"{host}:{parsed.port or 19798}")
         self._username = username
         self._password = password
-        self._token = None
+        self._api_token = api_token
+        self._token = api_token
         self._token_lock = Lock()
 
     def close(self):
@@ -68,7 +76,7 @@ class CloudDriveConnection:
         try:
             return invoke(token)
         except RpcError as error:
-            if error.code() != StatusCode.UNAUTHENTICATED:
+            if self._api_token or error.code() != StatusCode.UNAUTHENTICATED:
                 raise
         return invoke(self._authenticate(token, stopping))
 

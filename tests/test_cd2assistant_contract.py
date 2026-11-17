@@ -314,5 +314,49 @@ class V2ContractTests(HealthTests):
         plugin.stop_service()
 
 
+class APITokenTests(unittest.TestCase):
+    def test_direct_bearer_for_unary_and_streaming_without_password_fallback(self):
+        class Expired(grpc.RpcError):
+            def code(self):
+                return grpc.StatusCode.UNAUTHENTICATED
+
+        plugin = load_plugin()
+        transport = Mock()
+        stream = Mock()
+        stream.__iter__ = Mock(return_value=iter(()))
+        transport.stub.GetSubFiles.return_value = stream
+        with patch.object(plugin.connection_module, 'CloudDriveClient', return_value=transport) as factory:
+            client = plugin.CloudDriveConnection('https://cd2.example', api_token=' test-api-token ')
+        factory.assert_called_once_with('cd2.example:443', tls=True)
+        client.rpc('GetAllCloudApis')
+        client.probe_directory('/disk')
+        self.assertEqual(transport.stub.GetAllCloudApis.call_args.kwargs['metadata'],
+                         (('authorization', 'Bearer test-api-token'),))
+        self.assertEqual(transport.stub.GetSubFiles.call_args.kwargs['metadata'],
+                         (('authorization', 'Bearer test-api-token'),))
+        stream.cancel.assert_called_once()
+        transport.stub.GetAllCloudApis.side_effect = Expired()
+        with self.assertRaises(Expired):
+            client.rpc('GetAllCloudApis')
+        self.assertEqual(transport.stub.GetAllCloudApis.call_count, 2)
+        transport.stub.GetToken.assert_not_called()
+
+    def test_both_hosts_accept_mixed_configs_and_token_rotation_keeps_pending_key(self):
+        for edition in ('v2', 'v3'):
+            with self.subTest(edition=edition):
+                module = load_plugin(edition)
+                plugin = module.Cd2Assistant()
+                config = dict(enabled=True, cron='', cd2_confs='home#cd2:19798#first\nlegacy#backup#user#old-pass')
+                with patch.object(module, 'CloudDriveConnection', side_effect=lambda *args, **kwargs: Mock()) as connect:
+                    plugin.init_plugin(config)
+                    target = next(key for key, value in plugin._playback_targets.items() if value[0] == 'home')
+                    plugin.init_plugin({**config, 'cd2_confs': config['cd2_confs'].replace('first', 'second')})
+                self.assertEqual(connect.call_args_list[0].kwargs, {'api_token': 'first'})
+                self.assertEqual(connect.call_args_list[1].args, ('backup', 'user', 'old-pass'))
+                self.assertEqual(connect.call_args_list[2].kwargs, {'api_token': 'second'})
+                self.assertEqual(plugin._playback_targets[target][0], 'home')
+                plugin.stop_service()
+
+
 if __name__ == '__main__':
     unittest.main()
