@@ -48,10 +48,10 @@ class CloudDriveInfo(BaseModel):
 class Cd2Assistant(_PluginBase):
     """监控 CloudDrive2 上传任务和云盘登录状态。"""
 
-    plugin_name = "CloudDrive2助手"
+    plugin_name = "CloudDrive2助手 NEO(自用版)"
     plugin_desc = "监控CloudDrive2，外网播放时暂停上传，停止后自动恢复，忽略内网播放。"
     plugin_icon = "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/icons/clouddrive.png"
-    plugin_version = "3.1.0"
+    plugin_version = "3.1.1"
     plugin_author = "thsrite"
     author_url = "https://github.com/thsrite"
     plugin_config_prefix = "cd2assistant_"
@@ -915,6 +915,10 @@ class Cd2Assistant(_PluginBase):
         ]
         cards.extend(self.__metric_card(label, value) for label, value in values)
         return {"component": "VRow", "content": cards}
+
+    def get_page(self) -> Optional[List[dict]]:
+        # Satisfy the host ABC while its placeholder detection keeps has_page false.
+        pass
 
     def get_dashboard(self, key: str | None = None, **kwargs) -> Optional[Tuple[Dict[str, Any], Dict[str, Any], List[dict]]]:
         """刷新状态后返回仪表板布局。"""

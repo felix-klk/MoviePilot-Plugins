@@ -1,6 +1,6 @@
 # CloudDrive2助手：MoviePilot V3 外网播放暂停上传补丁
 
-基于用户提供的 Cd2Assistant 3.0.1 修改，补丁版本 3.1.0。只修改 V3 的 CloudDrive2助手；CloudDriveDisk 无需替换。
+基于用户提供的 Cd2Assistant 3.0.1 修改，补丁版本 3.1.1。只修改 V3 的 CloudDrive2助手；CloudDriveDisk 无需替换。
 
 3.1.0 使用插件私有 protobuf 描述符池，修复 `duplicate symbol clouddrive.ProxyType` 加载冲突，并保持 Windows 兼容。插件恢复原来的站点认证等级 2，MoviePilot 会按此等级显示插件。
 
@@ -23,7 +23,7 @@
 
    `https://github.com/felix-klk/MoviePilot-Plugins`
 
-2. 刷新插件商城，搜索 **CloudDrive2助手**，选择来自本仓库的 **3.1.0** 版本安装或更新。
+2. 刷新插件商城，搜索 **CloudDrive2助手**，选择来自本仓库的 **3.1.1** 版本安装或更新。
 3. 打开配置，保留或填写 CloudDrive2 连接信息，开启“启用插件”和“外网播放时暂停上传（忽略内网）”。
 4. 默认每 10 秒检查，所有外网播放停止或暂停后等待 45 秒恢复。
 
@@ -74,3 +74,6 @@
 网盘检查包含 GetSystemInfo 登录/就绪/错误状态、GetAllCloudApis 锁定状态及 GetSubFiles 强制刷新目录。空目录正常；超时、权限不足、资源限制独立报告，不猜测 Cookie 过期。目录读取成功仅证明当次目录访问正常，不代表已测试上传或下载。使用定时只读探测，不创建测试文件；短于检测周期且已消失的错误可能无法捕获。
 
 接口字段已与官方当前 https://www.clouddrive2.com/api/clouddrive.proto 对照。继续采用独立 protobuf 描述符池，保留 Windows 兼容、等级 2 和外网播放暂停上传。
+
+
+3.1.1 修复 MP V3 抽象方法 get_page 缺失导致无法加载的问题；保留占位实现以使用原生设置入口。显示名称为 CloudDrive2助手 NEO(自用版)，插件 ID 仍为 Cd2Assistant。

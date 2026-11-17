@@ -8,11 +8,16 @@ import types
 import unittest
 from unittest.mock import Mock, patch
 from enum import Enum
+from abc import ABC, abstractmethod
 
 import grpc
 
 
-class Base:
+class Base(ABC):
+    @abstractmethod
+    def get_page(self):
+        pass
+
     def __init__(self):
         self.data = {}
         self.config = {}
@@ -188,8 +193,10 @@ class HealthTests(unittest.TestCase):
         return p
 
     def test_settings_only_entry(self):
-        self.assertNotIn('get_page', self.module.Cd2Assistant.__dict__)
-        self.assertTrue(self.module.Cd2Assistant().get_form()[0])
+        plugin = self.module.Cd2Assistant()
+        self.assertIsNone(plugin.get_page())
+        self.assertFalse(self.module.Cd2Assistant.__abstractmethods__)
+        self.assertTrue(plugin.get_form()[0])
 
     def test_all_pages_numeric_error_and_empty_cloud_valid(self):
         p = self.plugin()

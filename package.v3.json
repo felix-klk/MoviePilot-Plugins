@@ -58,16 +58,17 @@
     }
   },
   "Cd2Assistant": {
-    "name": "CloudDrive2助手",
+    "name": "CloudDrive2助手 NEO(自用版)",
     "description": "监控CloudDrive2网盘与上传异常，通过MP渠道通知；外网播放暂停上传，忽略内网。",
     "labels": "云盘,播放联动",
-    "version": "3.1.0",
+    "version": "3.1.1",
     "icon": "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/icons/clouddrive.png",
     "author": "thsrite",
     "level": 2,
     "release": true,
     "system_version": ">=3.0.0",
     "history": {
+      "v3.1.1": "补回 MP V3 必需的 get_page 抽象方法实现，保持原生设置入口；显示名称改为 NEO(自用版)，保留插件 ID 和配置。",
       "v3.1.0": "默认打开原生设置；全部分页检测上传错误，服务及网盘只读健康检查；MP通知去重与恢复提醒，保留外网播放联动及Windows兼容。",
       "v3.0.5": "隔离 CloudDrive2 protobuf 描述符，修复与其他云盘组件同进程加载时 duplicate symbol clouddrive.ProxyType 冲突；保持 Windows 兼容和认证等级 2。",
       "v3.0.4": "修复 Windows 上旧版 CloudDrive 客户端导入 MSG_DONTWAIT 导致插件加载失败的问题，升级 gRPC 客户端并恢复原站点认证等级 2。",
