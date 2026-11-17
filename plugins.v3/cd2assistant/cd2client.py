@@ -3,8 +3,7 @@
 from threading import Lock
 from urllib.parse import urlsplit
 
-from clouddrive2_client import CloudDriveClient
-from clouddrive2_client.proto import clouddrive_pb2 as proto
+from .cd2protocol import CloudDriveClient, proto
 from google.protobuf.empty_pb2 import Empty
 from grpc import RpcError, StatusCode
 
