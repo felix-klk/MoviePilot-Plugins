@@ -52,12 +52,12 @@ class Cd2Assistant(_PluginBase):
     plugin_name = "CloudDrive2助手"
     plugin_desc = "监控CloudDrive2，外网播放时暂停上传，停止后自动恢复，忽略内网播放。"
     plugin_icon = "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/icons/clouddrive.png"
-    plugin_version = "3.0.2"
+    plugin_version = "3.0.3"
     plugin_author = "thsrite"
     author_url = "https://github.com/thsrite"
     plugin_config_prefix = "cd2assistant_"
     plugin_order = 5
-    auth_level = 2
+    auth_level = 1
 
     def __init__(self) -> None:
         """初始化实例状态，避免不同插件实例共享 CloudDrive 客户端。"""

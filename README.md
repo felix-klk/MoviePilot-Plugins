@@ -8,7 +8,7 @@
 
 ## CloudDrive2助手：外网播放暂停上传（V3）
 
-在 MoviePilot V3 添加仓库 `https://github.com/felix-klk/MoviePilot-Plugins`，从插件商城安装 **CloudDrive2助手 3.0.2**。开启“外网播放时暂停上传（忽略内网）”后，外网视频播放时暂停 CD2 上传，全部停止后延迟恢复；默认 10 秒检查、45 秒恢复延迟。
+在 MoviePilot V3 添加仓库 `https://github.com/felix-klk/MoviePilot-Plugins`，从插件商城安装 **CloudDrive2助手 3.0.3**。开启“外网播放时暂停上传（忽略内网）”后，外网视频播放时暂停 CD2 上传，全部停止后延迟恢复；默认 10 秒检查、45 秒恢复延迟。
 
 [安装与使用说明](plugins.v3/cd2assistant/README.md)。基于 thsrite 的 CloudDrive2助手，播放检测参考 Shurelol / jxxghp 的 speedlimiter。29 项本地测试通过，仍需实机验证。
 
@@ -28,7 +28,7 @@
 | 插件 | V2 版本 | V3 版本 | 主要功能 |
 | --- | --- | --- | --- |
 | 海拉鲁字幕大师 | 0.1.101 | 1.2.19 | 字幕搜索、下载、上传、匹配、改名、调轴、入库自动处理 |
-| CloudDrive2助手 | — | 3.0.2 | 外网播放暂停 CD2 上传、停止后恢复、忽略内网 |
+| CloudDrive2助手 | — | 3.0.3 | 外网播放暂停 CD2 上传、停止后恢复、忽略内网 |
 | AI字幕生成(联动版) | 3.5.63 | 4.0.3 | 音轨识别、字幕提取、AI 翻译、任务队列、联动字幕匹配 |
 
 ## 字幕匹配
