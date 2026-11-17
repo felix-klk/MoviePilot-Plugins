@@ -52,7 +52,7 @@ def session_list(payload):
                 payload = value
                 break
     if not isinstance(payload, list) or any(not isinstance(s, dict) for s in payload):
-        raise ValueError("ý���������������Ч�Ự�б�")
+        raise ValueError("媒体服务器返回了无效会话列表")
     return payload
 
 
@@ -81,7 +81,7 @@ def video_session(session, jellyfin=False) -> bool | None:
 def detect_external_playback(services, log) -> bool | None:
     """True wins over unknown; False requires successful checks of every server."""
     if not services:
-        log.warning("�������ż�⣺û�������õ�ý��������������ϴ�״̬")
+        log.warning("外网播放检测：没有已配置的媒体服务器，保留上传状态")
         return None
     unknown = False
     playing = False
@@ -95,7 +95,7 @@ def detect_external_playback(services, log) -> bool | None:
                     url += "&activeWithinSeconds=120"
                 response = service.instance.get_data(url)
                 if response is None:
-                    raise ValueError("δ�յ���Ӧ")
+                    raise ValueError("未收到响应")
                 try:
                     if response.status_code != 200:
                         raise ValueError(f"HTTP {response.status_code}")
@@ -106,7 +106,7 @@ def detect_external_playback(services, log) -> bool | None:
             elif kind == "plex":
                 plex = service.instance.get_plex()
                 if plex is None:
-                    raise ValueError("Plex δ����")
+                    raise ValueError("Plex 未连接")
                 states = []
                 for session in plex.sessions():
                     if str(getattr(session, "TAG", "")).lower() != "video":
@@ -124,12 +124,12 @@ def detect_external_playback(services, log) -> bool | None:
                         states.append(False if local is not None and as_bool(local)
                                       else external_address(getattr(player, "address", None)))
             else:
-                raise ValueError("�ݲ�֧�ִ�ý�����������")
+                raise ValueError("暂不支持此媒体服务器类型")
             playing |= any(s is True for s in states)
             unknown |= any(s is None for s in states)
         except Exception as error:
             # Do not include exception text: HTTP errors may contain API keys in URLs.
-            log.warning("�������ż�⣺%s ��ѯʧ�ܻ�֧�֣�%s���������ϴ�״̬", name, type(error).__name__)
+            log.warning("外网播放检测：%s 查询失败或不支持（%s），保留上传状态", name, type(error).__name__)
             unknown = True
     return True if playing else (None if unknown else False)
 
@@ -178,7 +178,7 @@ class UploadGuard:
                 elif self.state.get(target_id):
                     self.resume(target_id, name, api)
             except Exception as error:
-                self.log.warning("CloudDrive2 �������ſ��ƣ�%s ����ʧ�ܣ�%s�����´�����", name, type(error).__name__)
+                self.log.warning("CloudDrive2 外网播放控制：%s 操作失败（%s），下次重试", name, type(error).__name__)
 
     def pause(self, target_id, name, api):
         tasks = api.list_uploads()
@@ -190,7 +190,7 @@ class UploadGuard:
             owned[key] = identity(task)
             self.save(self.state)
             api.pause(key)
-            self.log.info("%s���������ţ���ͣ�ϴ�����", name)
+            self.log.info("%s：外网播放，暂停上传任务", name)
 
     def resume(self, target_id, name, api):
         tasks = api.list_uploads()
@@ -203,7 +203,7 @@ class UploadGuard:
                     continue
                 if status == "Pause":
                     api.resume(key)
-                    self.log.info("%s�����������ѽ������ָ��ϴ�����", name)
+                    self.log.info("%s：外网播放已结束，恢复上传任务", name)
             del owned[key]
             self.save(self.state)
         if not owned:
@@ -219,7 +219,7 @@ class CloudUploadAPI:
 
     def rpc(self, name, request):
         if self.stopping():
-            raise RuntimeError("�������ֹͣ")
+            raise RuntimeError("插件正在停止")
         method = getattr(self.client.stub, name)
         try:
             return method(request, metadata=self.client.metadata, timeout=15)
@@ -228,11 +228,11 @@ class CloudUploadAPI:
             if getattr(code, "name", "") != "UNAUTHENTICATED":
                 raise
             if self.stopping():
-                raise RuntimeError("�������ֹͣ") from None
+                raise RuntimeError("插件正在停止") from None
             token = self.client.stub.GetToken(self.proto.GetTokenRequest(
                 userName=self.client.username, password=self.client.password), timeout=15)
             if not token.success or not token.token:
-                raise RuntimeError("CloudDrive2 ��¼ʧ��") from None
+                raise RuntimeError("CloudDrive2 登录失败") from None
             self.client.metadata[:] = [("authorization", "Bearer " + token.token)]
             return method(request, metadata=self.client.metadata, timeout=15)
 
@@ -247,13 +247,13 @@ class CloudUploadAPI:
             for task in rows:
                 key = str(field(task, "key", ""))
                 if not key:
-                    raise ValueError("�ϴ�����ȱ�� key")
+                    raise ValueError("上传任务缺少 key")
                 tasks[key] = task
             if len(tasks) >= total:
                 return tasks
             if not rows or len(tasks) == before:
-                raise ValueError("�ϴ������ҳ���������������ο���")
-        raise ValueError("�ϴ������ҳ��������")
+                raise ValueError("上传任务分页不完整，跳过本次控制")
+        raise ValueError("上传任务分页超过上限")
 
     def pause(self, key):
         self.rpc("PauseUploadFiles", self.proto.MultpleUploadFileKeyRequest(keys=[key]))

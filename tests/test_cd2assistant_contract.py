@@ -52,7 +52,7 @@ def load_plugin():
     module('app.plugins', _PluginBase=Base)
     module('app.schemas.event', PluginActionEventData=type('Payload', (), {}))
     module('app.schemas.types', EventType=Enum('EventType', 'PluginAction WebhookMessage'),
-           MessageType=Enum('MessageType', {'Manual': '�ֶ�����'}))
+           MessageType=Enum('MessageType', {'Manual': '手动处理'}))
     module('app.sdk.config', settings=types.SimpleNamespace(TZ='Asia/Shanghai'))
     module('app.sdk.events', Event=type('Event', (), {}),
            eventmanager=types.SimpleNamespace(register=lambda *a: lambda f: f))
@@ -117,7 +117,7 @@ class PluginContractTests(unittest.TestCase):
         self.assertFalse(defaults['playback_pause'])
         self.assertEqual(p._playback_interval, 10)
         self.assertEqual(p._playback_resume_delay, 0)
-        self.assertIn('��������', str(form))
+        self.assertIn('忽略内网', str(form))
         p.stop_service()
 
 

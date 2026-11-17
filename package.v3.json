@@ -58,8 +58,8 @@
     }
   },
   "Cd2Assistant": {
-    "name": "CloudDrive2����",
-    "description": "���CloudDrive2����������ʱ��ͣ�ϴ���ֹͣ���Զ��ָ��������������š�",
+    "name": "CloudDrive2助手",
+    "description": "监控CloudDrive2，外网播放时暂停上传，停止后自动恢复，忽略内网播放。",
     "labels": "云盘,播放联动",
     "version": "3.0.2",
     "icon": "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/icons/clouddrive.png",
@@ -68,9 +68,9 @@
     "release": true,
     "system_version": ">=3.0.0",
     "history": {
-      "v3.0.2": "���� V3 ����������ͣ�ϴ����ӳٻָ�������ӹܼ�¼���������ԡ�",
-      "v3.0.1": "MediaVault �����ߣ�����Ⱥ @mediavault3 ���ڳ齱����ӭ���档",
-      "v3.0.0": "���� V3 SDK���첽 CloudDrive2 ���ú���ȷ�� HomePage ��Ӧģ�͡�"
+      "v3.0.2": "新增 V3 外网播放暂停上传、延迟恢复、任务接管记录及故障重试。",
+      "v3.0.1": "MediaVault 已上线，交流群 @mediavault3 定期抽奖，欢迎来玩。",
+      "v3.0.0": "适配 V3 SDK、异步 CloudDrive2 调用和明确的 HomePage 响应模型。"
     }
   }
 }
