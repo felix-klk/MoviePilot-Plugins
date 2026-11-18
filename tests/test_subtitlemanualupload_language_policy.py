@@ -176,6 +176,38 @@ Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,这是中文字幕内容这是
     assert profile["suffix"] == "chi"
 
 
+@pytest.mark.parametrize("language_modules", ["plugins.v3"], indirect=True)
+@pytest.mark.parametrize(("name", "english_lines", "expected"), [
+    ("movie.zh-CN.ass", True, "chi&eng"),
+    ("movie.zh-TW.ssa", True, "cht&eng"),
+    ("movie.zh-CN.ass", False, "chi"),
+])
+def test_ass_reads_dialogue_after_fonts_without_relying_on_chinese_tag(
+    language_modules, name, english_lines, expected,
+):
+    english = [
+        "We should wait until the rain has passed.",
+        "You will find the keys on the table.",
+        "What did you bring for the others?",
+        "Can you tell me what happened here?",
+    ]
+    rows = []
+    for line in english:
+        dialogue = "请耐心等待，大家准备好了就一起出发。"
+        dialogue += rf"\N{line}" if english_lines else " 由 Example Media Studio 提供字幕"
+        rows.append("Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,," + dialogue)
+    text = (
+        "[Script Info]\nTitle: Demo\n[Fonts]\nfontname: sample.ttf\n"
+        + "English words in the font payload!\n" * 600
+        + "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        + "\n".join(rows)
+    )
+    language = language_modules.language
+    profile = language.detect_language_profile(name, text.encode("utf-8"), {".ass", ".ssa"})
+
+    assert profile["suffix"] == expected
+
+
 def test_filename_labels_cover_known_pair_aliases(language_modules):
     language = language_modules.language
 

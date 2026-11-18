@@ -178,11 +178,15 @@ def language_suffix_from_filename(file_name: str, subtitle_exts: Iterable[str]) 
 
 def detect_language_profile(file_name: str, raw_bytes: bytes, subtitle_exts: Iterable[str]) -> Dict[str, str]:
     lowered = file_name.lower()
+    ass_format = Path(lowered).suffix in {".ass", ".ssa"}
     filename_suffix = language_suffix_from_filename(file_name, subtitle_exts)
-    if filename_suffix["suffix"] != "und":
+    filename_language = filename_suffix["suffix"]
+    if filename_language != "und" and not (ass_format and filename_language in {"chi", "cht"}):
         return filename_suffix
 
-    preview = "" if is_bitmap_subtitle(file_name, raw_bytes) else decode_preview_bytes(raw_bytes[:16000])
+    # ASS/SSA attachments can appear before the dialogue section.
+    sample = raw_bytes if ass_format else raw_bytes[:16000]
+    preview = "" if is_bitmap_subtitle(file_name, raw_bytes) else decode_preview_bytes(sample)
     preview = _subtitle_dialogue_text(file_name, preview)
     cjk_count = len(re.findall(r"[\u4e00-\u9fff]", preview))
     kana_count = len(re.findall(r"[\u3040-\u30ff]", preview))
@@ -201,6 +205,12 @@ def detect_language_profile(file_name: str, raw_bytes: bytes, subtitle_exts: Ite
         or len(re.findall(r"[\u4e00-\u9fff]", chinese_lines)) >= 20
         or len(re.findall(r"[这這们們吗嗎呢]", preview)) >= 3
     )
+    if filename_language != "und":
+        if has_chinese_content and not has_kana and not has_hangul and _has_english_dialogue(preview):
+            suffix = f"{filename_language}&eng"
+            return {"suffix": suffix, "label": LANGUAGE_PAIR_LABELS[suffix]}
+        return filename_suffix
+
     has_ascii = len(re.findall(r"\b[A-Za-z]{3,}\b", preview)) >= 20
     has_chinese_name = bool(
         re.search(r"(^|[\s._\-\[\]()])(?:zh|chi|chs|cht|zho|cmn)(?=$|[\s._\-\[\]()])", lowered)
@@ -279,6 +289,16 @@ def detect_language_profile(file_name: str, raw_bytes: bytes, subtitle_exts: Ite
         "suffix": normalize_language_suffix(suffix),
         "label": label,
     }
+
+
+def _has_english_dialogue(text: str) -> bool:
+    common_words = re.compile(r"\b(?:the|and|you|your|are|was|were|have|not|that|this|with|what|when|where|will|would|can|for|our|they|we|my|me|it|is|to|of|in)\b")
+    english_lines = {
+        line.strip()
+        for line in text.lower().splitlines()
+        if len(common_words.findall(line)) >= 2 and len(re.findall(r"\b[a-z]+\b", line)) >= 4
+    }
+    return len(english_lines) >= 3
 
 
 def _subtitle_dialogue_text(file_name: str, text: str) -> str:

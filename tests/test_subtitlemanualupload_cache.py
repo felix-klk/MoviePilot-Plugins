@@ -3929,6 +3929,8 @@ def test_v3_emby_recheck_keeps_other_episodes_moving(tmp_path, monkeypatch):
     plugin._auto_subtitle_language_strict = True
     plugin._auto_subtitle_language_priority = ["chi", "cht"]
     service = plugin._auto_transfer_service()
+    logs = []
+    monkeypatch.setattr(service._logger, "info", lambda message, *args: logs.append(message % args))
     service._queue._ensure_worker = lambda: None
     clock = types.SimpleNamespace(time=lambda: 100.0)
     service._time = service._queue._time = clock
@@ -3982,6 +3984,7 @@ def test_v3_emby_recheck_keeps_other_episodes_moving(tmp_path, monkeypatch):
 
     assert searches == [[2]]
     assert emby_checks == [1, 2]
+    assert any("Emby 已返回当前版本轨道" in log and "S01E02" in log for log in logs)
     waiting = next(task for task in plugin._auto_transfer_tasks.values() if task["episode"] == 1)
     assert waiting["status"] == "pending"
     assert waiting["next_run_ts"] == 130
@@ -4012,6 +4015,14 @@ def test_v3_emby_recheck_keeps_other_episodes_moving(tmp_path, monkeypatch):
     batch, _ = service._queue.claim_next_batch()
     service.process_transfer_auto_task_batch(batch)
     assert searches == [[2], [4]]
+    assert emby_checks == [1, 2, 3, 1, 4, 5, 4]
+
+    inventory = plugin.services.subtitle_inventory()
+    monkeypatch.setattr(inventory, "probe_embedded_subtitle_tracks", lambda entry: [])
+    override_services(plugin, auto_transfer=service, subtitle_inventory=inventory)
+    local_entry = make_auto_entry(tmp_path, filename="Local.mkv")
+    assert service._check_emby_subtitles_for_task({"entry": local_entry}) is None
+    assert any("入库字幕检测使用本地轨道" in log and "Local.mkv" in log for log in logs)
     assert emby_checks == [1, 2, 3, 1, 4, 5, 4]
 
 

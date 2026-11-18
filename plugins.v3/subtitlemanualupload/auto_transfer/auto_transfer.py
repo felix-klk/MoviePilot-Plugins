@@ -515,6 +515,11 @@ class AutoTransferService:
         local_tracks = inventory.probe_embedded_subtitle_tracks(entry)
         if local_tracks is not None:
             target["embedded_subtitles"] = local_tracks
+            self._logger.info(
+                "[SubtitleManualUpload] 入库字幕检测使用本地轨道 target=%s tracks=%s",
+                target.get("label"),
+                len(local_tracks),
+            )
             return local_skip if target_satisfies_auto_subtitle_policy(target, required) else None
 
         if owner._auto_skip_chinese_media_on_transfer:
@@ -572,6 +577,11 @@ class AutoTransferService:
                 kind = "外挂" if external else "内嵌"
                 label = language_profile_from_text(suffix)["label"]
                 return {"status": "skipped", "reason": f"Emby 已检测到符合要求的{kind}字幕（{label}）"}
+        self._logger.info(
+            "[SubtitleManualUpload] Emby 已返回当前版本轨道，未找到符合要求的字幕 target=%s subtitle_tracks=%s",
+            target.get("label"),
+            len(tracks),
+        )
         return None
 
     def process_transfer_auto_task_batch(self, tasks: List[Dict[str, Any]]) -> None:
