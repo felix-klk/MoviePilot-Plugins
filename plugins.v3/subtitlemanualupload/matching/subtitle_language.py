@@ -125,6 +125,14 @@ def normalize_language_suffix(value: Any) -> str:
     return re.sub(r"[^a-z0-9-]", "", suffix) or "und"
 
 
+def subtitle_filename_has_forced_tag(file_name: Any, video_stem: str) -> bool:
+    if not video_stem:
+        return False
+    stem = Path(normalize_text(file_name).replace("\\", "/")).stem.casefold()
+    prefix = f"{video_stem.casefold()}."
+    return stem.startswith(prefix) and "forced" in stem[len(prefix):].split(".")
+
+
 def language_suffix_from_filename(file_name: str, subtitle_exts: Iterable[str]) -> Dict[str, str]:
     name = Path(normalize_text(file_name)).name
     ext = Path(name).suffix.lower()
@@ -342,19 +350,32 @@ def auto_target_has_chinese_subtitle(
 ) -> bool:
     required = required_auto_languages(language_priority, strict=strict)
 
-    def satisfied() -> bool:
-        if required is not None:
-            return target_has_preferred_subtitle(target, required)
-        return target_has_chinese_subtitle(target, is_chinese_language_suffix_func=is_chinese_language_suffix_func)
-
-    if satisfied():
+    if target_satisfies_auto_subtitle_policy(target, required, is_chinese_language_suffix_func):
         return True
     embedded_subtitles = subtitle_inventory.embedded_subtitle_tracks_for_target(entry)
     if embedded_subtitles:
         target["has_embedded_subtitle"] = True
         target["embedded_subtitle_count"] = len(embedded_subtitles)
         target["embedded_subtitles"] = embedded_subtitles
-    return satisfied()
+    return target_satisfies_auto_subtitle_policy(target, required, is_chinese_language_suffix_func)
+
+
+def target_satisfies_auto_subtitle_policy(
+    target: Dict[str, Any],
+    required: Optional[List[str]],
+    is_chinese_language_suffix_func: Callable[[Any], bool] = is_chinese_language_suffix,
+) -> bool:
+    subtitles = target.get("subtitles")
+    video_stem = normalize_text(target.get("basename"))
+    if subtitles and video_stem:
+        target = {**target, "subtitles": [
+            item for item in subtitles
+            if isinstance(item, dict)
+            and not subtitle_filename_has_forced_tag(item.get("name") or item.get("path"), video_stem)
+        ]}
+    if required is not None:
+        return target_has_preferred_subtitle(target, required)
+    return target_has_chinese_subtitle(target, is_chinese_language_suffix_func=is_chinese_language_suffix_func)
 
 
 def auto_language_bucket(suffix: Any) -> str:

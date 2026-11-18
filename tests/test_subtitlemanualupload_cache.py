@@ -16,9 +16,9 @@ from pathlib import Path
 import pytest
 
 
-def load_plugin_module():
+def load_plugin_module(generation="plugins.v2"):
     root = Path(__file__).resolve().parents[1]
-    package_dir = root / "plugins.v2" / "subtitlemanualupload"
+    package_dir = root / generation / "subtitlemanualupload"
 
     class HTTPException(Exception):
         def __init__(self, status_code=500, detail=""):
@@ -72,6 +72,26 @@ def load_plugin_module():
         ),
         "app.plugins": types.SimpleNamespace(_PluginBase=PluginBase),
     }
+    if generation == "plugins.v3":
+        modules.update({
+            "app.sdk": types.ModuleType("app.sdk"),
+            "app.schemas": types.ModuleType("app.schemas"),
+            "app.schemas.types": types.SimpleNamespace(
+                MediaSource=types.SimpleNamespace(
+                    TMDB=types.SimpleNamespace(value="themoviedb"),
+                    Douban=types.SimpleNamespace(value="douban"),
+                ),
+            ),
+            "app.db.oper": types.ModuleType("app.db.oper"),
+            "app.db.oper.transferhistory": types.SimpleNamespace(TransferHistoryOper=FakeTransferHistory),
+            "app.sdk.config": modules["app.core.config"],
+            "app.sdk.logging": modules["app.log"],
+            "app.sdk.media": types.SimpleNamespace(
+                MetaInfoPath=modules["app.core.metainfo"].MetaInfoPath,
+                build_media_key=lambda *_args, **_kwargs: "",
+                resolve_media_identity=lambda *_args, **_kwargs: None,
+            ),
+        })
     for name, module in modules.items():
         sys.modules[name] = module
 
@@ -3898,6 +3918,101 @@ def test_stop_service_uses_auto_transfer_service_directly():
     plugin.stop_service()
 
     assert captured["stopped"] is True
+
+
+def test_v3_emby_recheck_keeps_other_episodes_moving(tmp_path, monkeypatch):
+    module, _, _ = load_plugin_module("plugins.v3")
+    plugin = make_plugin(module)
+    plugin._auto_check_emby_subtitles = True
+    plugin._auto_skip_chinese_media_on_transfer = False
+    plugin._auto_transfer_queue_debounce_seconds = 0
+    plugin._auto_subtitle_language_strict = True
+    plugin._auto_subtitle_language_priority = ["chi", "cht"]
+    service = plugin._auto_transfer_service()
+    service._queue._ensure_worker = lambda: None
+    clock = types.SimpleNamespace(time=lambda: 100.0)
+    service._time = service._queue._time = clock
+    entries = [
+        make_auto_entry(
+            tmp_path, filename=f"Show.S01E0{i}.strm",
+            media_key="tv-key", media_type="tv", season=1, episode=i,
+        )
+        for i in (1, 2, 3, 4, 5)
+    ]
+    local_forced = Path(entries[1]["path"]).with_suffix(".zh-CN.forced.srt")
+    local_forced.write_text("1\n00:00:01,000 --> 00:00:02,000\n招牌\n", encoding="utf-8")
+    target = service._target_from_entry(entries[1])
+    assert target["subtitles"][0]["language_suffix"] == "chi"
+    assert not service._auto_target_has_chinese_subtitle(entries[1], target)
+    searches = []
+    emby_checks = []
+
+    def tracks(entry, mappings):
+        assert mappings == ""
+        emby_checks.append(entry["episode"])
+        if entry["episode"] == 4 or (entry["episode"] == 1 and emby_checks.count(1) == 1):
+            return "pending", []
+        if entry["episode"] == 5:
+            return "ready", [{
+                "IsExternal": True, "Codec": "ass", "Language": "zh-CN",
+                "Path": "/emby/Show.S01E05.中英双语.zh-CN.default.ass",
+            }]
+        if entry["episode"] in (1, 3):
+            return "ready", [{
+                "IsExternal": False, "IsForced": False, "Codec": "subrip",
+                "Language": "chi", "Title": "Traditional Chinese",
+            }]
+        return "ready", [
+            {"IsExternal": False, "Codec": "subrip", "Language": "eng"},
+            {"IsExternal": False, "Codec": "subrip", "Language": "chi", "IsForced": True},
+        ]
+
+    def search_group(group, task_ids):
+        searches.append([entry["episode"] for entry in group])
+        return {entry["id"]: {"status": "written"} for entry in group}
+
+    override_services(
+        plugin, auto_transfer=service,
+        emby_refresh=types.SimpleNamespace(subtitle_tracks_for_entry=tracks),
+    )
+    monkeypatch.setattr(service, "auto_process_transfer_group", search_group)
+    service.enqueue_transfer_auto_entries(entries[:2])
+    batch, _ = service._queue.claim_next_batch()
+    service.process_transfer_auto_task_batch(batch)
+
+    assert searches == [[2]]
+    assert emby_checks == [1, 2]
+    waiting = next(task for task in plugin._auto_transfer_tasks.values() if task["episode"] == 1)
+    assert waiting["status"] == "pending"
+    assert waiting["next_run_ts"] == 130
+    assert service._queue.claim_next_batch() == ([], 1.0)
+
+    service.enqueue_transfer_auto_entries(entries[2:3])
+    batch, _ = service._queue.claim_next_batch()
+    assert [task["episode"] for task in batch] == [3]
+    service.process_transfer_auto_task_batch(batch)
+
+    clock.time = lambda: 130
+    batch, _ = service._queue.claim_next_batch()
+    service.process_transfer_auto_task_batch(batch)
+    assert searches == [[2]]
+    assert emby_checks == [1, 2, 3, 1]
+    assert waiting["status"] == "skipped"
+    assert "繁中" in waiting["message"]
+
+    plugin._auto_subtitle_language_priority = ["chi&eng"]
+    service.enqueue_transfer_auto_entries(entries[3:])
+    batch, _ = service._queue.claim_next_batch()
+    service.process_transfer_auto_task_batch(batch)
+    last_task = next(task for task in plugin._auto_transfer_tasks.values() if task["episode"] == 5)
+    assert last_task["status"] == "skipped"
+    assert "外挂字幕（中英双语）" in last_task["message"]
+
+    clock.time = lambda: 160
+    batch, _ = service._queue.claim_next_batch()
+    service.process_transfer_auto_task_batch(batch)
+    assert searches == [[2], [4]]
+    assert emby_checks == [1, 2, 3, 1, 4, 5, 4]
 
 
 def test_auto_transfer_queue_stop_service_marks_pending_queue_stopped(tmp_path):

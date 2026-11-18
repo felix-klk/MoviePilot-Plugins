@@ -1,5 +1,5 @@
 import { importShared } from './__federation_fn_import-JrT3xvdd.js';
-import Config, { d as defaultOnlineProviderIds, o as onlineResultLanguageFilterCategory, a as onlineLanguageItems, b as onlineProviderItems, c as onlineResultKey, i as isOnlineResultDownloadable, e as isForeignOnlineResult, p as providerName, f as providerPriority, g as onlineResultLanguagePriority, h as onlineResultIdentityPriority, _ as _export_sfc, j as onlineResultMeta, k as providerProgressText, l as providerProgressColor } from './__federation_expose_Config-Iv1BSCKe.js';
+import Config, { d as defaultOnlineProviderIds, o as onlineResultLanguageFilterCategory, a as onlineLanguageItems, b as onlineProviderItems, c as onlineResultKey, i as isOnlineResultDownloadable, e as isForeignOnlineResult, p as providerName, f as providerPriority, g as onlineResultLanguagePriority, h as onlineResultIdentityPriority, _ as _export_sfc, j as onlineResultMeta, k as providerProgressText, l as providerProgressColor } from './__federation_expose_Config-BxroszVP.js';
 
 function unwrapResponse(response) {
   if (response && Object.prototype.hasOwnProperty.call(response, 'data') && response.success !== undefined) {

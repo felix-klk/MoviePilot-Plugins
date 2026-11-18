@@ -234,16 +234,20 @@ class SubtitleInventory:
         return result
 
     def embedded_subtitle_tracks_for_target(self, target_entry: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return self.probe_embedded_subtitle_tracks(target_entry) or []
+
+    def probe_embedded_subtitle_tracks(self, target_entry: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+        """Return None when the file could not be inspected."""
         storage = self._normalize_text(target_entry.get("storage")) or "local"
         path_text = self._normalize_text(target_entry.get("path"))
         if storage != "local" or not path_text or self._is_stream_path(path_text):
-            return []
+            return None
         if self._trust_transfer_history_paths:
-            return []
+            return None
 
         video_path = Path(path_text)
         if not video_path.is_file():
-            return []
+            return None
 
         cache_key = self.embedded_subtitle_probe_cache_key(video_path)
         if cache_key:
@@ -276,13 +280,16 @@ class SubtitleInventory:
             payload = json.loads(completed.stdout or "{}")
         except FileNotFoundError:
             self._logger_warning("[SubtitleManualUpload] ffprobe 不可用，无法检查内嵌字幕 video=%s", video_path.name)
-            return []
+            return None
         except self._subprocess.TimeoutExpired:
             self._logger_warning("[SubtitleManualUpload] 检查内嵌字幕超时 video=%s", video_path.name)
-            return []
+            return None
         except Exception as exc:
             self._logger_warning("[SubtitleManualUpload] 检查内嵌字幕失败 video=%s error=%s", video_path.name, exc)
-            return []
+            return None
+
+        if not isinstance(payload, dict) or not isinstance(payload.get("streams"), list):
+            return None
 
         tracks: List[Dict[str, Any]] = []
         for stream in payload.get("streams") or []:

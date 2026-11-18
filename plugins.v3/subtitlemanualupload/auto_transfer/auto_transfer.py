@@ -14,6 +14,9 @@ from ..matching.subtitle_language import (
     auto_subtitle_sort_key,
     auto_target_has_chinese_subtitle as language_auto_target_has_chinese_subtitle,
     is_chinese_language_suffix,
+    language_profile_from_text,
+    required_auto_languages,
+    target_satisfies_auto_subtitle_policy,
 )
 
 
@@ -494,10 +497,110 @@ class AutoTransferService:
         return self._season_cache.process_group(entries, task_ids=task_ids)
 
 
+    def _check_emby_subtitles_for_task(self, task: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        owner = self._owner
+        entry = task["entry"]
+        target = self._target_from_entry(entry)
+        if not target.get("is_stream") and owner._auto_transfer_subtitle_strategy == "ai_source_only":
+            return None
+
+        required = required_auto_languages(
+            owner._auto_subtitle_language_priority,
+            strict=owner._auto_subtitle_language_strict,
+        )
+        local_skip = {"status": "skipped", "reason": "目标已有符合语言要求的字幕"}
+        if target_satisfies_auto_subtitle_policy(target, required):
+            return local_skip
+        inventory = owner.services.subtitle_inventory()
+        local_tracks = inventory.probe_embedded_subtitle_tracks(entry)
+        if local_tracks is not None:
+            target["embedded_subtitles"] = local_tracks
+            return local_skip if target_satisfies_auto_subtitle_policy(target, required) else None
+
+        if owner._auto_skip_chinese_media_on_transfer:
+            is_chinese, evidence = self._chinese_transfer_media_evidence(entry)
+            if is_chinese:
+                return {"status": "skipped", "reason": f"中文资源自动跳过：{evidence}"}
+
+        status, tracks = owner.services.emby_refresh().subtitle_tracks_for_entry(
+            entry, owner._emby_subtitle_path_mappings,
+        )
+        if status == "pending" and not task.get("emby_rechecked"):
+            return {"status": "pending", "reason": "等待 Emby 扫描字幕轨道，30 秒后重查"}
+        if status != "ready":
+            self._logger.info(
+                "[SubtitleManualUpload] Emby 检查未确认，继续自动匹配 target=%s status=%s",
+                target.get("label"),
+                status,
+            )
+            return None
+
+        for track in tracks:
+            external = track.get("IsExternal")
+            if not isinstance(external, bool) or track.get("IsTextSubtitleStream") is False:
+                continue
+            title = str(track.get("Title") or "")
+            if not inventory.embedded_subtitle_track_is_usable(
+                track.get("Codec"),
+                title,
+                {"forced": track.get("IsForced"), "comment": track.get("IsHearingImpaired")},
+            ):
+                continue
+            language = str(track.get("Language") or "").strip()
+            display_language = track.get("DisplayLanguage") or ""
+            if language.lower() in {"", "und", "chi", "zho", "zh", "chinese"}:
+                title_suffix = inventory.embedded_subtitle_language_suffix("", title)
+                if title_suffix in {"chi", "cht"} or "&" in title_suffix:
+                    language = title_suffix
+                elif display_language:
+                    language = display_language
+            suffix = inventory.embedded_subtitle_language_suffix(language, title)
+            if external:
+                file_name = str(track.get("Path") or "").replace("\\", "/").rsplit("/", 1)[-1]
+                video_stem = str(entry.get("basename") or "")
+                if video_stem and file_name.startswith(video_stem + "."):
+                    tags = file_name[len(video_stem) + 1:].lower().split(".")[:-1]
+                    if set(tags) & {"forced", "foreign", "sdh", "hi"}:
+                        continue
+                    for tag in reversed(tags):
+                        tagged_language = inventory.embedded_subtitle_language_suffix("", tag)
+                        if "&" in tagged_language or (suffix == "und" and tagged_language != "und"):
+                            suffix = tagged_language
+
+            subtitle = {"language_suffix": suffix}
+            if suffix != "und" and target_satisfies_auto_subtitle_policy({"subtitles": [subtitle]}, required):
+                kind = "外挂" if external else "内嵌"
+                label = language_profile_from_text(suffix)["label"]
+                return {"status": "skipped", "reason": f"Emby 已检测到符合要求的{kind}字幕（{label}）"}
+        return None
+
     def process_transfer_auto_task_batch(self, tasks: List[Dict[str, Any]]) -> None:
         owner = self._owner
-        entries = [task.get("entry") for task in tasks if isinstance(task.get("entry"), dict)]
-        task_ids = [task["id"] for task in tasks if task.get("id")]
+        pending = tasks
+        if getattr(owner, "_auto_check_emby_subtitles", False):
+            pending = []
+            for task in tasks:
+                result = self._check_emby_subtitles_for_task(task) if isinstance(task.get("entry"), dict) else None
+                if not result:
+                    pending.append(task)
+                elif result["status"] == "pending":
+                    owner._update_auto_transfer_task(
+                        task["id"],
+                        status="pending",
+                        message=result["reason"],
+                        next_run_ts=self._time.time() + 30,
+                        emby_rechecked=True,
+                    )
+                else:
+                    owner._update_auto_transfer_task(
+                        task["id"], status="skipped", message=result["reason"], result=result,
+                    )
+                    self._logger.info(
+                        "[SubtitleManualUpload] %s target=%s", result["reason"], task.get("target_label"),
+                    )
+
+        entries = [task["entry"] for task in pending if isinstance(task.get("entry"), dict)]
+        task_ids = [task["id"] for task in pending if task.get("id")]
         is_tv_batch = (
             bool(entries)
             and all(owner._normalize_text(entry.get("media_type")) == "tv" for entry in entries)
@@ -514,7 +617,7 @@ class AutoTransferService:
                 )
                 for entry in entries
             }
-        for task in tasks:
+        for task in pending:
             entry = task.get("entry") or {}
             result = results.get(self._auto_task_result_key(entry)) or {
                 "status": "failed",

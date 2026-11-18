@@ -51,6 +51,7 @@ def public_auto_transfer_task(
     if public_task.get("status") == "pending" and queue_position:
         public_task["queue_position"] = queue_position
     public_task.pop("entry", None)
+    public_task.pop("emby_rechecked", None)
     public_task["created_at"] = timestamp_iso(public_task.pop("created_ts", 0))
     public_task["updated_at"] = timestamp_iso(public_task.pop("updated_ts", 0))
     public_task["next_run_at"] = timestamp_iso(public_task.pop("next_run_ts", 0))

@@ -44,6 +44,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "traditional_to_simplified": False,
     "emby_refresh_after_subtitle_write": False,
     "auto_search_on_transfer": False,
+    "auto_check_emby_subtitles": False,
+    "emby_subtitle_path_mappings": "",
     "auto_skip_chinese_media_on_transfer": True,
     "auto_transfer_subtitle_strategy": "online_then_ai_source",
     "trust_transfer_history_paths": False,
@@ -255,6 +257,8 @@ def normalize_plugin_config(
         "traditional_to_simplified": bool(raw_config.get("traditional_to_simplified", False)),
         "emby_refresh_after_subtitle_write": bool(raw_config.get("emby_refresh_after_subtitle_write", False)),
         "auto_search_on_transfer": bool(raw_config.get("auto_search_on_transfer", False)),
+        "auto_check_emby_subtitles": bool(raw_config.get("auto_check_emby_subtitles", False)),
+        "emby_subtitle_path_mappings": normalize_text(raw_config.get("emby_subtitle_path_mappings")),
         "auto_skip_chinese_media_on_transfer": bool(raw_config.get("auto_skip_chinese_media_on_transfer", True)),
         "auto_transfer_subtitle_strategy": normalize_auto_transfer_subtitle_strategy(
             raw_config.get("auto_transfer_subtitle_strategy")
@@ -388,6 +392,27 @@ def build_config_form(
                     ),
                 ),
                 _row(
+                    _col(
+                        "VSwitch",
+                        {
+                            "model": "auto_check_emby_subtitles",
+                            "label": "自动下载前检查 Emby 字幕",
+                            "hint": "本地无法读取内嵌字幕时，查询 MoviePilot 已配置的 Emby。",
+                            "persistentHint": True,
+                        },
+                        md=6,
+                    ),
+                    _col(
+                        "VTextarea",
+                        {
+                            "model": "emby_subtitle_path_mappings",
+                            "label": "Emby 路径映射",
+                            "hint": "路径相同可留空。每行填一组，例如 /media => /mnt/media。",
+                            "persistentHint": True,
+                            "rows": 2,
+                        },
+                        md=6,
+                    ),
                     _col(
                         "VSwitch",
                         {"model": "auto_skip_chinese_media_on_transfer", "label": "入库自动处理跳过中文资源"},

@@ -25,6 +25,8 @@ const localConfig = ref({
   traditional_to_simplified: false,
   emby_refresh_after_subtitle_write: false,
   auto_search_on_transfer: false,
+  auto_check_emby_subtitles: false,
+  emby_subtitle_path_mappings: "",
   auto_skip_chinese_media_on_transfer: true,
   auto_transfer_subtitle_strategy: 'online_then_ai_source',
   trust_transfer_history_paths: false,
@@ -240,6 +242,8 @@ function normalizeConfig(input) {
     traditional_to_simplified: Boolean(input?.traditional_to_simplified),
     emby_refresh_after_subtitle_write: Boolean(input?.emby_refresh_after_subtitle_write),
     auto_search_on_transfer: Boolean(input?.auto_search_on_transfer),
+    auto_check_emby_subtitles: Boolean(input?.auto_check_emby_subtitles),
+    emby_subtitle_path_mappings: typeof input?.emby_subtitle_path_mappings === "string" ? input.emby_subtitle_path_mappings : "",
     auto_skip_chinese_media_on_transfer: input?.auto_skip_chinese_media_on_transfer !== false,
     auto_transfer_subtitle_strategy: autoStrategy,
     trust_transfer_history_paths: Boolean(input?.trust_transfer_history_paths),
@@ -374,6 +378,26 @@ onMounted(() => {
               label="入库后自动搜索匹配字幕"
               color="info"
               hide-details
+            />
+            <VSwitch
+              v-model="localConfig.auto_check_emby_subtitles"
+              label="自动下载前检查 Emby 字幕"
+              color="info"
+              hint="本地无法读取内嵌字幕时，查询 MoviePilot 已配置的 Emby。"
+              persistent-hint
+            />
+            <VTextarea
+              v-if="localConfig.auto_check_emby_subtitles"
+              v-model="localConfig.emby_subtitle_path_mappings"
+              label="Emby 路径映射"
+              placeholder="/media => /mnt/media"
+              hint="路径相同可留空。每行一组，左边填 MoviePilot 路径，右边填 Emby 路径。"
+              persistent-hint
+              rows="2"
+              auto-grow
+              variant="outlined"
+              density="comfortable"
+              class="config-grid-wide"
             />
             <VSwitch
               v-model="localConfig.auto_skip_chinese_media_on_transfer"

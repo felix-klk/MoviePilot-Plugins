@@ -6,7 +6,11 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-from .subtitle_language import is_chinese_language_suffix, language_suffix_from_filename
+from .subtitle_language import (
+    is_chinese_language_suffix,
+    language_suffix_from_filename,
+    subtitle_filename_has_forced_tag,
+)
 from .subtitle_formats import is_bitmap_subtitle, is_text_subtitle
 from .subtitle_encoding import normalize_subtitle_encoding
 
@@ -354,7 +358,9 @@ class SubtitleWriter:
                 row["same_names"].append(exact.name)
                 row["state"].append(("overwrite", str(exact), stat.st_ino, stat.st_mtime_ns, stat.st_size))
 
-            prefix = f"{operation['video_path'].stem}."
+            video_stem = operation["video_path"].stem
+            prefix = f"{video_stem}."
+            writing_full_subtitle = choices is None and not subtitle_filename_has_forced_tag(destination.name, video_stem)
             ext = destination.suffix.lower()
             languages = sorted(operation.get("language_suffix", "und").split("&"))
             if languages == ["und"]:
@@ -366,6 +372,8 @@ class SubtitleWriter:
                     or not existing.name.casefold().startswith(prefix.casefold())
                     or not existing.is_file()
                 ):
+                    continue
+                if writing_full_subtitle and subtitle_filename_has_forced_tag(existing.name, video_stem):
                     continue
                 language = language_suffix_from_filename(existing.name[len(prefix):], {ext})["suffix"]
                 if sorted(language.split("&")) == languages:

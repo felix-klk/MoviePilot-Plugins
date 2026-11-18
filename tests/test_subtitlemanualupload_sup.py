@@ -543,6 +543,94 @@ def emby_refresh_test_runtime(monkeypatch, generation, *, http_module_name="app.
     return server, helper, request_utils
 
 
+@pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)
+def test_automatic_full_subtitle_write_preserves_forced_sidecar(sup_modules, tmp_path):
+    video = tmp_path / "Show.Forced.S01E01.mkv"
+    video.touch()
+    forced = video.with_suffix(".zh-CN.forced.srt")
+    forced.write_text("1\n00:00:01,000 --> 00:00:02,000\n招牌\n", encoding="utf-8")
+    source = tmp_path / "uploaded.srt"
+    source.write_text("1\n00:00:01,000 --> 00:00:02,000\n完整的中文字幕\n", encoding="utf-8")
+    target = {"id": "episode-1", "path": str(video), "basename": video.stem, "storage": "local"}
+    writer, owner, _ = make_bitmap_writer(sup_modules, tmp_path)
+    owner._traditional_to_simplified = False
+    operations = writer.build_write_operations(
+        [{"upload_id": "uploaded", "target_id": target["id"], "ext": ".srt", "language_suffix": "chi"}],
+        {"uploaded": {"upload_id": "uploaded", "stored_path": str(source), "source_name": source.name, "ext": ".srt"}},
+        {target["id"]: target},
+    )
+
+    written, _, _ = writer.write_operations_to_disk(session_dir=tmp_path / "session", operations=operations)
+
+    assert Path(written[0]["output_path"]) == video.with_suffix(".zh-CN.srt")
+    assert "完整的中文字幕" in Path(written[0]["output_path"]).read_text(encoding="utf-8-sig")
+    assert "招牌" in forced.read_text(encoding="utf-8")
+    target["subtitles"] = [{"name": Path(written[0]["output_path"]).name, "language_suffix": "chi"}]
+    assert sup_modules.language.target_satisfies_auto_subtitle_policy(target, ["chi"])
+    with pytest.raises(StubHttpException) as error:
+        writer.write_operations_to_disk(session_dir=tmp_path / "session", operations=operations)
+    assert error.value.status_code == 409
+
+
+@pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)
+def test_emby_subtitle_lookup_uses_the_mapped_version(sup_modules, monkeypatch):
+    instance, helper, client = emby_refresh_test_runtime(monkeypatch, sup_modules.generation)
+    helper.get_services.return_value["nas-emby"].type = "emby"
+    instance.user = "moviepilot"
+    service = sup_modules.load("integrations.emby_refresh").EmbyRefreshService(Mock())
+    english = {"Type": "Subtitle", "IsExternal": False, "Language": "eng"}
+    chinese = {"Type": "Subtitle", "IsExternal": False, "Language": "zh-CN"}
+    path_1080p = "/library/Show/Show.S01E01.1080p.strm"
+    path_2160p = "/library/Show/Show.S01E01.2160p.strm"
+    client.get_res.return_value.json.return_value = {
+        "Items": [{
+            "Id": "123",
+            "Path": path_1080p,
+            "MediaSources": [
+                {"Path": path_1080p, "MediaStreams": [english]},
+                {"Path": path_2160p, "MediaStreams": [chinese]},
+            ],
+        }]
+    }
+
+    for suffix, expected, path in (("1080p", english, path_1080p), ("2160p", chinese, path_2160p)):
+        entry = {"path": f"/mp/tv/Show/Show.S01E01.{suffix}.strm", "media_type": "tv"}
+        assert service.subtitle_tracks_for_entry(entry, "/mp => /wrong\n/mp/tv => /library") == ("ready", [expected])
+        assert client.get_res.call_args.kwargs["params"]["Path"] == path
+    assert client.get_res.call_args.kwargs["headers"] == {"X-Emby-Token": "test-api-key"}
+    assert client.get_res.call_args.kwargs["allow_redirects"] is False
+    client.post_res.assert_not_called()
+
+
+@pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)
+def test_emby_subtitle_lookup_reads_single_strm_source_after_indexing(sup_modules, monkeypatch):
+    instance, helper, client = emby_refresh_test_runtime(monkeypatch, sup_modules.generation)
+    helper.get_services.return_value["nas-emby"].type = "emby"
+    instance.user = None
+    service = sup_modules.load("integrations.emby_refresh").EmbyRefreshService(Mock())
+    path = "/library/S01E01.strm"
+    entry = {"path": path, "media_type": "tv"}
+    item_response = Mock(status_code=200)
+    item_response.json.return_value = {"Items": [{"Id": "123", "Path": path}]}
+    playback = Mock(status_code=200)
+    playback.json.return_value = {
+        "MediaSources": [{"Path": "https://example.invalid/show.mkv", "MediaStreams": []}]
+    }
+
+    client.get_res.side_effect = [item_response, playback]
+    assert service.subtitle_tracks_for_entry(entry) == ("pending", [])
+    assert client.get_res.call_args.args[0] == "http://emby.local:8096/emby/Items/123/PlaybackInfo"
+
+    playback.json.return_value["MediaSources"][0]["MediaStreams"] = [
+        {"Type": "Video"},
+        {"Type": "Subtitle", "Title": "chi&eng", "IsExternal": True},
+    ]
+    client.get_res.side_effect = [item_response, playback]
+    assert service.subtitle_tracks_for_entry(entry) == (
+        "ready", [{"Type": "Subtitle", "Title": "chi&eng", "IsExternal": True}],
+    )
+
+
 @pytest.mark.parametrize("http_module_name", ("app.adapters.network.http", "app.utils.http"))
 def test_emby_refresh_starts_only_external_subtitle_scan_task(sup_modules, monkeypatch, http_module_name):
     server, helper, request_utils = emby_refresh_test_runtime(

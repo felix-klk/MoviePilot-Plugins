@@ -150,6 +150,9 @@ class AutoTransferQueue:
             if not task:
                 return
             task.update(updates)
+            if task.get("status") == "pending" and owner._auto_transfer_stopping:
+                task["status"] = "skipped"
+                task["message"] = "服务已停止，未继续处理新任务"
             task["updated_ts"] = self._time.time()
             if task.get("status") not in AUTO_TRANSFER_ACTIVE_STATUSES:
                 task["active"] = False
@@ -175,6 +178,7 @@ class AutoTransferQueue:
             else:
                 entry.pop("_force_timeline_write", None)
             now = self._time.time()
+            task.pop("emby_rechecked", None)
             task.update(
                 {
                     "entry": entry,
@@ -219,9 +223,17 @@ class AutoTransferQueue:
             if not pending:
                 owner._auto_transfer_worker = None
                 return [], -1
-            first = pending[0]
+            now = self._time.time()
+            ready = [
+                task for task in pending
+                if not task.get("emby_rechecked") or float(task.get("next_run_ts") or 0) <= now
+            ]
+            if not ready:
+                next_run = min(float(task["next_run_ts"]) for task in pending)
+                return [], min(next_run - now, 1.0)
+            first = ready[0]
             group_key = owner._normalize_text(first.get("group_key"))
-            group = [task for task in pending if owner._normalize_text(task.get("group_key")) == group_key]
+            group = [task for task in ready if owner._normalize_text(task.get("group_key")) == group_key]
             is_tv_group = owner._normalize_text(first.get("media_type")) == "tv"
             if is_tv_group:
                 newest = max(float(task.get("created_ts") or 0) for task in group)
