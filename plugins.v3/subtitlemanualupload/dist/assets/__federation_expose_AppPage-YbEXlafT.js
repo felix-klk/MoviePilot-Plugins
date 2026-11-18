@@ -169,7 +169,7 @@ const languageAliases = new Map(Object.entries({
 }));
 
 const embyFilenameTags = new Map(Object.entries({
-  chi: 'zh-CN', cht: 'zh-TW', 'chi&eng': '中英双语', 'cht&eng': '繁英双语',
+  chi: 'zh-CN', cht: 'zh-TW', 'chi&eng': '中英双语.zh-CN', 'cht&eng': '繁英双语.zh-TW',
 }));
 
 function buildOutputName(target, item) {
@@ -2841,7 +2841,24 @@ function useUploadPreview({
           default_subtitle: item.default_subtitle === true,
         })),
       };
-      const response = await pluginApi.value.applyUpload(payload);
+      let response;
+      try {
+        response = await pluginApi.value.applyUpload(payload);
+      } catch (err) {
+        const conflict = err?.response?.data?.detail ?? err?.data?.detail ?? err?.detail;
+        if (conflict?.code !== 'subtitle_write_conflict' || !conflict.confirmation) throw err
+
+        const sections = [];
+        if (conflict.overwrite?.length) {
+          sections.push('将覆盖以下同名字幕：\n' + conflict.overwrite.join('\n'));
+        }
+        if (conflict.keep?.length) {
+          sections.push('以下旧字幕会保留，新字幕将另存：\n' +
+            conflict.keep.map(item => `${item.existing} → ${item.destination}`).join('\n'));
+        }
+        if (!window.confirm(sections.join('\n\n') + '\n\n继续写入？取消后可返回预览调整选择。')) return
+        response = await pluginApi.value.applyUpload({ ...payload, conflict_confirmation: conflict.confirmation });
+      }
       const data = unwrapResponse(response) || {};
       const written = data.written || [];
       const successMessage = response?.message || `已写入 ${data.count || 0} 个字幕文件`;

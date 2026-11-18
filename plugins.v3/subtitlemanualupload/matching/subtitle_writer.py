@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import shutil
 from pathlib import Path
+from threading import Lock
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from .subtitle_language import is_chinese_language_suffix, language_suffix_from_filename
@@ -15,11 +17,13 @@ BuildDestinationName = Callable[[Dict[str, Any], Dict[str, Any]], str]
 SessionLoader = Callable[[str], Tuple[Path, Dict[str, Any]]]
 TimelineCacheDir = Callable[[], Path]
 
+_WRITE_LOCK = Lock()
+
 EMBY_FILENAME_TAGS = {
     "chi": "zh-CN",
     "cht": "zh-TW",
-    "chi&eng": "中英双语",
-    "cht&eng": "繁英双语",
+    "chi&eng": "中英双语.zh-CN",
+    "cht&eng": "繁英双语.zh-TW",
 }
 
 
@@ -96,7 +100,6 @@ def build_write_operations(
     http_exception: Any,
 ) -> List[Dict[str, Any]]:
     destination_keys = set()
-    directory_entries: Dict[Path, List[Path]] = {}
     operations: List[Dict[str, Any]] = []
 
     items = expand_vobsub_items(
@@ -139,33 +142,12 @@ def build_write_operations(
                 "default_subtitle": item.get("default_subtitle") is True,
             },
         )
-        unique_key = f"{target_id}|{destination_name}"
-        if unique_key in destination_keys:
-            raise http_exception(status_code=400, detail=f"重复映射到同一个目标字幕名: {destination_name}")
-        destination_keys.add(unique_key)
-
+        if any(separator in destination_name for separator in ("/", "\\", "\0")):
+            raise http_exception(status_code=400, detail="目标字幕文件名无效")
         destination_path = video_path.parent / destination_name
-        if item_suffix != "und":
-            if video_path.parent not in directory_entries:
-                directory_entries[video_path.parent] = list(video_path.parent.iterdir())
-            prefix = f"{video_path.stem}."
-            ext = destination_path.suffix.lower()
-            languages = sorted(item_suffix.split("&"))
-            for existing in directory_entries[video_path.parent]:
-                if (
-                    existing == destination_path
-                    or existing.suffix.lower() != ext
-                    or not existing.name.casefold().startswith(prefix.casefold())
-                    or not existing.is_file()
-                ):
-                    continue
-                existing_suffix = language_suffix_from_filename(existing.name[len(prefix):], {ext})["suffix"]
-                if sorted(existing_suffix.split("&")) == languages:
-                    raise http_exception(
-                        status_code=409,
-                        detail=f"已有同语言、同格式字幕：{existing.name}。为避免重复，未写入 {destination_name}。可保留旧字幕，或先手动归档再写入。",
-                    )
-
+        if destination_path in destination_keys:
+            raise http_exception(status_code=400, detail=f"重复映射到同一个目标字幕名: {destination_name}")
+        destination_keys.add(destination_path)
         operations.append(
             {
                 "upload_info": upload_info,
@@ -330,6 +312,60 @@ class SubtitleWriter:
         except Exception as exc:
             self._logger.warning("[SubtitleManualUpload] 通知 Emby 扫描外挂字幕失败，不影响字幕写入: %s", exc)
 
+    def _confirm_write_conflicts(self, operations: List[Dict[str, Any]], confirmation: Optional[str]) -> None:
+        directories: Dict[Path, List[Path]] = {}
+        overwrite: List[str] = []
+        keep: List[Dict[str, str]] = []
+        state = []
+        for operation in operations:
+            destination = operation["destination_path"]
+            if str(operation["source_path"]) == str(destination):
+                continue
+            if destination.parent not in directories:
+                directories[destination.parent] = sorted(destination.parent.iterdir())
+            existing_names = directories[destination.parent]
+            exact = next((path for path in existing_names if path.name == destination.name), None)
+            if destination.is_symlink() or (destination.exists() and (exact is None or not exact.is_file())):
+                raise self._http_exception(status_code=409, detail=f"目标路径被不同名文件或不可写条目占用：{destination.name}")
+            if exact is not None and exact.is_file():
+                stat = exact.stat()
+                overwrite.append(exact.name)
+                state.append(("overwrite", str(exact), str(operation["source_path"]), stat.st_ino, stat.st_mtime_ns, stat.st_size))
+
+            prefix = f"{operation['video_path'].stem}."
+            ext = destination.suffix.lower()
+            languages = sorted(operation.get("language_suffix", "und").split("&"))
+            if languages == ["und"]:
+                continue
+            for existing in existing_names:
+                if (
+                    existing.name == destination.name
+                    or existing.suffix.lower() != ext
+                    or not existing.name.casefold().startswith(prefix.casefold())
+                    or not existing.is_file()
+                ):
+                    continue
+                language = language_suffix_from_filename(existing.name[len(prefix):], {ext})["suffix"]
+                if sorted(language.split("&")) == languages:
+                    keep.append({"existing": existing.name, "destination": destination.name})
+                    state.append(("keep", str(existing), str(destination), str(operation["source_path"])))
+
+        if not state:
+            return
+        token = hashlib.sha256(repr(sorted(state)).encode("utf-8")).hexdigest()
+        if confirmation == token:
+            return
+        if confirmation is None:
+            existing_name = overwrite[0] if overwrite else keep[0]["existing"]
+            raise self._http_exception(status_code=409, detail=f"已有字幕 {existing_name}，自动写入已跳过，请在写入预览中确认。")
+        raise self._http_exception(status_code=409, detail={
+            "code": "subtitle_write_conflict",
+            "message": "发现已有字幕，请确认哪些文件会覆盖，以及哪些文件会保留。",
+            "overwrite": overwrite,
+            "keep": keep,
+            "confirmation": token,
+        })
+
     def write_operations_to_disk(
         self,
         *,
@@ -338,8 +374,10 @@ class SubtitleWriter:
         fix_timeline: bool = False,
         allow_risky_offset: bool = False,
         force_low_confidence: bool = False,
+        conflict_confirmation: Optional[str] = None,
     ) -> Tuple[List[Dict[str, Any]], int, int]:
         owner = self._owner
+        self._confirm_write_conflicts(operations, conflict_confirmation)
         fixed_dir = session_dir / "timeline_fixed"
         simplified_dir = session_dir / "simplified"
         encoded_dir = session_dir / "utf8"
@@ -447,29 +485,32 @@ class SubtitleWriter:
             self.maybe_convert_operation_to_simplified(operation, simplified_dir)
 
         written_results = []
-        for operation in operations:
-            destination_path = operation["destination_path"]
-            temp_path = destination_path.with_name(f"{destination_path.name}.mp-uploading")
-            if temp_path.exists():
-                temp_path.unlink()
+        # Another task may have written subtitles while these files were being processed.
+        with _WRITE_LOCK:
+            self._confirm_write_conflicts(operations, conflict_confirmation)
+            for operation in operations:
+                destination_path = operation["destination_path"]
+                temp_path = destination_path.with_name(f"{destination_path.name}.mp-uploading")
+                if temp_path.exists():
+                    temp_path.unlink()
 
-            backup_path = backup_subtitle_if_needed(destination_path)
-            shutil.copyfile(operation["write_source_path"], temp_path)
-            temp_path.replace(destination_path)
-            timeline_result = operation.get("timeline_result")
-            written_results.append(
-                {
-                    "source_name": operation["upload_info"].get("source_name"),
-                    "archive_name": operation["upload_info"].get("archive_name"),
-                    "target_label": owner._target_from_entry(operation["target_entry"]).get("label"),
-                    "output_name": operation["destination_name"],
-                    "output_path": str(destination_path),
-                    "backup_path": str(backup_path) if backup_path else "",
-                    "backup_available": bool(backup_path and backup_path.exists()),
-                    "timeline": timeline_result.to_dict() if timeline_result else {"enabled": False},
-                    "simplified": operation.get("simplified_result") or {"enabled": False, "converted": False},
-                }
-            )
+                backup_path = backup_subtitle_if_needed(destination_path)
+                shutil.copyfile(operation["write_source_path"], temp_path)
+                temp_path.replace(destination_path)
+                timeline_result = operation.get("timeline_result")
+                written_results.append(
+                    {
+                        "source_name": operation["upload_info"].get("source_name"),
+                        "archive_name": operation["upload_info"].get("archive_name"),
+                        "target_label": owner._target_from_entry(operation["target_entry"]).get("label"),
+                        "output_name": operation["destination_name"],
+                        "output_path": str(destination_path),
+                        "backup_path": str(backup_path) if backup_path else "",
+                        "backup_available": bool(backup_path and backup_path.exists()),
+                        "timeline": timeline_result.to_dict() if timeline_result else {"enabled": False},
+                        "simplified": operation.get("simplified_result") or {"enabled": False, "converted": False},
+                    }
+                )
 
         touched_targets: Dict[str, Dict[str, Any]] = {
             str(operation["video_path"]): operation["target_entry"]
@@ -506,6 +547,7 @@ class SubtitleWriter:
         locked_skipped: List[Dict[str, str]],
         fix_timeline: bool = False,
         allow_risky_offset: bool = False,
+        conflict_confirmation: str = "",
     ) -> Tuple[Dict[str, Any], str]:
         owner = self._owner
         session_dir, session_payload = self._session_loader(session_id)
@@ -536,6 +578,7 @@ class SubtitleWriter:
             operations=operations,
             fix_timeline=fix_timeline,
             allow_risky_offset=allow_risky_offset,
+            conflict_confirmation=conflict_confirmation,
         )
 
         shutil.rmtree(session_dir, ignore_errors=True)

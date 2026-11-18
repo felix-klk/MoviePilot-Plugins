@@ -149,7 +149,7 @@ def test_selected_bilingual_zip_writes_only_required_pair(workflow, tmp_path, mo
     serve_zip(workflow, subtitle_zip(languages=("chi.jp", "chi", "chi.eng")), ("Show 中日双语", "Show 双语"))
     result = workflow.processor.process_entry(entry)
     assert result["status"] == "written", result
-    tag = "中英双语" if workflow.modules.generation == "plugins.v3" else "chi&eng"
+    tag = "中英双语.zh-CN" if workflow.modules.generation == "plugins.v3" else "chi&eng"
     filename = f"Show.S01E01.{tag}.srt"
     assert [path.name for path in tmp_path.glob("*.srt")] == [filename]
     assert "Hello there." in (tmp_path / filename).read_text(encoding="utf-8")
@@ -201,7 +201,7 @@ def test_season_cache_rechecks_language_after_restart_and_preference_change(work
     workflow.owner._auto_subtitle_language_priority = ["chi&eng"]
     cached = workflow.season.write_from_cache(entries)
     assert cached["from_cache"] is True
-    tag = "中英双语" if workflow.modules.generation == "plugins.v3" else "chi&eng"
+    tag = "中英双语.zh-CN" if workflow.modules.generation == "plugins.v3" else "chi&eng"
     assert len(list(tmp_path.glob(f"*.{tag}.srt"))) == 2
     workflow.owner._auto_subtitle_language_priority = ["chi&kr"]
     unmatched = workflow.season.write_from_cache(entries)
@@ -230,8 +230,8 @@ def test_language_config_round_trip_and_empty_validation(sup_modules):
 @pytest.mark.parametrize(("language", "default", "tag", "detected"), [
     ("chs", False, "zh-CN", "chi"),
     ("cht", False, "zh-TW", "cht"),
-    ("eng&chi", False, "中英双语", "chi&eng"),
-    ("eng&cht", False, "繁英双语", "cht&eng"),
+    ("eng&chi", True, "中英双语.zh-CN.default", "chi&eng"),
+    ("eng&cht", False, "繁英双语.zh-TW", "cht&eng"),
     ("chi", True, "zh-CN.default", "chi"),
 ])
 def test_emby_subtitle_write_preserves_original_format_and_existing_flags(sup_modules, tmp_path, language, default, tag, detected):
@@ -260,23 +260,56 @@ def test_emby_subtitle_write_preserves_original_format_and_existing_flags(sup_mo
 
 
 @pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)
-@pytest.mark.parametrize(("language", "legacy_tag"), [("chi", "chi.default"), ("chi&eng", "eng&chi")])
-def test_legacy_sidecar_stops_batch_before_any_write(sup_modules, tmp_path, language, legacy_tag):
-    writer, _, _ = make_bitmap_writer(sup_modules, tmp_path)
+@pytest.mark.parametrize(("language", "output_tag", "legacy_tag"), [
+    ("chi", "zh-CN", "chi.default"),
+    ("chi&eng", "中英双语.zh-CN", "中英双语.default"),
+    ("chi&eng", "中英双语.zh-CN", "eng&chi"),
+])
+def test_subtitle_conflicts_require_confirmation_and_keep_variants(sup_modules, tmp_path, language, output_tag, legacy_tag):
+    writer, owner, _ = make_bitmap_writer(sup_modules, tmp_path)
+    owner._traditional_to_simplified = False
     media_dir = tmp_path / "media"
     media_dir.mkdir()
     targets = {entry["id"]: entry for entry in (entry_for(media_dir, 1), entry_for(media_dir, 2))}
-    (media_dir / f"Show.S01E02.{legacy_tag}.srt").write_bytes(b"old subtitle")
-    source = tmp_path / "source.srt"
+    legacy = media_dir / f"Show.S01E02.{legacy_tag}.srt"
+    legacy.write_bytes(b"old variant")
+    exact = media_dir / f"Show.S01E01.{output_tag}.srt"
+    exact.write_bytes(b"same name")
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    source = session_dir / "source.srt"
     source.write_bytes(b"new subtitle")
     upload = {"upload_id": "one", "stored_path": str(source), "source_name": source.name, "ext": ".srt"}
     items = [{"upload_id": "one", "target_id": target_id, "language_suffix": language} for target_id in targets]
-    with pytest.raises(StubHttpException, match="已有同语言、同格式字幕") as conflict:
-        writer.build_write_operations(items, {"one": upload}, targets)
+    operations = writer.build_write_operations(items, {"one": upload}, targets)
+    with pytest.raises(StubHttpException, match="自动写入已跳过"):
+        writer.write_operations_to_disk(session_dir=session_dir, operations=operations)
+    writer._session_loader = lambda _: (session_dir, {"targets": list(targets.values()), "uploads": [upload]})
+    apply_args = {"session_id": "test-session", "items": items, "locked_skipped": []}
+    with pytest.raises(StubHttpException) as conflict:
+        writer.apply_upload_session(**apply_args)
     assert conflict.value.status_code == 409
-    assert {p.name: p.read_bytes() for p in media_dir.glob("*.srt")} == {
-        f"Show.S01E02.{legacy_tag}.srt": b"old subtitle"
-    }
+    detail = conflict.value.detail
+    assert detail["overwrite"] == [exact.name]
+    new = media_dir / f"Show.S01E02.{output_tag}.srt"
+    assert detail["keep"] == [{"existing": legacy.name, "destination": new.name}]
+    assert exact.read_bytes() == b"same name"
+    assert not new.exists()
+    assert source.exists()
+
+    exact.write_bytes(b"changed after the first confirmation")
+    with pytest.raises(StubHttpException) as stale:
+        writer.apply_upload_session(**apply_args, conflict_confirmation=detail["confirmation"])
+    confirmation = stale.value.detail["confirmation"]
+    assert confirmation != detail["confirmation"]
+    assert not new.exists()
+
+    response, _ = writer.apply_upload_session(**apply_args, conflict_confirmation=confirmation)
+    written = response["written"]
+    assert {item["output_name"] for item in written} == {exact.name, new.name}
+    assert exact.read_bytes() == new.read_bytes() == b"new subtitle"
+    assert Path(written[0]["backup_path"]).read_bytes() == b"changed after the first confirmation"
+    assert legacy.read_bytes() == b"old variant"
 
 
 def test_embedded_track_pair_title_is_exact_and_requires_explicit_pair_name(sup_modules):

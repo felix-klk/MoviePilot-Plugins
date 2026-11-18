@@ -166,7 +166,7 @@ const languageAliases = new Map(Object.entries({
 }))
 
 const embyFilenameTags = new Map(Object.entries({
-  chi: 'zh-CN', cht: 'zh-TW', 'chi&eng': '中英双语', 'cht&eng': '繁英双语',
+  chi: 'zh-CN', cht: 'zh-TW', 'chi&eng': '中英双语.zh-CN', 'cht&eng': '繁英双语.zh-TW',
 }))
 
 export function buildOutputName(target, item) {

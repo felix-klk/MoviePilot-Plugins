@@ -238,6 +238,7 @@ class UploadApi:
             locked_skipped=locked_skipped,
             fix_timeline=fix_timeline,
             allow_risky_offset=allow_risky_offset,
+            conflict_confirmation=owner._normalize_text(body.get("conflict_confirmation")),
         )
 
         return owner._ok(payload, message=message)

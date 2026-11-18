@@ -517,5 +517,7 @@ class SubtitleHistory:
                         }
                     )
                     continue
+                operation["destination_name"] = subtitle_path.name
+                operation["destination_path"] = subtitle_path
                 operations.append(operation)
         return operations, skipped, failed
