@@ -440,7 +440,8 @@ def test_sup_write_skips_text_processing_and_preserves_binary(sup_modules, tmp_p
         session_dir=tmp_path / "session", operations=operations, fix_timeline=True
     )
 
-    output = media_dir / f"{video.stem}.{language_suffix}.sup"
+    tag = {"chi": "zh-CN", "cht": "zh-TW"}.get(language_suffix, language_suffix) if sup_modules.generation == "plugins.v3" else language_suffix
+    output = media_dir / f"{video.stem}.{tag}.sup"
     assert output.read_bytes() == SUP_CONTENT
     assert source.read_bytes() == SUP_CONTENT
     assert written[0]["output_path"] == str(output)
@@ -739,8 +740,9 @@ def test_selecting_either_vobsub_file_writes_complete_pair(sup_modules, tmp_path
 
     assert len(operations) == len(written) == 2
     media_dir = Path(target["path"]).parent
-    assert (media_dir / f"{target['basename']}.chi.idx").read_bytes() == IDX_CONTENT
-    assert (media_dir / f"{target['basename']}.chi.sub").read_bytes() == VOBSUB_CONTENT
+    tag = "zh-CN" if sup_modules.generation == "plugins.v3" else "chi"
+    assert (media_dir / f"{target['basename']}.{tag}.idx").read_bytes() == IDX_CONTENT
+    assert (media_dir / f"{target['basename']}.{tag}.sub").read_bytes() == VOBSUB_CONTENT
     assert all(item["timeline"]["reason"] == "bitmap subtitle skipped" for item in written)
     assert all(item["simplified"]["converted"] is False for item in written)
     assert fixed_count == simplified_count == 0
@@ -763,7 +765,8 @@ def test_explicit_vobsub_pair_is_not_duplicated_and_normalizes_language(sup_modu
     )
 
     assert len(operations) == 2
-    assert {item["destination_name"] for item in operations} == {"episode-1.chi.idx", "episode-1.chi.sub"}
+    tag = "zh-CN" if sup_modules.generation == "plugins.v3" else "chi"
+    assert {item["destination_name"] for item in operations} == {f"episode-1.{tag}.idx", f"episode-1.{tag}.sub"}
 
 
 @pytest.mark.parametrize("selected_id", ("idx", "sub"))

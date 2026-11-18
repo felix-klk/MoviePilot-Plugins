@@ -10,7 +10,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from test_subtitlemanualupload_sup import make_bitmap_writer, make_upload_service, sup_modules  # noqa: F401
+from test_subtitlemanualupload_sup import StubHttpException, make_bitmap_writer, make_upload_service, sup_modules  # noqa: F401
 
 
 @pytest.fixture
@@ -149,8 +149,10 @@ def test_selected_bilingual_zip_writes_only_required_pair(workflow, tmp_path, mo
     serve_zip(workflow, subtitle_zip(languages=("chi.jp", "chi", "chi.eng")), ("Show 中日双语", "Show 双语"))
     result = workflow.processor.process_entry(entry)
     assert result["status"] == "written", result
-    assert [path.name for path in tmp_path.glob("*.srt")] == ["Show.S01E01.chi&eng.srt"]
-    assert "Hello there." in (tmp_path / "Show.S01E01.chi&eng.srt").read_text(encoding="utf-8")
+    tag = "中英双语" if workflow.modules.generation == "plugins.v3" else "chi&eng"
+    filename = f"Show.S01E01.{tag}.srt"
+    assert [path.name for path in tmp_path.glob("*.srt")] == [filename]
+    assert "Hello there." in (tmp_path / filename).read_text(encoding="utf-8")
     assert workflow.online.download.call_args.args[0][0]["title"] == "Show 双语"
     workflow.ai.assert_not_called()
 
@@ -199,7 +201,8 @@ def test_season_cache_rechecks_language_after_restart_and_preference_change(work
     workflow.owner._auto_subtitle_language_priority = ["chi&eng"]
     cached = workflow.season.write_from_cache(entries)
     assert cached["from_cache"] is True
-    assert len(list(tmp_path.glob("*.chi&eng.srt"))) == 2
+    tag = "中英双语" if workflow.modules.generation == "plugins.v3" else "chi&eng"
+    assert len(list(tmp_path.glob(f"*.{tag}.srt"))) == 2
     workflow.owner._auto_subtitle_language_priority = ["chi&kr"]
     unmatched = workflow.season.write_from_cache(entries)
     assert unmatched["status"] == "skipped"
@@ -221,6 +224,59 @@ def test_language_config_round_trip_and_empty_validation(sup_modules):
         assert reloaded["auto_subtitle_language_strict"] is True
     with pytest.raises(ValueError, match="至少选择一种语言"):
         schema.normalize_plugin_config({"auto_subtitle_language_priority": [], "auto_subtitle_language_strict": True})
+
+
+@pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)
+@pytest.mark.parametrize(("language", "default", "tag", "detected"), [
+    ("chs", False, "zh-CN", "chi"),
+    ("cht", False, "zh-TW", "cht"),
+    ("eng&chi", False, "中英双语", "chi&eng"),
+    ("eng&cht", False, "繁英双语", "cht&eng"),
+    ("chi", True, "zh-CN.default", "chi"),
+])
+def test_emby_subtitle_write_preserves_original_format_and_existing_flags(sup_modules, tmp_path, language, default, tag, detected):
+    writer, owner, _ = make_bitmap_writer(sup_modules, tmp_path)
+    del owner._remove_ext_marks
+    owner._traditional_to_simplified = False
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    entry = entry_for(media_dir)
+    source = tmp_path / "source.ass"
+    source.write_text("[Script Info]\nTitle: sample", encoding="utf-8")
+    old = {media_dir / f"Show.S01E01.eng.{flag}.ass": flag.encode() for flag in ("default", "forced")}
+    for path, content in old.items():
+        path.write_bytes(content)
+
+    upload = {"upload_id": "one", "stored_path": str(source), "source_name": source.name, "ext": ".ass"}
+    item = {"upload_id": "one", "target_id": entry["id"], "language_suffix": language, "default_subtitle": default}
+    operations = writer.build_write_operations([item], {"one": upload}, {entry["id"]: entry})
+    written, _, _ = writer.write_operations_to_disk(session_dir=tmp_path, operations=operations)
+
+    output = media_dir / f"Show.S01E01.{tag}.ass"
+    assert written[0]["output_name"] == output.name
+    assert output.read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
+    assert sup_modules.language.language_suffix_from_filename(output.name, {".ass"})["suffix"] == detected
+    assert {path: path.read_bytes() for path in old} == old
+
+
+@pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)
+@pytest.mark.parametrize(("language", "legacy_tag"), [("chi", "chi.default"), ("chi&eng", "eng&chi")])
+def test_legacy_sidecar_stops_batch_before_any_write(sup_modules, tmp_path, language, legacy_tag):
+    writer, _, _ = make_bitmap_writer(sup_modules, tmp_path)
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    targets = {entry["id"]: entry for entry in (entry_for(media_dir, 1), entry_for(media_dir, 2))}
+    (media_dir / f"Show.S01E02.{legacy_tag}.srt").write_bytes(b"old subtitle")
+    source = tmp_path / "source.srt"
+    source.write_bytes(b"new subtitle")
+    upload = {"upload_id": "one", "stored_path": str(source), "source_name": source.name, "ext": ".srt"}
+    items = [{"upload_id": "one", "target_id": target_id, "language_suffix": language} for target_id in targets]
+    with pytest.raises(StubHttpException, match="已有同语言、同格式字幕") as conflict:
+        writer.build_write_operations(items, {"one": upload}, targets)
+    assert conflict.value.status_code == 409
+    assert {p.name: p.read_bytes() for p in media_dir.glob("*.srt")} == {
+        f"Show.S01E02.{legacy_tag}.srt": b"old subtitle"
+    }
 
 
 def test_embedded_track_pair_title_is_exact_and_requires_explicit_pair_name(sup_modules):

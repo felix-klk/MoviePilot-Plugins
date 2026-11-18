@@ -424,23 +424,6 @@ class SubtitleInventory:
             return "und"
         return self._detect_language_profile(f"embedded.{codec}.srt", completed.stdout[:20000]).get("suffix", "und")
 
-    def remove_ext_marks(self, video_path: Path) -> None:
-        for sub_file in video_path.parent.iterdir():
-            if not sub_file.is_file():
-                continue
-            if sub_file.suffix.lower() not in self._subtitle_exts:
-                continue
-            if not sub_file.name.startswith(f"{video_path.stem}."):
-                continue
-            new_name = sub_file.name.replace(".default.", ".").replace(".forced.", ".")
-            if new_name == sub_file.name:
-                continue
-            target = sub_file.with_name(new_name)
-            if target.exists():
-                target.unlink()
-            sub_file.rename(target)
-        self.invalidate_directory(video_path.parent)
-
     def _is_stream_path(self, path: Any) -> bool:
         return is_stream_path(path, normalize_text=self._normalize_text, stream_exts=self._stream_exts)
 

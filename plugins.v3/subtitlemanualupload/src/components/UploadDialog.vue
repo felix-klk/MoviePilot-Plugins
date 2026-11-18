@@ -5,6 +5,7 @@ defineProps({
   modelValue: { type: Boolean, default: false },
   mobile: { type: Boolean, default: false },
   uploadTitle: { type: String, default: '' },
+  error: { type: String, default: '' },
   hasPreviewItems: { type: Boolean, default: false },
   allSelectedPreviewTargetsAreStream: { type: Boolean, default: false },
   hasSelectedPreviewStreamTargets: { type: Boolean, default: false },
@@ -44,6 +45,7 @@ const emit = defineEmits([
   'toggle-preview-item',
   'update-preview-target',
   'update-language-suffix',
+  'update-default-subtitle',
 ])
 
 const fileInputRef = ref(null)
@@ -134,6 +136,7 @@ function onPickFiles(event) {
       </VCardActions>
       <VDivider />
       <VCardText>
+        <VAlert v-if="error" type="error" variant="tonal" class="mb-3" role="alert" :text="error" />
         <div
           v-if="!hasPreviewItems"
           class="dropzone"
@@ -256,6 +259,14 @@ function onPickFiles(event) {
             <div class="output-name">
               <span>改名为</span>
               <strong>{{ item.output_name || buildOutputName(uploadTargets.find(target => target.id === item.target_id), item) || '待选择目标' }}</strong>
+              <VCheckbox
+                :model-value="item.default_subtitle === true"
+                label="设为默认字幕"
+                density="compact"
+                hide-details
+                :disabled="item.selected === false || applying"
+                @update:model-value="value => $emit('update-default-subtitle', item.upload_id, value)"
+              />
             </div>
           </div>
         </div>

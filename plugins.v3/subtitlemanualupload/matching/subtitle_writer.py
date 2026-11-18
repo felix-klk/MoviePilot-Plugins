@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-from .subtitle_language import is_chinese_language_suffix
+from .subtitle_language import is_chinese_language_suffix, language_suffix_from_filename
 from .subtitle_formats import is_bitmap_subtitle, is_text_subtitle
 from .subtitle_encoding import normalize_subtitle_encoding
 
@@ -14,6 +14,13 @@ NormalizeLanguageSuffix = Callable[[Any], str]
 BuildDestinationName = Callable[[Dict[str, Any], Dict[str, Any]], str]
 SessionLoader = Callable[[str], Tuple[Path, Dict[str, Any]]]
 TimelineCacheDir = Callable[[], Path]
+
+EMBY_FILENAME_TAGS = {
+    "chi": "zh-CN",
+    "cht": "zh-TW",
+    "chi&eng": "中英双语",
+    "cht&eng": "繁英双语",
+}
 
 
 def build_destination_name(
@@ -25,10 +32,12 @@ def build_destination_name(
 ) -> str:
     basename = normalize_text(target_entry.get("basename")) or "subtitle"
     language_suffix = normalize_language_suffix(subtitle_info.get("language_suffix"))
+    tag = EMBY_FILENAME_TAGS.get("&".join(sorted(language_suffix.split("&"))), language_suffix)
+    default = ".default" if subtitle_info.get("default_subtitle") is True else ""
     ext = normalize_text(subtitle_info.get("ext")) or ".srt"
     if not ext.startswith("."):
         ext = f".{ext}"
-    return f"{basename}.{language_suffix}{ext.lower()}"
+    return f"{basename}.{tag}{default}{ext.lower()}"
 
 
 def expand_vobsub_items(
@@ -67,9 +76,10 @@ def expand_vobsub_items(
             if any(
                 entry.get("target_id") != item.get("target_id")
                 or normalize_language_suffix(entry.get("language_suffix")) != normalize_language_suffix(item.get("language_suffix"))
+                or (entry.get("default_subtitle") is True) != (item.get("default_subtitle") is True)
                 for entry in selected
             ):
-                raise http_exception(status_code=400, detail="VobSub 的 IDX/SUB 必须匹配同一目标和语言")
+                raise http_exception(status_code=400, detail="VobSub 的 IDX/SUB 必须使用同一目标、语言和默认标记")
             continue
         expanded.append({**item, "upload_id": companion["upload_id"], "ext": extension})
     return expanded
@@ -86,6 +96,7 @@ def build_write_operations(
     http_exception: Any,
 ) -> List[Dict[str, Any]]:
     destination_keys = set()
+    directory_entries: Dict[Path, List[Path]] = {}
     operations: List[Dict[str, Any]] = []
 
     items = expand_vobsub_items(
@@ -125,12 +136,35 @@ def build_write_operations(
             {
                 "ext": item_ext,
                 "language_suffix": item_suffix,
+                "default_subtitle": item.get("default_subtitle") is True,
             },
         )
         unique_key = f"{target_id}|{destination_name}"
         if unique_key in destination_keys:
             raise http_exception(status_code=400, detail=f"重复映射到同一个目标字幕名: {destination_name}")
         destination_keys.add(unique_key)
+
+        destination_path = video_path.parent / destination_name
+        if item_suffix != "und":
+            if video_path.parent not in directory_entries:
+                directory_entries[video_path.parent] = list(video_path.parent.iterdir())
+            prefix = f"{video_path.stem}."
+            ext = destination_path.suffix.lower()
+            languages = sorted(item_suffix.split("&"))
+            for existing in directory_entries[video_path.parent]:
+                if (
+                    existing == destination_path
+                    or existing.suffix.lower() != ext
+                    or not existing.name.casefold().startswith(prefix.casefold())
+                    or not existing.is_file()
+                ):
+                    continue
+                existing_suffix = language_suffix_from_filename(existing.name[len(prefix):], {ext})["suffix"]
+                if sorted(existing_suffix.split("&")) == languages:
+                    raise http_exception(
+                        status_code=409,
+                        detail=f"已有同语言、同格式字幕：{existing.name}。为避免重复，未写入 {destination_name}。可保留旧字幕，或先手动归档再写入。",
+                    )
 
         operations.append(
             {
@@ -140,7 +174,7 @@ def build_write_operations(
                 "source_path": source_path,
                 "language_suffix": item_suffix,
                 "destination_name": destination_name,
-                "destination_path": video_path.parent / destination_name,
+                "destination_path": destination_path,
             }
         )
     return operations
@@ -442,7 +476,6 @@ class SubtitleWriter:
             for operation in operations
         }
         for video_path in (Path(path) for path in touched_targets):
-            owner._remove_ext_marks(video_path)
             inventory = owner.services.subtitle_inventory()
             if hasattr(inventory, "invalidate_directory"):
                 inventory.invalidate_directory(video_path.parent)

@@ -306,6 +306,7 @@ const {
   handleDragLeave,
   updatePreviewTarget,
   updateLanguageSuffix,
+  updateDefaultSubtitle,
   togglePreviewItem,
   applyBatchLanguageSuffix,
   resetUploadPreview,
@@ -1192,6 +1193,7 @@ defineExpose({
       v-model:fix-timeline="fixTimeline"
       v-model:batch-language-suffix="batchLanguageSuffix"
       :upload-title="uploadTitle"
+      :error="error"
       :has-preview-items="hasPreviewItems"
       :all-selected-preview-targets-are-stream="allSelectedPreviewTargetsAreStream"
       :has-selected-preview-stream-targets="hasSelectedPreviewStreamTargets"
@@ -1223,6 +1225,7 @@ defineExpose({
       @toggle-preview-item="togglePreviewItem"
       @update-preview-target="updatePreviewTarget"
       @update-language-suffix="updateLanguageSuffix"
+      @update-default-subtitle="updateDefaultSubtitle"
   />
 </template>
 

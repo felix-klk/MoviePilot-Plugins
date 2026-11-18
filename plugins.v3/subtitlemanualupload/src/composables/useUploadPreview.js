@@ -223,6 +223,14 @@ export function useUploadPreview({
     item.output_name = buildOutputName(target, item)
   }
 
+  function updateDefaultSubtitle(uploadId, value) {
+    const item = (preview.value?.items || []).find(previewItem => previewItem.upload_id === uploadId)
+    if (!item) return
+    item.default_subtitle = value === true
+    const target = uploadTargets.value.find(targetItem => targetItem.id === item.target_id)
+    item.output_name = buildOutputName(target, item)
+  }
+
   function togglePreviewItem(uploadId, checked) {
     const item = (preview.value?.items || []).find(previewItem => previewItem.upload_id === uploadId)
     if (!item) return
@@ -265,6 +273,7 @@ export function useUploadPreview({
           target_id: item.target_id,
           ext: item.ext,
           language_suffix: item.language_suffix,
+          default_subtitle: item.default_subtitle === true,
         })),
       }
       const response = await pluginApi.value.applyUpload(payload)
@@ -327,6 +336,7 @@ export function useUploadPreview({
     prepareUploadAfterFiles,
     updatePreviewTarget,
     updateLanguageSuffix,
+    updateDefaultSubtitle,
     togglePreviewItem,
     applyBatchLanguageSuffix,
     resetUploadPreview,

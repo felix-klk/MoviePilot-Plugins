@@ -20,6 +20,8 @@ LANGUAGE_SUFFIX_ALIASES = {
     "zh_hant": "cht",
     "zh-tw": "cht",
     "zh_tw": "cht",
+    "中英双语": "chi&eng",
+    "繁英双语": "cht&eng",
     "chs": "chi",
     "cht": "cht",
     "tw": "cht",
@@ -108,6 +110,7 @@ def decode_preview_bytes(raw_bytes: bytes) -> str:
 
 def normalize_language_suffix(value: Any) -> str:
     suffix = normalize_text(value).strip().lower()
+    suffix = LANGUAGE_SUFFIX_ALIASES.get(suffix, suffix)
     if not suffix:
         return "und"
     if any(separator in suffix for separator in ("&", "+", "/", ",")):
@@ -119,7 +122,6 @@ def normalize_language_suffix(value: Any) -> str:
             if normalized and normalized not in parts:
                 parts.append(normalized)
         return "&".join(parts) or "und"
-    suffix = LANGUAGE_SUFFIX_ALIASES.get(suffix, suffix)
     return re.sub(r"[^a-z0-9-]", "", suffix) or "und"
 
 
@@ -131,8 +133,8 @@ def language_suffix_from_filename(file_name: str, subtitle_exts: Iterable[str]) 
 
     stem = name[: -len(ext)]
     tokens = [
-        re.sub(r"[^a-z0-9&+/,_-]", "", token.lower()).strip("_-")
-        for token in re.split(r"[\s.\[\](){}]+", stem)
+        re.sub(r"[^a-z0-9&+/,_-]", "", LANGUAGE_SUFFIX_ALIASES.get(token, token)).strip("_-")
+        for token in re.split(r"[\s.\[\](){}]+", stem.lower())
     ]
     aliases = {
         **LANGUAGE_SUFFIX_ALIASES,

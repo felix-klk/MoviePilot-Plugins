@@ -3,7 +3,7 @@
     "name": "海拉鲁字幕大师(NEO自用版)",
     "description": "支持字幕搜索、上传、匹配、改名、智能调轴与自动入库的字幕管理插件。",
     "labels": "字幕,ChineseSubFinder,媒体库,整理",
-    "version": "1.2.24",
+    "version": "1.2.25",
     "icon": "https://raw.githubusercontent.com/ifsherlock/MoviePilot-Plugins/main/icons/hyrule-subtitle-master.png",
     "author": "ifsherlock",
     "author_url": "https://github.com/ifsherlock",
@@ -11,6 +11,7 @@
     "system_version": ">=3.0.0",
     "release": false,
     "history": {
+      "v1.2.25": "按 Emby 规则输出简中和繁中语言码，中英双语使用易读名称。手动写入可勾选默认字幕，保留已有默认和强制标记，遇到同集、同语言、同格式的旧命名文件时提示冲突。",
       "v1.2.24": "SubHD 完整下载优先独立直连会话，明确遇到验证后才从详情页重启 CF 会话；不混用 Cookie，增加详情页及确认页 HTTP 状态和访问方式。",
       "v1.2.23": "SubHD 搜索优先直连，遇到访问失败或验证时再调用 CF 服务；保留 CF 容器默认代理供其他应用使用，不改变下载验证会话。",
       "v1.2.22": "修复 SubHD 验证成功后 ZIP 下载仍报 500：跨域字幕文件优先直接下载，避免 CF 网页镜像对附件启动浏览器验证；直连失败保留转发兜底。",

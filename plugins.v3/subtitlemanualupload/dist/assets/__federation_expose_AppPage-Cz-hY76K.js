@@ -159,13 +159,36 @@ function errorMessage(err, fallback) {
   )
 }
 
+const languageAliases = new Map(Object.entries({
+  zh: 'chi', 'zh-hans': 'chi', zh_hans: 'chi', 'zh-cn': 'chi', zh_cn: 'chi',
+  'zh-hant': 'cht', zh_hant: 'cht', 'zh-tw': 'cht', zh_tw: 'cht',
+  chs: 'chi', tw: 'cht', hk: 'cht', zho: 'chi', cmn: 'chi', cn: 'chi',
+  中英双语: 'chi&eng', 繁英双语: 'cht&eng',
+  en: 'eng', ja: 'jpn', jp: 'jpn', ko: 'kor', kr: 'kor',
+  fr: 'fre', fra: 'fre', de: 'ger', deu: 'ger', es: 'spa', pt: 'por', it: 'ita', ru: 'rus',
+}));
+
+const embyFilenameTags = new Map(Object.entries({
+  chi: 'zh-CN', cht: 'zh-TW', 'chi&eng': '中英双语', 'cht&eng': '繁英双语',
+}));
+
 function buildOutputName(target, item) {
   if (!target) return ''
   const basename = target.basename || 'subtitle';
-  const suffix = item?.language_suffix || 'und';
+  const raw = String(item?.language_suffix || '').trim().toLowerCase();
+  const normalized = languageAliases.get(raw) || raw;
+  const isPair = /[&+/,]/.test(normalized);
+  const parts = normalized.split(/[&+/,]+/).map(part => {
+    const code = languageAliases.get(part.trim()) || part.trim();
+    const pairCode = isPair ? ({ jpn: 'jp', kor: 'kr' }[code] || code) : code;
+    return pairCode.replace(/[^a-z0-9-]/g, '')
+  }).filter(Boolean);
+  const languages = [...new Set(parts)];
+  const suffix = embyFilenameTags.get([...languages].sort().join('&')) || languages.join('&') || 'und';
+  const flag = item?.default_subtitle === true ? '.default' : '';
   let ext = item?.ext || '.srt';
   if (!ext.startsWith('.')) ext = `.${ext}`;
-  return `${basename}.${suffix}${ext.toLowerCase()}`
+  return `${basename}.${suffix}${flag}${ext.toLowerCase()}`
 }
 
 function resolvePluginBase(pluginBase) {
@@ -2765,6 +2788,14 @@ function useUploadPreview({
     item.output_name = buildOutputName(target, item);
   }
 
+  function updateDefaultSubtitle(uploadId, value) {
+    const item = (preview.value?.items || []).find(previewItem => previewItem.upload_id === uploadId);
+    if (!item) return
+    item.default_subtitle = value === true;
+    const target = uploadTargets.value.find(targetItem => targetItem.id === item.target_id);
+    item.output_name = buildOutputName(target, item);
+  }
+
   function togglePreviewItem(uploadId, checked) {
     const item = (preview.value?.items || []).find(previewItem => previewItem.upload_id === uploadId);
     if (!item) return
@@ -2807,6 +2838,7 @@ function useUploadPreview({
           target_id: item.target_id,
           ext: item.ext,
           language_suffix: item.language_suffix,
+          default_subtitle: item.default_subtitle === true,
         })),
       };
       const response = await pluginApi.value.applyUpload(payload);
@@ -2869,6 +2901,7 @@ function useUploadPreview({
     prepareUploadAfterFiles,
     updatePreviewTarget,
     updateLanguageSuffix,
+    updateDefaultSubtitle,
     togglePreviewItem,
     applyBatchLanguageSuffix,
     resetUploadPreview,
@@ -5416,15 +5449,15 @@ const {toDisplayString:_toDisplayString$3,createElementVNode:_createElementVNode
 
 
 const _hoisted_1$5 = {
-  key: 1,
+  key: 2,
   class: "support-row"
 };
 const _hoisted_2$5 = {
-  key: 2,
+  key: 3,
   class: "file-list"
 };
 const _hoisted_3$5 = {
-  key: 3,
+  key: 4,
   class: "preview-list"
 };
 const _hoisted_4$4 = { class: "preview-head" };
@@ -5442,6 +5475,7 @@ const _sfc_main$5 = {
   modelValue: { type: Boolean, default: false },
   mobile: { type: Boolean, default: false },
   uploadTitle: { type: String, default: '' },
+  error: { type: String, default: '' },
   hasPreviewItems: { type: Boolean, default: false },
   allSelectedPreviewTargetsAreStream: { type: Boolean, default: false },
   hasSelectedPreviewStreamTargets: { type: Boolean, default: false },
@@ -5480,6 +5514,7 @@ const _sfc_main$5 = {
   'toggle-preview-item',
   'update-preview-target',
   'update-language-suffix',
+  'update-default-subtitle',
 ],
   setup(__props, { emit: __emit }) {
 
@@ -5520,6 +5555,7 @@ return (_ctx, _cache) => {
   const _component_VSwitch = _resolveComponent$5("VSwitch");
   const _component_VTooltip = _resolveComponent$5("VTooltip");
   const _component_VCardActions = _resolveComponent$5("VCardActions");
+  const _component_VAlert = _resolveComponent$5("VAlert");
   const _component_VCombobox = _resolveComponent$5("VCombobox");
   const _component_VCheckbox = _resolveComponent$5("VCheckbox");
   const _component_VSelect = _resolveComponent$5("VSelect");
@@ -5619,9 +5655,19 @@ return (_ctx, _cache) => {
           _createVNode$5(_component_VDivider),
           _createVNode$5(_component_VCardText, null, {
             default: _withCtx$4(() => [
+              (__props.error)
+                ? (_openBlock$5(), _createBlock$5(_component_VAlert, {
+                    key: 0,
+                    type: "error",
+                    variant: "tonal",
+                    class: "mb-3",
+                    role: "alert",
+                    text: __props.error
+                  }, null, 8, ["text"]))
+                : _createCommentVNode$5("", true),
               (!__props.hasPreviewItems)
                 ? (_openBlock$5(), _createElementBlock$5("div", {
-                    key: 0,
+                    key: 1,
                     class: _normalizeClass$4(["dropzone", { dragging: __props.dragging }]),
                     onDrop: _cache[5] || (_cache[5] = $event => (_ctx.$emit('drop', $event))),
                     onDragover: _cache[6] || (_cache[6] = $event => (_ctx.$emit('dragover', $event))),
@@ -5764,7 +5810,15 @@ return (_ctx, _cache) => {
                         }, null, 8, ["model-value", "disabled", "onUpdate:modelValue"]),
                         _createElementVNode$5("div", _hoisted_7$3, [
                           _cache[21] || (_cache[21] = _createElementVNode$5("span", null, "改名为", -1)),
-                          _createElementVNode$5("strong", null, _toDisplayString$3(item.output_name || __props.buildOutputName(__props.uploadTargets.find(target => target.id === item.target_id), item) || '待选择目标'), 1)
+                          _createElementVNode$5("strong", null, _toDisplayString$3(item.output_name || __props.buildOutputName(__props.uploadTargets.find(target => target.id === item.target_id), item) || '待选择目标'), 1),
+                          _createVNode$5(_component_VCheckbox, {
+                            "model-value": item.default_subtitle === true,
+                            label: "设为默认字幕",
+                            density: "compact",
+                            "hide-details": "",
+                            disabled: item.selected === false || __props.applying,
+                            "onUpdate:modelValue": value => _ctx.$emit('update-default-subtitle', item.upload_id, value)
+                          }, null, 8, ["model-value", "disabled", "onUpdate:modelValue"])
                         ])
                       ], 2))
                     }), 128))
@@ -5783,7 +5837,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const UploadDialog = /*#__PURE__*/_export_sfc(_sfc_main$5, [['__scopeId',"data-v-0c0da02a"]]);
+const UploadDialog = /*#__PURE__*/_export_sfc(_sfc_main$5, [['__scopeId',"data-v-ca6ce36b"]]);
 
 const {resolveComponent:_resolveComponent$4,createVNode:_createVNode$4,toDisplayString:_toDisplayString$2,createElementVNode:_createElementVNode$4,openBlock:_openBlock$4,createElementBlock:_createElementBlock$4,createCommentVNode:_createCommentVNode$4,createTextVNode:_createTextVNode$2,withCtx:_withCtx$3,mergeProps:_mergeProps$2,createBlock:_createBlock$4,renderList:_renderList$2,Fragment:_Fragment$4,normalizeClass:_normalizeClass$3} = await importShared('vue');
 
@@ -6987,6 +7041,7 @@ const {
   handleDragLeave,
   updatePreviewTarget,
   updateLanguageSuffix,
+  updateDefaultSubtitle,
   togglePreviewItem,
   applyBatchLanguageSuffix,
   resetUploadPreview,
@@ -7902,6 +7957,7 @@ return (_ctx, _cache) => {
       "batch-language-suffix": _unref(batchLanguageSuffix),
       "onUpdate:batchLanguageSuffix": _cache[22] || (_cache[22] = $event => (_isRef(batchLanguageSuffix) ? (batchLanguageSuffix).value = $event : null)),
       "upload-title": _unref(uploadTitle),
+      error: error.value,
       "has-preview-items": _unref(hasPreviewItems),
       "all-selected-preview-targets-are-stream": _unref(allSelectedPreviewTargetsAreStream),
       "has-selected-preview-stream-targets": _unref(hasSelectedPreviewStreamTargets),
@@ -7932,13 +7988,14 @@ return (_ctx, _cache) => {
       onApplyBatchLanguageSuffix: _unref(applyBatchLanguageSuffix),
       onTogglePreviewItem: _unref(togglePreviewItem),
       onUpdatePreviewTarget: _unref(updatePreviewTarget),
-      onUpdateLanguageSuffix: _unref(updateLanguageSuffix)
-    }, null, 8, ["modelValue", "mobile", "fix-timeline", "batch-language-suffix", "upload-title", "has-preview-items", "all-selected-preview-targets-are-stream", "has-selected-preview-stream-targets", "timeline-available", "applying", "can-apply", "dragging", "preparing", "rar-python-available", "rar-available", "archive-status", "rar-dependency-status", "timeline-missing", "files", "preview", "target-select-items", "upload-targets", "format-bytes", "rar-dependency-mode-label", "build-output-name", "onResetUploadPreview", "onApplyUpload", "onPickFiles", "onDrop", "onDragover", "onDragleave", "onRemoveFile", "onApplyBatchLanguageSuffix", "onTogglePreviewItem", "onUpdatePreviewTarget", "onUpdateLanguageSuffix"])
+      onUpdateLanguageSuffix: _unref(updateLanguageSuffix),
+      onUpdateDefaultSubtitle: _unref(updateDefaultSubtitle)
+    }, null, 8, ["modelValue", "mobile", "fix-timeline", "batch-language-suffix", "upload-title", "error", "has-preview-items", "all-selected-preview-targets-are-stream", "has-selected-preview-stream-targets", "timeline-available", "applying", "can-apply", "dragging", "preparing", "rar-python-available", "rar-available", "archive-status", "rar-dependency-status", "timeline-missing", "files", "preview", "target-select-items", "upload-targets", "format-bytes", "rar-dependency-mode-label", "build-output-name", "onResetUploadPreview", "onApplyUpload", "onPickFiles", "onDrop", "onDragover", "onDragleave", "onRemoveFile", "onApplyBatchLanguageSuffix", "onTogglePreviewItem", "onUpdatePreviewTarget", "onUpdateLanguageSuffix", "onUpdateDefaultSubtitle"])
   ], 64))
 }
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-962da571"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-de2f916d"]]);
 
 export { AppPage as default };

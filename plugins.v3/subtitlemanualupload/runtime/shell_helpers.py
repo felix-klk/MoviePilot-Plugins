@@ -178,7 +178,6 @@ def install_shell_helpers(cls, *, upload_file_type: Any, http_exception: Any, se
         "_autosub_tasks_for_entries": ("autosub_bridge", "autosub_tasks_for_entries"),
         "_cleanup_old_sessions": ("upload_session", "cleanup_old_sessions"),
         "_write_session": ("upload_session", "write_session"),
-        "_remove_ext_marks": ("subtitle_inventory", "remove_ext_marks"),
         "_run_timeline_fix": ("writer", "run_timeline_fix"),
         "_transfer_auto_key": ("auto_transfer", "transfer_auto_key"),
         "_claim_transfer_auto_entries": ("auto_transfer", "claim_transfer_auto_entries"),

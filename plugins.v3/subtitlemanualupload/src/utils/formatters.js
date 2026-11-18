@@ -156,11 +156,34 @@ export function errorMessage(err, fallback) {
   )
 }
 
+const languageAliases = new Map(Object.entries({
+  zh: 'chi', 'zh-hans': 'chi', zh_hans: 'chi', 'zh-cn': 'chi', zh_cn: 'chi',
+  'zh-hant': 'cht', zh_hant: 'cht', 'zh-tw': 'cht', zh_tw: 'cht',
+  chs: 'chi', tw: 'cht', hk: 'cht', zho: 'chi', cmn: 'chi', cn: 'chi',
+  中英双语: 'chi&eng', 繁英双语: 'cht&eng',
+  en: 'eng', ja: 'jpn', jp: 'jpn', ko: 'kor', kr: 'kor',
+  fr: 'fre', fra: 'fre', de: 'ger', deu: 'ger', es: 'spa', pt: 'por', it: 'ita', ru: 'rus',
+}))
+
+const embyFilenameTags = new Map(Object.entries({
+  chi: 'zh-CN', cht: 'zh-TW', 'chi&eng': '中英双语', 'cht&eng': '繁英双语',
+}))
+
 export function buildOutputName(target, item) {
   if (!target) return ''
   const basename = target.basename || 'subtitle'
-  const suffix = item?.language_suffix || 'und'
+  const raw = String(item?.language_suffix || '').trim().toLowerCase()
+  const normalized = languageAliases.get(raw) || raw
+  const isPair = /[&+/,]/.test(normalized)
+  const parts = normalized.split(/[&+/,]+/).map(part => {
+    const code = languageAliases.get(part.trim()) || part.trim()
+    const pairCode = isPair ? ({ jpn: 'jp', kor: 'kr' }[code] || code) : code
+    return pairCode.replace(/[^a-z0-9-]/g, '')
+  }).filter(Boolean)
+  const languages = [...new Set(parts)]
+  const suffix = embyFilenameTags.get([...languages].sort().join('&')) || languages.join('&') || 'und'
+  const flag = item?.default_subtitle === true ? '.default' : ''
   let ext = item?.ext || '.srt'
   if (!ext.startsWith('.')) ext = `.${ext}`
-  return `${basename}.${suffix}${ext.toLowerCase()}`
+  return `${basename}.${suffix}${flag}${ext.toLowerCase()}`
 }
