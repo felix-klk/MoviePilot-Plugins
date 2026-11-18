@@ -29,6 +29,7 @@ export function useUploadPreview({
   const uploadScopeTargets = ref([])
   const files = ref([])
   const preview = ref(null)
+  const writeConflict = ref(null)
   const fileInputRef = ref(null)
   const fixTimeline = ref(false)
   const batchLanguageSuffix = ref('')
@@ -62,13 +63,19 @@ export function useUploadPreview({
   })
   const hasSelectedPreviewStreamTargets = computed(() => selectedPreviewTargets.value.some(isStreamTarget))
   const timelineEnabledForApply = computed(() => fixTimeline.value && timelineAvailable.value && !allSelectedPreviewTargetsAreStream.value)
+  const canConfirmWrite = computed(() => {
+    const conflict = writeConflict.value
+    return Boolean(conflict && (conflict.ready_count || Object.values(conflict.choices).some(action => action !== 'skip')))
+  })
 
   function clearUploadPreviewState() {
+    writeConflict.value = null
     preview.value = null
     lastWritten.value = []
   }
 
   function clearUploadDialogState() {
+    writeConflict.value = null
     files.value = []
     preview.value = null
     batchLanguageSuffix.value = ''
@@ -97,6 +104,7 @@ export function useUploadPreview({
     }
     files.value = []
     preview.value = null
+    writeConflict.value = null
     batchLanguageSuffix.value = ''
     lastWritten.value = []
     error.value = ''
@@ -121,10 +129,12 @@ export function useUploadPreview({
     uploadTitle.value = `${title} · 在线字幕`
     lastWritten.value = []
     preview.value = null
+    writeConflict.value = null
     files.value = []
   }
 
   function openOnlinePreview(data, responseMessage) {
+    writeConflict.value = null
     preview.value = data
     batchLanguageSuffix.value = ''
     normalizePreviewItems()
@@ -250,24 +260,43 @@ export function useUploadPreview({
   function resetUploadPreview() {
     files.value = []
     preview.value = null
+    writeConflict.value = null
     batchLanguageSuffix.value = ''
     lastWritten.value = []
     error.value = ''
     message.value = ''
   }
 
-  async function applyUpload() {
-    if (!canApply.value || !preview.value) return
+  function backToWritePreview() {
+    writeConflict.value = null
+    error.value = ''
+  }
+
+  function updateWriteChoice(id, action) {
+    if (writeConflict.value) writeConflict.value.choices[id] = action
+  }
+
+  async function applyUpload(confirmConflicts = false) {
+    const conflict = writeConflict.value
+    if (applying.value || !canApply.value || !preview.value) return
+    if (confirmConflicts ? !canConfirmWrite.value : conflict) return
     const allowRiskyOffset = timelineEnabledForApply.value && timelineNeedsRiskyConfirm.value
-    if (allowRiskyOffset && !confirmRiskyTimelineOffset('写入字幕智能调轴')) return
+    if (!confirmConflicts && allowRiskyOffset && !confirmRiskyTimelineOffset('写入字幕智能调轴')) return
     applying.value = true
     error.value = ''
     try {
-      const payload = {
+      const payload = confirmConflicts ? {
+        ...conflict.payload,
+        conflict_choices: {
+          ...conflict.payload.conflict_choices,
+          ...Object.fromEntries(conflict.rows.map(row => [row.id, { action: conflict.choices[row.id], token: row.token }])),
+        },
+      } : {
         session_id: preview.value.session_id,
         fix_timeline: timelineEnabledForApply.value,
         allow_risky_offset: allowRiskyOffset,
         locked_target_ids: lockedTargetPayload(),
+        conflict_choices: {},
         items: selectedPreviewItems.value.map(item => ({
           upload_id: item.upload_id,
           target_id: item.target_id,
@@ -276,29 +305,22 @@ export function useUploadPreview({
           default_subtitle: item.default_subtitle === true,
         })),
       }
-      let response
-      try {
-        response = await pluginApi.value.applyUpload(payload)
-      } catch (err) {
-        const conflict = err?.response?.data?.detail ?? err?.data?.detail ?? err?.detail
-        if (conflict?.code !== 'subtitle_write_conflict' || !conflict.confirmation) throw err
-
-        const sections = []
-        if (conflict.overwrite?.length) {
-          sections.push('将覆盖以下同名字幕：\n' + conflict.overwrite.join('\n'))
-        }
-        if (conflict.keep?.length) {
-          sections.push('以下旧字幕会保留，新字幕将另存：\n' +
-            conflict.keep.map(item => `${item.existing} → ${item.destination}`).join('\n'))
-        }
-        if (!window.confirm(sections.join('\n\n') + '\n\n继续写入？取消后可返回预览调整选择。')) return
-        response = await pluginApi.value.applyUpload({ ...payload, conflict_confirmation: conflict.confirmation })
-      }
+      const response = await pluginApi.value.applyUpload(payload)
       const data = unwrapResponse(response) || {}
+      if (data.write_conflict?.rows?.length) {
+        const review = data.write_conflict
+        writeConflict.value = {
+          ...review,
+          payload,
+          choices: Object.fromEntries(review.rows.map(row => [row.id, row.same_names.length ? 'skip' : 'save'])),
+        }
+        return
+      }
       const written = data.written || []
       const successMessage = response?.message || `已写入 ${data.count || 0} 个字幕文件`
       files.value = []
       preview.value = null
+      writeConflict.value = null
       uploadDialog.value = false
       await loadTargets(selectedMedia.value, selectedSeason.value)
       message.value = successMessage
@@ -319,6 +341,8 @@ export function useUploadPreview({
     uploadScopeTargets,
     files,
     preview,
+    writeConflict,
+    canConfirmWrite,
     fileInputRef,
     fixTimeline,
     batchLanguageSuffix,
@@ -357,6 +381,8 @@ export function useUploadPreview({
     togglePreviewItem,
     applyBatchLanguageSuffix,
     resetUploadPreview,
+    backToWritePreview,
+    updateWriteChoice,
     applyUpload,
   }
 }

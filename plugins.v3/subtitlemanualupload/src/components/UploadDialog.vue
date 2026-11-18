@@ -21,6 +21,8 @@ defineProps({
   timelineMissing: { type: String, default: '' },
   files: { type: Array, default: () => [] },
   preview: { type: Object, default: null },
+  writeConflict: { type: Object, default: null },
+  canConfirmWrite: { type: Boolean, default: false },
   batchLanguageSuffix: { type: String, default: '' },
   targetSelectItems: { type: Array, default: () => [] },
   uploadTargets: { type: Array, default: () => [] },
@@ -36,6 +38,9 @@ const emit = defineEmits([
   'update:batchLanguageSuffix',
   'reset-upload-preview',
   'apply-upload',
+  'confirm-write',
+  'back-to-preview',
+  'update-write-choice',
   'pick-files',
   'drop',
   'dragover',
@@ -92,7 +97,7 @@ function onPickFiles(event) {
         <VBtn icon="mdi-close" variant="text" @click="$emit('update:modelValue', false)" />
       </VCardTitle>
       <VDivider />
-      <VCardActions class="dialog-actions dialog-actions-top">
+      <VCardActions v-if="!writeConflict" class="dialog-actions dialog-actions-top">
         <VBtn variant="text" @click="$emit('update:modelValue', false)">关闭</VBtn>
         <VSpacer />
         <VBtn
@@ -135,7 +140,41 @@ function onPickFiles(event) {
         </VBtn>
       </VCardActions>
       <VDivider />
-      <VCardText>
+      <VCardText v-if="writeConflict" class="write-conflicts">
+        <VAlert v-if="error" type="error" variant="tonal" class="mb-3" role="alert" :text="error" />
+        <h3>处理已有字幕</h3>
+        <div v-for="row in writeConflict.rows" :key="row.id" class="write-conflict-row">
+          <div class="write-conflict-title">
+            <strong>{{ row.same_names.length ? '完整文件名相同' : '后缀不同' }}</strong>
+            <VChip v-if="row.other_names.length" size="small" color="success" variant="tonal">异名文件保留</VChip>
+          </div>
+          <dl class="write-conflict-paths">
+            <template v-if="row.same_names.length">
+              <dt>同名文件</dt>
+              <dd>{{ row.same_names.join('、') }}</dd>
+            </template>
+            <template v-if="row.other_names.length">
+              <dt>已有异名文件</dt>
+              <dd>{{ row.other_names.join('、') }}</dd>
+            </template>
+            <dt>写入文件</dt>
+            <dd>{{ row.destinations.join('、') }}</dd>
+          </dl>
+          <VRadioGroup
+            :model-value="writeConflict.choices[row.id]"
+            :disabled="applying"
+            :aria-label="`选择 ${row.destinations[0]} 的写入方式`"
+            inline
+            hide-details
+            @update:model-value="value => $emit('update-write-choice', row.id, value)"
+          >
+            <VRadio v-if="row.same_names.length" label="覆盖同名文件" value="overwrite" />
+            <VRadio v-else label="另存新字幕" value="save" />
+            <VRadio label="跳过这条" value="skip" />
+          </VRadioGroup>
+        </div>
+      </VCardText>
+      <VCardText v-else>
         <VAlert v-if="error" type="error" variant="tonal" class="mb-3" role="alert" :text="error" />
         <div
           v-if="!hasPreviewItems"
@@ -271,6 +310,16 @@ function onPickFiles(event) {
           </div>
         </div>
       </VCardText>
+      <VCardActions v-if="writeConflict" class="dialog-actions">
+        <span v-if="writeConflict.ready_count" class="write-ready-count">
+          另有 {{ writeConflict.ready_count }} 条无冲突字幕待写入
+        </span>
+        <VSpacer />
+        <VBtn variant="text" :disabled="applying" @click="$emit('back-to-preview')">返回预览</VBtn>
+        <VBtn color="success" :disabled="!canConfirmWrite" :loading="applying" @click="$emit('confirm-write')">
+          确认写入
+        </VBtn>
+      </VCardActions>
     </VCard>
   </VDialog>
 </template>
@@ -280,6 +329,47 @@ function onPickFiles(event) {
   background: var(--smu-dialog-bg);
   color: var(--smu-text);
   backdrop-filter: blur(16px);
+}
+
+.write-conflicts,
+.write-conflict-row {
+  display: grid;
+  gap: 10px;
+}
+
+.write-conflict-row {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--smu-border);
+  border-radius: 14px;
+  background: var(--smu-card-bg);
+}
+
+.write-conflict-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.write-conflict-paths {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 10px;
+}
+
+.write-conflict-paths dt,
+.write-ready-count {
+  color: var(--smu-text-muted);
+}
+
+.write-conflict-paths dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.dialog-actions:has(.write-ready-count) {
+  flex-wrap: wrap;
 }
 
 .dialog-title {

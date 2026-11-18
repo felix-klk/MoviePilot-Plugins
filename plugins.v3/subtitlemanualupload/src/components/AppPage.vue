@@ -307,6 +307,10 @@ const {
   updatePreviewTarget,
   updateLanguageSuffix,
   updateDefaultSubtitle,
+  writeConflict,
+  canConfirmWrite,
+  backToWritePreview,
+  updateWriteChoice,
   togglePreviewItem,
   applyBatchLanguageSuffix,
   resetUploadPreview,
@@ -1209,6 +1213,8 @@ defineExpose({
       :timeline-missing="timelineMissing"
       :files="files"
       :preview="preview"
+      :write-conflict="writeConflict"
+      :can-confirm-write="canConfirmWrite"
       :target-select-items="targetSelectItems"
       :upload-targets="uploadTargets"
       :format-bytes="formatBytes"
@@ -1216,6 +1222,9 @@ defineExpose({
       :build-output-name="buildOutputName"
       @reset-upload-preview="resetUploadPreview"
       @apply-upload="applyUpload"
+      @confirm-write="applyUpload(true)"
+      @back-to-preview="backToWritePreview"
+      @update-write-choice="updateWriteChoice"
       @pick-files="onPickFiles"
       @drop="handleDrop"
       @dragover="handleDragOver"

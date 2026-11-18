@@ -232,14 +232,22 @@ class UploadApi:
                 message="没有写入字幕，锁定项已跳过",
             )
 
+        conflict_choices = body.get("conflict_choices", {})
+        if not isinstance(conflict_choices, dict) or any(
+            not isinstance(choice, dict) or choice.get("action") not in ("skip", "save", "overwrite")
+            for choice in conflict_choices.values()
+        ):
+            raise HTTPException(status_code=400, detail="字幕冲突选择无效")
         payload, message = owner.services.writer().apply_upload_session(
             session_id=session_id,
             items=items,
             locked_skipped=locked_skipped,
             fix_timeline=fix_timeline,
             allow_risky_offset=allow_risky_offset,
-            conflict_confirmation=owner._normalize_text(body.get("conflict_confirmation")),
+            conflict_choices=conflict_choices,
         )
+        if payload.get("write_conflict") and "conflict_choices" not in body:
+            raise HTTPException(status_code=409, detail="目标位置已有字幕，请刷新插件页面后选择写入方式")
 
         return owner._ok(payload, message=message)
 

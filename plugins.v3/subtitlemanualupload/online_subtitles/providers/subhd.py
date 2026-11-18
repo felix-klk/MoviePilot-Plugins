@@ -8,6 +8,45 @@ from ..models import *  # noqa: F401,F403
 from ..shared import *  # noqa: F401,F403
 from .base import BaseSubtitleProvider, _subhd_manual_url
 
+
+def _subtitle_download_counts(text: str) -> Dict[str, int]:
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(text or "", "html.parser")
+    counts = {}
+
+    def add_count(container, node):
+        if container is None or node is None:
+            return
+        value = node.get_text(strip=True)
+        if not re.fullmatch(r"[0-9]{1,15}|[0-9]{1,3}(?:[,，][0-9]{3}){1,4}", value):
+            return
+        ids = {
+            href[3:] for link in container.select('a[href^="/a/"]')
+            if re.fullmatch(r"/a/[A-Za-z0-9_-]+", href := link["href"])
+        }
+        if len(ids) == 1:
+            counts[ids.pop()] = int(value.replace(",", "").replace("，", ""))
+
+    for icon in soup.select("svg.bi-download"):
+        value = icon.find_next_sibling()
+        if value is not None and value.name == "span":
+            add_count(icon.find_parent("div", class_="clearfix"), value)
+
+    for header in soup.select(".rounded-top > .row"):
+        columns = header.find_all("div", recursive=False)
+        for index, column in enumerate(columns):
+            if column.get_text(strip=True) not in {"下载次数", "下載次數"}:
+                continue
+            for row in header.parent.find_next_siblings("div", class_="row"):
+                cells = row.find_all("div", recursive=False)
+                if len(cells) == len(columns):
+                    add_count(row, cells[index])
+            break
+
+    return counts
+
+
 class SubHDProvider(BaseSubtitleProvider):
     provider_id = "subhd"
     display_name = "SubHD"
@@ -218,6 +257,7 @@ class SubHDProvider(BaseSubtitleProvider):
     ) -> List[OnlineSubtitleResult]:
         results: List[OnlineSubtitleResult] = []
         target_episode = _target_episode_from_targets(targets)
+        download_counts = _subtitle_download_counts(text)
         for match in re.finditer(r'<a[^>]+href=["\'](/a/([A-Za-z0-9_-]+))["\'][^>]*>(.*?)</a>', text or "", flags=re.I | re.S):
             href, sid, raw_title = match.groups()
             title = _strip_tags(raw_title) or f"SubHD 字幕 {sid}"
@@ -239,6 +279,7 @@ class SubHDProvider(BaseSubtitleProvider):
                     provider_label=self.display_name,
                     result_id=sid,
                     title=title,
+                    download_count=download_counts.get(sid),
                     page_url=page,
                     download_url=f"subhd-page:{page}",
                     language=_guess_language_label(language_text),

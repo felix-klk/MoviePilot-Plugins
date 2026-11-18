@@ -33,6 +33,7 @@ class OnlineSubtitleResult:
     reject_reason: str = ""
     match_detail: str = ""
     translation_source: str = "unknown"
+    download_count: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         from .language import _language_category_from_text
@@ -67,6 +68,7 @@ class OnlineSubtitleResult:
             "reject_reason": self.reject_reason,
             "match_detail": self.match_detail,
             "translation_source": self.translation_source,
+            **({"download_count": self.download_count} if self.download_count is not None else {}),
         }
 
 

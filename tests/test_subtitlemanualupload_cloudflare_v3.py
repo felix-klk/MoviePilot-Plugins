@@ -60,6 +60,46 @@ class Opener:
         return result
 
 
+def test_subhd_download_counts_use_search_response_and_keep_zero(clients):
+    module = importlib.import_module("cf_test.online_subtitles.providers.subhd")
+    first = '''
+        <div class="clearfix"><a href="/a/abc">Tulsa King S04E05</a>
+        <svg class="bi bi-file-earmark-fill"></svg><span>112</span>
+        <svg class="bi bi-download"></svg><span>1,411</span></div>
+        <div class="clearfix"><a href="/a/zero">Tulsa King S04E05</a>
+        <svg class="bi bi-download"></svg><span>0</span></div>
+        <div class="clearfix"><a href="/a/absent">Tulsa King S04E05</a>
+        <svg class="bi bi-chat"></svg><span>99</span></div>
+    '''
+    pages = iter([first, first.replace("1,411", "1,427")])
+    calls = []
+    def get_text(url, **kwargs):
+        calls.append(url)
+        return 200, next(pages), url
+    provider = module.SubHDProvider(types.SimpleNamespace(get_text=get_text), root_url="https://subhd.tv")
+    for expected in (1411, 1427):
+        results = {item.result_id: item.to_dict() for item in provider.search("Tulsa King S04E05", [], "episode")}
+        assert results["abc"]["download_count"] == expected
+        assert results["zero"]["download_count"] == 0
+        assert "download_count" not in results["absent"]
+        assert results["abc"]["page_url"] == "https://subhd.tv/a/abc"
+        assert "match_detail" in results["abc"]
+    assert len(calls) == 2 and all("/search/" in url for url in calls)
+
+
+def test_subhd_download_count_column_uses_the_header_and_subtitle_id(clients):
+    module = importlib.import_module("cf_test.online_subtitles.providers.subhd")
+    html = '''
+        <div class="rounded-top bg-purple"><div class="row">
+          <div>字幕信息</div><div>上传人</div><div>下载次数</div>
+        </div></div>
+        <div class="row"><div><a href="/a/one">字幕一</a></div><div>99</div><div>1，629</div></div>
+        <div class="row"><div><a href="/a/two">字幕二</a></div><div>100</div><div>—</div></div>
+        <div class="row"><div><a href="/a/three">字幕三</a></div><div>101</div><div>0</div></div>
+    '''
+    assert module._subtitle_download_counts(html) == {"one": 1629, "three": 0}
+
+
 @pytest.mark.parametrize("direct_body", [b"PK\x03\x04subtitle", b"<html>unavailable</html>", None])
 def test_cdn_download_tries_direct_before_mirror(clients, monkeypatch, direct_body):
     client = clients.OnlinePageClient(use_proxy=False, bypass_url="http://nas:18089")

@@ -19,6 +19,17 @@ TimelineCacheDir = Callable[[], Path]
 
 _WRITE_LOCK = Lock()
 
+class SubtitleWriteConflict(Exception):
+    def __init__(self, rows: List[Dict[str, Any]], ready_count: int):
+        super().__init__("有字幕需要确认写入方式")
+        self.review = {"rows": rows, "ready_count": ready_count}
+
+
+def _write_group_id(operation: Dict[str, Any]) -> str:
+    group = operation.get("conflict_group") or operation["destination_path"]
+    return hashlib.sha256(str(group).encode("utf-8")).hexdigest()
+
+
 EMBY_FILENAME_TAGS = {
     "chi": "zh-CN",
     "cht": "zh-TW",
@@ -131,7 +142,8 @@ def build_write_operations(
             raise http_exception(status_code=400, detail=f"上传字幕内容为空或不是文件: {upload_info.get('source_name')}")
 
         item_ext = normalize_text(item.get("ext")) or upload_info.get("ext") or ".srt"
-        if is_bitmap_subtitle(source_path):
+        bitmap = is_bitmap_subtitle(source_path)
+        if bitmap:
             item_ext = source_path.suffix.lower()
         item_suffix = normalize_language_suffix(item.get("language_suffix"))
         destination_name = build_destination_name_func(
@@ -157,6 +169,7 @@ def build_write_operations(
                 "language_suffix": item_suffix,
                 "destination_name": destination_name,
                 "destination_path": destination_path,
+                "conflict_group": destination_path.with_suffix("") if bitmap and item_ext in {".idx", ".sub"} else destination_path,
             }
         )
     return operations
@@ -312,25 +325,34 @@ class SubtitleWriter:
         except Exception as exc:
             self._logger.warning("[SubtitleManualUpload] 通知 Emby 扫描外挂字幕失败，不影响字幕写入: %s", exc)
 
-    def _confirm_write_conflicts(self, operations: List[Dict[str, Any]], confirmation: Optional[str]) -> None:
+    def _confirm_write_conflicts(
+        self, operations: List[Dict[str, Any]], choices: Optional[Dict[str, Dict[str, str]]]
+    ) -> List[Dict[str, Any]]:
         directories: Dict[Path, List[Path]] = {}
-        overwrite: List[str] = []
-        keep: List[Dict[str, str]] = []
-        state = []
+        groups: Dict[str, Dict[str, Any]] = {}
+        decisions = choices or {}
         for operation in operations:
             destination = operation["destination_path"]
             if str(operation["source_path"]) == str(destination):
                 continue
+            group_id = _write_group_id(operation)
+            row = groups.setdefault(group_id, {
+                "id": group_id, "destinations": [], "same_names": [], "other_names": [], "state": [],
+            })
+            row["destinations"].append(destination.name)
+            row["state"].append(("source", str(operation["source_path"]), str(destination)))
             if destination.parent not in directories:
                 directories[destination.parent] = sorted(destination.parent.iterdir())
             existing_names = directories[destination.parent]
             exact = next((path for path in existing_names if path.name == destination.name), None)
-            if destination.is_symlink() or (destination.exists() and (exact is None or not exact.is_file())):
+            if (destination.is_symlink() or (destination.exists() and (exact is None or not exact.is_file()))) and (
+                decisions.get(group_id, {}).get("action") != "skip"
+            ):
                 raise self._http_exception(status_code=409, detail=f"目标路径被不同名文件或不可写条目占用：{destination.name}")
-            if exact is not None and exact.is_file():
+            if exact is not None and exact.is_file() and not exact.is_symlink():
                 stat = exact.stat()
-                overwrite.append(exact.name)
-                state.append(("overwrite", str(exact), str(operation["source_path"]), stat.st_ino, stat.st_mtime_ns, stat.st_size))
+                row["same_names"].append(exact.name)
+                row["state"].append(("overwrite", str(exact), stat.st_ino, stat.st_mtime_ns, stat.st_size))
 
             prefix = f"{operation['video_path'].stem}."
             ext = destination.suffix.lower()
@@ -347,24 +369,27 @@ class SubtitleWriter:
                     continue
                 language = language_suffix_from_filename(existing.name[len(prefix):], {ext})["suffix"]
                 if sorted(language.split("&")) == languages:
-                    keep.append({"existing": existing.name, "destination": destination.name})
-                    state.append(("keep", str(existing), str(destination), str(operation["source_path"])))
+                    row["other_names"].append(existing.name)
+                    row["state"].append(("keep", str(existing), str(destination)))
 
-        if not state:
-            return
-        token = hashlib.sha256(repr(sorted(state)).encode("utf-8")).hexdigest()
-        if confirmation == token:
-            return
-        if confirmation is None:
-            existing_name = overwrite[0] if overwrite else keep[0]["existing"]
+        conflicts = []
+        for row in groups.values():
+            if not row["same_names"] and not row["other_names"]:
+                continue
+            row["token"] = hashlib.sha256(repr(sorted(row.pop("state"))).encode("utf-8")).hexdigest()
+            conflicts.append(row)
+        if conflicts and choices is None:
+            existing_name = (conflicts[0]["same_names"] or conflicts[0]["other_names"])[0]
             raise self._http_exception(status_code=409, detail=f"已有字幕 {existing_name}，自动写入已跳过，请在写入预览中确认。")
-        raise self._http_exception(status_code=409, detail={
-            "code": "subtitle_write_conflict",
-            "message": "发现已有字幕，请确认哪些文件会覆盖，以及哪些文件会保留。",
-            "overwrite": overwrite,
-            "keep": keep,
-            "confirmation": token,
-        })
+        selected = [op for op in operations if decisions.get(_write_group_id(op), {}).get("action") != "skip"]
+        for row in conflicts:
+            decision = decisions.get(row["id"], {})
+            action = decision.get("action")
+            allowed_action = "overwrite" if row["same_names"] else "save"
+            if action != "skip" and (action != allowed_action or decision.get("token") != row["token"]):
+                ready = {_write_group_id(op) for op in selected} - {conflict["id"] for conflict in conflicts}
+                raise SubtitleWriteConflict(conflicts, len(ready))
+        return selected
 
     def write_operations_to_disk(
         self,
@@ -374,14 +399,16 @@ class SubtitleWriter:
         fix_timeline: bool = False,
         allow_risky_offset: bool = False,
         force_low_confidence: bool = False,
-        conflict_confirmation: Optional[str] = None,
+        conflict_choices: Optional[Dict[str, Dict[str, str]]] = None,
     ) -> Tuple[List[Dict[str, Any]], int, int]:
         owner = self._owner
-        self._confirm_write_conflicts(operations, conflict_confirmation)
+        selected_operations = self._confirm_write_conflicts(operations, conflict_choices)
+        if not selected_operations:
+            return [], 0, 0
         fixed_dir = session_dir / "timeline_fixed"
         simplified_dir = session_dir / "simplified"
         encoded_dir = session_dir / "utf8"
-        for operation in operations:
+        for operation in selected_operations:
             operation["write_source_path"] = operation["source_path"]
             if is_text_subtitle(operation["source_path"]):
                 encoded_path = encoded_dir / f"{operation['upload_info'].get('upload_id')}{operation['source_path'].suffix}"
@@ -487,8 +514,8 @@ class SubtitleWriter:
         written_results = []
         # Another task may have written subtitles while these files were being processed.
         with _WRITE_LOCK:
-            self._confirm_write_conflicts(operations, conflict_confirmation)
-            for operation in operations:
+            self._confirm_write_conflicts(operations, conflict_choices)
+            for operation in selected_operations:
                 destination_path = operation["destination_path"]
                 temp_path = destination_path.with_name(f"{destination_path.name}.mp-uploading")
                 if temp_path.exists():
@@ -514,7 +541,7 @@ class SubtitleWriter:
 
         touched_targets: Dict[str, Dict[str, Any]] = {
             str(operation["video_path"]): operation["target_entry"]
-            for operation in operations
+            for operation in selected_operations
         }
         for video_path in (Path(path) for path in touched_targets):
             inventory = owner.services.subtitle_inventory()
@@ -547,7 +574,7 @@ class SubtitleWriter:
         locked_skipped: List[Dict[str, str]],
         fix_timeline: bool = False,
         allow_risky_offset: bool = False,
-        conflict_confirmation: str = "",
+        conflict_choices: Optional[Dict[str, Dict[str, str]]] = None,
     ) -> Tuple[Dict[str, Any], str]:
         owner = self._owner
         session_dir, session_payload = self._session_loader(session_id)
@@ -573,13 +600,16 @@ class SubtitleWriter:
             fix_timeline,
         )
         operations = self.build_write_operations(items, upload_map, target_entries)
-        written_results, fixed_count, simplified_count = self.write_operations_to_disk(
-            session_dir=session_dir,
-            operations=operations,
-            fix_timeline=fix_timeline,
-            allow_risky_offset=allow_risky_offset,
-            conflict_confirmation=conflict_confirmation,
-        )
+        try:
+            written_results, fixed_count, simplified_count = self.write_operations_to_disk(
+                session_dir=session_dir,
+                operations=operations,
+                fix_timeline=fix_timeline,
+                allow_risky_offset=allow_risky_offset,
+                conflict_choices=conflict_choices or {},
+            )
+        except SubtitleWriteConflict as exc:
+            return {"write_conflict": exc.review}, str(exc)
 
         shutil.rmtree(session_dir, ignore_errors=True)
 
@@ -601,7 +631,11 @@ class SubtitleWriter:
             {
                 "count": len(written_results),
                 "written": written_results,
-                "skipped": locked_skipped,
+                "skipped": locked_skipped + [
+                    {"target_id": op["target_entry"]["id"], "reason": "已选择跳过此字幕"}
+                    for op in operations
+                    if (conflict_choices or {}).get(_write_group_id(op), {}).get("action") == "skip"
+                ],
             },
             message,
         )

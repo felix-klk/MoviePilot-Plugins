@@ -260,12 +260,13 @@ def test_emby_subtitle_write_preserves_original_format_and_existing_flags(sup_mo
 
 
 @pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)
+@pytest.mark.parametrize("overwrite", [False, True])
 @pytest.mark.parametrize(("language", "output_tag", "legacy_tag"), [
     ("chi", "zh-CN", "chi.default"),
     ("chi&eng", "中英双语.zh-CN", "中英双语.default"),
     ("chi&eng", "中英双语.zh-CN", "eng&chi"),
 ])
-def test_subtitle_conflicts_require_confirmation_and_keep_variants(sup_modules, tmp_path, language, output_tag, legacy_tag):
+def test_subtitle_conflicts_require_confirmation_and_keep_variants(sup_modules, tmp_path, language, output_tag, legacy_tag, overwrite):
     writer, owner, _ = make_bitmap_writer(sup_modules, tmp_path)
     owner._traditional_to_simplified = False
     media_dir = tmp_path / "media"
@@ -286,29 +287,37 @@ def test_subtitle_conflicts_require_confirmation_and_keep_variants(sup_modules, 
         writer.write_operations_to_disk(session_dir=session_dir, operations=operations)
     writer._session_loader = lambda _: (session_dir, {"targets": list(targets.values()), "uploads": [upload]})
     apply_args = {"session_id": "test-session", "items": items, "locked_skipped": []}
-    with pytest.raises(StubHttpException) as conflict:
-        writer.apply_upload_session(**apply_args)
-    assert conflict.value.status_code == 409
-    detail = conflict.value.detail
-    assert detail["overwrite"] == [exact.name]
+    review, _ = writer.apply_upload_session(**apply_args)
+    same, other = review["write_conflict"]["rows"]
+    assert same["same_names"] == [exact.name]
     new = media_dir / f"Show.S01E02.{output_tag}.srt"
-    assert detail["keep"] == [{"existing": legacy.name, "destination": new.name}]
+    assert other["other_names"] == [legacy.name]
+    assert other["destinations"] == [new.name]
     assert exact.read_bytes() == b"same name"
     assert not new.exists()
     assert source.exists()
 
     exact.write_bytes(b"changed after the first confirmation")
-    with pytest.raises(StubHttpException) as stale:
-        writer.apply_upload_session(**apply_args, conflict_confirmation=detail["confirmation"])
-    confirmation = stale.value.detail["confirmation"]
-    assert confirmation != detail["confirmation"]
+    choices = {
+        same["id"]: {"action": "overwrite", "token": same["token"]},
+        other["id"]: {"action": "save", "token": other["token"]},
+    }
+    stale, _ = writer.apply_upload_session(**apply_args, conflict_choices=choices)
+    refreshed = stale["write_conflict"]["rows"][0]
+    assert refreshed["token"] != same["token"]
     assert not new.exists()
 
-    response, _ = writer.apply_upload_session(**apply_args, conflict_confirmation=confirmation)
+    choices[same["id"]] = {"action": "overwrite" if overwrite else "skip", "token": refreshed["token"]}
+    response, _ = writer.apply_upload_session(**apply_args, conflict_choices=choices)
     written = response["written"]
-    assert {item["output_name"] for item in written} == {exact.name, new.name}
-    assert exact.read_bytes() == new.read_bytes() == b"new subtitle"
-    assert Path(written[0]["backup_path"]).read_bytes() == b"changed after the first confirmation"
+    assert {item["output_name"] for item in written} == ({exact.name, new.name} if overwrite else {new.name})
+    assert new.read_bytes() == b"new subtitle"
+    if overwrite:
+        assert exact.read_bytes() == b"new subtitle"
+        assert Path(written[0]["backup_path"]).read_bytes() == b"changed after the first confirmation"
+    else:
+        assert exact.read_bytes() == b"changed after the first confirmation"
+        assert response["skipped"] == [{"target_id": "e1", "reason": "已选择跳过此字幕"}]
     assert legacy.read_bytes() == b"old variant"
 
 

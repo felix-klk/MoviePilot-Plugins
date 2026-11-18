@@ -769,6 +769,32 @@ def test_explicit_vobsub_pair_is_not_duplicated_and_normalizes_language(sup_modu
     assert {item["destination_name"] for item in operations} == {f"episode-1.{tag}.idx", f"episode-1.{tag}.sub"}
 
 
+@pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)
+def test_vobsub_conflict_choice_skips_the_complete_pair(sup_modules, tmp_path):
+    session = tmp_path / "session"
+    session.mkdir()
+    uploads = make_vobsub_uploads(session)
+    target = make_target(tmp_path)
+    writer, _, _ = make_bitmap_writer(sup_modules, tmp_path)
+    media_dir = Path(target["path"]).parent
+    idx = media_dir / f"{target['basename']}.zh-CN.idx"
+    idx.write_bytes(b"existing index")
+    writer._session_loader = lambda _: (session, {"targets": [target], "uploads": list(uploads.values())})
+    args = {
+        "session_id": "pair",
+        "items": [{"upload_id": "idx", "target_id": target["id"], "language_suffix": "chi"}],
+        "locked_skipped": [],
+    }
+    review, _ = writer.apply_upload_session(**args)
+    row, = review["write_conflict"]["rows"]
+    assert row["same_names"] == [idx.name]
+    assert set(row["destinations"]) == {idx.name, idx.with_suffix(".sub").name}
+    result, _ = writer.apply_upload_session(**args, conflict_choices={row["id"]: {"action": "skip"}})
+    assert result["count"] == 0
+    assert idx.read_bytes() == b"existing index"
+    assert not idx.with_suffix(".sub").exists()
+
+
 @pytest.mark.parametrize("selected_id", ("idx", "sub"))
 def test_vobsub_missing_companion_is_rejected(sup_modules, tmp_path, selected_id):
     uploads = make_vobsub_uploads(tmp_path)

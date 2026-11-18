@@ -1,4 +1,6 @@
 <script setup>
+const downloadCountFormat = new Intl.NumberFormat('zh-CN')
+
 defineProps({
   modelValue: { type: Boolean, default: false },
   mobile: { type: Boolean, default: false },
@@ -61,7 +63,7 @@ defineEmits([
   <VDialog
     :model-value="modelValue"
     :fullscreen="mobile"
-    :scrollable="mobile"
+    scrollable
     max-width="1080"
     @update:model-value="$emit('update:modelValue', $event)"
   >
@@ -83,39 +85,13 @@ defineEmits([
           <span>{{ onlineTitle || '在线字幕搜索' }}</span>
           <p>{{ onlineTargets.length }} 个目标 · 下载会进入匹配预览，提交 AI 翻译会直接进入 AI 状态</p>
         </div>
-        <div class="online-title-actions">
-          <VBtn
-            color="success"
-            :disabled="!selectedOnlineResults.length || onlineAiDownloading"
-            :loading="onlinePreviewDownloading"
-            @click="$emit('download-online-preview')"
-          >
-            下载并生成预览
-          </VBtn>
-          <VBtn
-            color="primary"
-            variant="tonal"
-            :disabled="!canSubmitOnlineAiTranslate || onlinePreviewDownloading"
-            :loading="onlineAiDownloading"
-            @click="$emit('request-online-ai-translate')"
-          >
-            提交 AI 翻译
-          </VBtn>
-          <VBtn
-            v-if="onlineDownloading"
-            color="warning"
-            variant="tonal"
-            @click="$emit('stop-online-download')"
-          >
-            停止等待
-          </VBtn>
-          <VBtn
-            v-if="!mobile"
-            icon="mdi-close"
-            variant="text"
-            @click="$emit('close-online-dialog')"
-          />
-        </div>
+        <VBtn
+          v-if="!mobile"
+          icon="mdi-close"
+          variant="text"
+          aria-label="关闭在线字幕搜索"
+          @click="$emit('close-online-dialog')"
+        />
       </VCardTitle>
       <VDivider />
       <VCardActions class="online-search-actions">
@@ -159,7 +135,7 @@ defineEmits([
         </VBtn>
       </VCardActions>
       <VDivider />
-      <VCardText>
+      <VCardText class="online-scroll-body">
         <VAlert
           v-if="onlineError"
           class="mb-4"
@@ -278,15 +254,21 @@ defineEmits([
                   <p v-if="item.note">{{ item.note }}</p>
                   <p v-if="item.match_detail" class="online-match-detail">{{ item.match_detail }}</p>
                 </div>
-                <a
-                  v-if="item.page_url"
-                  class="online-open-link"
-                  :href="item.page_url"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  查看
-                </a>
+                <div class="online-result-actions">
+                  <span v-if="Number.isSafeInteger(item.download_count) && item.download_count >= 0" class="online-download-count">
+                    下载 {{ downloadCountFormat.format(item.download_count) }} 次
+                  </span>
+                  <a
+                    v-if="item.page_url"
+                    class="online-open-link"
+                    :href="item.page_url"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    :aria-label="`查看 ${item.title}（新标签页）`"
+                  >
+                    查看
+                  </a>
+                </div>
               </div>
             </div>
             <div v-else-if="!onlineSearching" class="empty-state">
@@ -321,6 +303,36 @@ defineEmits([
           </aside>
         </div>
       </VCardText>
+      <VDivider />
+      <VCardActions class="online-download-actions">
+        <span class="online-selection-count">已选 {{ selectedOnlineResults.length }} 条</span>
+        <VSpacer />
+        <VBtn
+          color="success"
+          :disabled="!selectedOnlineResults.length || onlineAiDownloading"
+          :loading="onlinePreviewDownloading"
+          @click="$emit('download-online-preview')"
+        >
+          下载并生成预览
+        </VBtn>
+        <VBtn
+          color="primary"
+          variant="tonal"
+          :disabled="!canSubmitOnlineAiTranslate || onlinePreviewDownloading"
+          :loading="onlineAiDownloading"
+          @click="$emit('request-online-ai-translate')"
+        >
+          提交 AI 翻译
+        </VBtn>
+        <VBtn
+          v-if="onlineDownloading"
+          color="warning"
+          variant="tonal"
+          @click="$emit('stop-online-download')"
+        >
+          停止等待
+        </VBtn>
+      </VCardActions>
     </VCard>
   </VDialog>
 
@@ -380,11 +392,21 @@ defineEmits([
   font-weight: 400;
 }
 
-.online-title-actions {
-  display: flex;
+.online-scroll-body {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.online-download-actions {
   flex-shrink: 0;
-  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
+  padding: 12px 16px max(12px, env(safe-area-inset-bottom));
+}
+
+.online-selection-count {
+  color: var(--smu-text-muted);
+  white-space: nowrap;
 }
 
 .mobile-online-dialog-title {
@@ -395,23 +417,6 @@ defineEmits([
 
 .mobile-online-dialog-title .online-dialog-heading {
   min-width: 0;
-}
-
-.mobile-online-dialog-title .online-title-actions {
-  grid-column: 1 / -1;
-  width: 100%;
-  justify-content: flex-start;
-  overflow-x: auto;
-  padding-top: 4px;
-  scrollbar-width: none;
-}
-
-.mobile-online-dialog-title .online-title-actions::-webkit-scrollbar {
-  display: none;
-}
-
-.mobile-online-dialog-title .online-title-actions .v-btn {
-  flex: 0 0 auto;
 }
 
 .online-search-actions {
@@ -448,6 +453,7 @@ defineEmits([
 
 .online-results-panel,
 .manual-links-panel {
+  align-self: start;
   min-width: 0;
   padding: 14px;
   border: 1px solid var(--smu-border);
@@ -519,9 +525,6 @@ defineEmits([
 .online-result-list {
   display: grid;
   gap: 10px;
-  max-height: 520px;
-  overflow-y: auto;
-  padding-right: 4px;
 }
 
 .online-result-card {
@@ -547,6 +550,20 @@ defineEmits([
 
 .online-result-main {
   min-width: 0;
+}
+
+.online-result-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.online-download-count {
+  color: var(--smu-text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .online-result-title {
@@ -593,10 +610,6 @@ defineEmits([
   text-decoration: none;
 }
 
-.manual-links-panel {
-  align-self: start;
-}
-
 .manual-links-panel p {
   margin: 8px 0 14px;
   line-height: 1.6;
@@ -634,9 +647,15 @@ defineEmits([
     grid-template-columns: 1fr;
   }
 
-  .online-title-actions {
-    width: 100%;
-    justify-content: flex-end;
+}
+
+@media (max-width: 600px) {
+  .online-result-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .online-result-actions {
+    grid-column: 2;
   }
 }
 </style>
