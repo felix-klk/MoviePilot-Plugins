@@ -1,6 +1,6 @@
 # CloudDrive2助手 NEO(自用版) · MoviePilot V2
 
-适用于 MoviePilot 2.10.0 及以上的 V2 版本。在插件市场添加 `https://github.com/felix-klk/MoviePilot-Plugins`，搜索 **CloudDrive2助手 NEO(自用版)** 并安装 **2.3.0**。已经安装 `Cd2Assistant` 时可选择本仓库进行更新，插件 ID 相同，可沿用本机已有配置。手动选历史版本时，V2 选择 `Cd2Assistant_v2.3.0`，V3 选择对应的 3.x 版本。
+适用于 MoviePilot 2.10.0 及以上的 V2 版本。在插件市场添加 `https://github.com/felix-klk/MoviePilot-Plugins`，搜索 **CloudDrive2助手 NEO(自用版)** 并安装 **2.3.1**。已经安装 `Cd2Assistant` 时可选择本仓库进行更新，插件 ID 相同，可沿用本机已有配置。手动选历史版本时，V2 选择 `Cd2Assistant_v2.3.1`，V3 选择对应的 3.x 版本。
 
 1. 打开插件设置，启用插件并添加 CloudDrive2 连接。服务器地址与 API 令牌分开填写，权限见下文。
 2. 按需开启「外网播放传输保护（忽略内网）」。默认每 10 秒检查 MP 已配置的媒体服务器，所有外网播放停止或暂停后等待 45 秒，仅恢复由插件暂停的任务。
@@ -10,7 +10,7 @@
 
 ## API 令牌
 
-在 CloudDrive2 网页进入「API 令牌 → 创建令牌」，指定有效期和需要的权限。在插件首页分别填写服务器地址和 API 令牌。多台连接或旧账号密码配置可在「高级设置 → 多台连接或旧版配置」编辑，地址须从 MoviePilot 所在机器或容器可达。CloudDrive2 的默认 gRPC 端口是 19798；若通过支持 gRPC 的 TLS 入口访问，填 `https://你的域名` 或带端口的 HTTPS 地址。
+在 CloudDrive2 网页进入「API 令牌 → 创建令牌」，指定有效期和需要的权限。在插件首页分别填写服务器地址和 API 令牌。首页编辑首个连接，已保存的令牌留空即可沿用。其他已存在的连接继续运行。地址须从 MoviePilot 所在机器或容器可达。CloudDrive2 的默认 gRPC 端口是 19798；若通过支持 gRPC 的 TLS 入口访问，填 `https://你的域名` 或带端口的 HTTPS 地址。
 
 - **监控**：列目录（`allow_list`）、获取云存储信息（`allow_get_cloud_apis`）、查看传输任务（`allow_get_transfer_tasks`）。检查整台服务器时，将令牌的根目录设为 `/`。
 - **外网播放暂停/恢复**：再启用修改传输任务（`allow_modify_transfer_tasks`）。

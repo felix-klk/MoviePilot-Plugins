@@ -150,6 +150,8 @@ class PluginContractTests(unittest.TestCase):
                 self.assertEqual(defaults['playback_mode'], 'limit')
                 self.assertEqual(defaults['playback_upload_limit'], 350)
                 self.assertIn('高级设置', str(form))
+                self.assertNotIn('连接列表', str(form))
+                self.assertNotIn('多台连接或旧版配置', str(form))
                 self.assertNotIn('cloud_path', str(form))
                 self.assertNotIn('test-token', str(form))
                 p._Cd2Assistant__update_config()

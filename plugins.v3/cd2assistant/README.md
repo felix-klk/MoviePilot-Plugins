@@ -1,6 +1,6 @@
 # CloudDrive2助手：MoviePilot V3 外网播放暂停上传补丁
 
-基于用户提供的 Cd2Assistant 3.0.1 修改，补丁版本 3.3.0。只修改 V3 的 CloudDrive2助手；CloudDriveDisk 无需替换。
+基于用户提供的 Cd2Assistant 3.0.1 修改，补丁版本 3.3.1。只修改 V3 的 CloudDrive2助手；CloudDriveDisk 无需替换。
 
 3.1.0 使用插件私有 protobuf 描述符池，修复 `duplicate symbol clouddrive.ProxyType` 加载冲突，并保持 Windows 兼容。插件恢复原来的站点认证等级 2，MoviePilot 会按此等级显示插件。
 
@@ -23,7 +23,7 @@
 
    `https://github.com/felix-klk/MoviePilot-Plugins`
 
-2. 刷新插件商城，搜索 **CloudDrive2助手**，选择来自本仓库的 **3.3.0** 版本安装或更新。
+2. 刷新插件商城，搜索 **CloudDrive2助手**，选择来自本仓库的 **3.3.1** 版本安装或更新。
 3. 打开配置，分别填写服务器地址和 API 令牌（权限见下文），开启“启用插件”和“外网播放传输保护（忽略内网）”。
 4. 默认每 10 秒检查，所有外网播放停止或暂停后等待 45 秒恢复。
 
@@ -80,7 +80,7 @@
 
 ## API 令牌
 
-在 CloudDrive2 网页进入「API 令牌 → 创建令牌」，指定有效期和需要的权限。在插件首页分别填写服务器地址和 API 令牌。多台连接或旧账号密码配置可在「高级设置 → 多台连接或旧版配置」编辑，地址须从 MoviePilot 所在机器或容器可达。CloudDrive2 的默认 gRPC 端口是 19798；若通过支持 gRPC 的 TLS 入口访问，填 `https://你的域名` 或带端口的 HTTPS 地址。
+在 CloudDrive2 网页进入「API 令牌 → 创建令牌」，指定有效期和需要的权限。在插件首页分别填写服务器地址和 API 令牌。首页编辑首个连接，已保存的令牌留空即可沿用。其他已存在的连接继续运行。地址须从 MoviePilot 所在机器或容器可达。CloudDrive2 的默认 gRPC 端口是 19798；若通过支持 gRPC 的 TLS 入口访问，填 `https://你的域名` 或带端口的 HTTPS 地址。
 
 - **监控**：列目录（`allow_list`）、获取云存储信息（`allow_get_cloud_apis`）、查看传输任务（`allow_get_transfer_tasks`）。检查整台服务器时，将令牌的根目录设为 `/`。
 - **外网播放暂停/恢复**：再启用修改传输任务（`allow_modify_transfer_tasks`）。
