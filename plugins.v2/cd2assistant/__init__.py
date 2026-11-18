@@ -26,6 +26,7 @@ from app.schemas.types import EventType, NotificationType
 from .cd2client import CloudDriveConnection, proto
 from .health import inspect_health
 from .playback import CloudCopyAPI, CloudUploadAPI, UploadGuard, detect_external_playback
+from .settings_form import build_settings_form
 
 
 class CloudDriveInfo(BaseModel):
@@ -52,7 +53,7 @@ class Cd2Assistant(_PluginBase):
     plugin_name = "CloudDrive2助手 NEO(自用版)"
     plugin_desc = "监控CloudDrive2，外网播放时暂停上传，停止后自动恢复，忽略内网播放。"
     plugin_icon = "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/icons/clouddrive.png"
-    plugin_version = "2.2.0"
+    plugin_version = "2.3.0"
     plugin_author = "thsrite"
     author_url = "https://github.com/thsrite"
     plugin_config_prefix = "cd2assistant_"
@@ -115,6 +116,11 @@ class Cd2Assistant(_PluginBase):
         self._playback_resume_delay = self.__bounded_int(config.get("playback_resume_delay"), 45, 0, 3600)
         self._last_playback = "unchecked"
         self._playback_upload_limit = self.__bounded_int(config.get("playback_upload_limit"), 0, 0, 1000000)
+        mode = config.get("playback_mode")
+        if mode == "pause":
+            self._playback_upload_limit = 0
+        elif mode == "limit" and self._playback_upload_limit == 0:
+            self._playback_upload_limit = 200
         self._playback_proxy_sources = str(config.get("playback_proxy_sources") or "")
         self._playback_proxy_networks = []
         for value in re.split(r"[,，\s]+", self._playback_proxy_sources.strip()):
@@ -247,6 +253,7 @@ class Cd2Assistant(_PluginBase):
                 "playback_pause": self._playback_pause,
                 "playback_interval": self._playback_interval,
                 "playback_resume_delay": self._playback_resume_delay,
+                "playback_mode": "limit" if self._playback_upload_limit > 0 else "pause",
                 "playback_upload_limit": self._playback_upload_limit,
                 "playback_proxy_sources": self._playback_proxy_sources,
             }
@@ -735,193 +742,7 @@ class Cd2Assistant(_PluginBase):
             await asyncio.to_thread(self.check_playback)
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
-        """返回插件配置表单及默认配置。"""
-        message_options = [
-            {"title": item.value, "value": item.name}
-            for item in NotificationType
-        ]
-        return [
-            {
-                "component": "VForm",
-                "content": [
-                    {
-                        "component": "VRow",
-                        "content": [
-                            self.__field_control("VSwitch", "enabled", "启用插件", 3),
-                            self.__field_control("VSwitch", "notify", "开启通知", 3),
-                            self.__field_control("VSwitch", "cd2_restart", "cd2重启一次", 3),
-                            self.__field_control("VSwitch", "onlyonce", "立即运行一次", 3),
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            self.__field_control("VSwitch", "playback_pause", "外网播放传输保护（忽略内网）", 6),
-                            self.__field_control("VTextField", "playback_interval", "播放检查间隔（秒，5～300）", 3),
-                            self.__field_control("VTextField", "playback_resume_delay", "无人外网播放后恢复延迟（秒）", 3),
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            self.__field_control("VTextField", "playback_upload_limit", "播放时上传上限（KB/s，0=暂停）", 6),
-                            self.__field_control("VTextField", "playback_proxy_sources", "视为外网的代理来源 IP/CIDR", 6,
-                                                 "例如 192.168.1.5/32，多个用逗号分隔"),
-                        ],
-                    },
-                    {
-                        "component": "VAlert",
-                        "props": {"type": "info", "variant": "tonal", "text":
-                            "读取 MP 已配置的 Emby/Jellyfin/Plex。默认暂停上传和文件夹复制/移动，播放结束后仅恢复本插件暂停的任务。"
-                            "正数使用 CloudDrive2 全局上传限速，需令牌具有读取和修改系统设置权限；限速失败时改为暂停。"
-                            "只填写专供外网接入的代理来源；如果内外网共用代理，应先让媒体服务器识别真实客户端 IP。"},
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12},
-                                "content": [
-                                    {
-                                        "component": "VTextarea",
-                                        "props": {
-                                            "model": "cd2_confs",
-                                            "label": "CloudDrive2 连接配置",
-                                            "rows": 2,
-                                            "placeholder": "家里#http://127.0.0.1:19798#API令牌",
-                                            "hint": "每行一台：名称#地址#API令牌。旧的名称#地址#用户名#密码格式也可用。",
-                                            "persistent-hint": True,
-                                        },
-                                    }
-                                ],
-                            }
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            self.__field_control("VCronField", "cron", "检测周期", 4, "5位cron表达式"),
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
-                                    {
-                                        "component": "VSelect",
-                                        "props": {
-                                            "multiple": False,
-                                            "chips": True,
-                                            "model": "msgtype",
-                                            "label": "消息类型",
-                                            "items": message_options,
-                                        },
-                                    }
-                                ],
-                            },
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            self.__field_control("VTextField", "black_dir", "cd2黑名单目录", 4, "cd2上添加的本地目录(多个目录用英文逗号分隔)"),
-                            self.__field_control("VTextField", "cloud_path", "云下载路径", 4),
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12},
-                                "content": [
-                                    {
-                                        "component": "VAlert",
-                                        "props": {
-                                            "type": "info",
-                                            "variant": "tonal",
-                                            "text": "检查全部上传任务：Error 为可重试错误，FatalError 为上传失败。暂停、排队、取消不报失败；相同异常只通知一次，恢复后通知。旧版关键词不再限制错误检测。",
-                                        },
-                                    }
-                                ],
-                            }
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12},
-                                "content": [
-                                    {
-                                        "component": "VAlert",
-                                        "props": {
-                                            "type": "info",
-                                            "variant": "tonal",
-                                            "text": "检测服务登录与就绪状态、网盘锁定及强制刷新目录。空目录属于正常；超时、权限不足等单独报告，不推断 Cookie 过期。通知使用 MP 已配置渠道（如 Telegram），请在 MP 通知设置中开启对应消息类型。",
-                                        },
-                                    }
-                                ],
-                            }
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12},
-                                "content": [
-                                    {
-                                        "component": "VAlert",
-                                        "props": {"type": "success", "variant": "tonal"},
-                                        "content": [
-                                            {"component": "span", "text": "HomePage配置教程请参考："},
-                                            {
-                                                "component": "a",
-                                                "props": {
-                                                    "href": "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/docs/Cd2Assistant.md",
-                                                    "target": "_blank",
-                                                },
-                                                "text": "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/docs/Cd2Assistant.md",
-                                            },
-                                        ],
-                                    }
-                                ],
-                            }
-                        ],
-                    },
-                ],
-            }
-        ], {
-            "enabled": False,
-            "notify": False,
-            "onlyonce": False,
-            "cd2_restart": False,
-            "cron": "*/10 * * * *",
-            "keyword": "",
-            "cd2_confs": "",
-            "msgtype": "Manual",
-            "black_dir": "",
-            "cloud_path": "",
-            "playback_pause": False,
-            "playback_interval": 10,
-            "playback_resume_delay": 45,
-            "playback_upload_limit": 0,
-            "playback_proxy_sources": "",
-        }
-
-    @staticmethod
-    def __field_control(component: str, model: str, label: str, md: int, placeholder: str | None = None) -> dict:
-        """构造配置表单中的单字段列。"""
-        props = {"model": model, "label": label}
-        if placeholder:
-            props["placeholder"] = placeholder
-        return {
-            "component": "VCol",
-            "props": {"cols": 12, "md": md},
-            "content": [{"component": component, "props": props}],
-        }
+        return build_settings_form(NotificationType, self._playback_upload_limit)
 
     @staticmethod
     def __metric_card(label: str, value: Any) -> dict[str, Any]:

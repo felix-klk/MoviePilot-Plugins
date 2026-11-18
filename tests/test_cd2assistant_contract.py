@@ -139,6 +139,27 @@ class PluginContractTests(unittest.TestCase):
         self.assertIn('忽略内网', str(form))
         p.stop_service()
 
+    def test_compact_form_preserves_existing_settings(self):
+        for version in ('v2', 'v3'):
+            with self.subTest(version=version):
+                p = load_plugin(version).Cd2Assistant()
+                connection = 'home#http://nas:19798#test-token'
+                p.init_plugin({'playback_upload_limit': 350, 'cd2_confs': connection,
+                               'cloud_path': '/legacy-downloads'})
+                form, defaults = p.get_form()
+                self.assertEqual(defaults['playback_mode'], 'limit')
+                self.assertEqual(defaults['playback_upload_limit'], 350)
+                self.assertIn('高级设置', str(form))
+                self.assertNotIn('cloud_path', str(form))
+                self.assertNotIn('test-token', str(form))
+                p._Cd2Assistant__update_config()
+                self.assertEqual(p.config['cloud_path'], '/legacy-downloads')
+                self.assertEqual(p.config['cd2_confs'], connection)
+                p.init_plugin({**p.config, 'playback_mode': 'pause'})
+                self.assertEqual(p._playback_upload_limit, 0)
+                p.init_plugin({**p.config, 'playback_mode': 'limit', 'playback_upload_limit': ''})
+                self.assertEqual(p._playback_upload_limit, 200)
+
     def test_expired_token_refreshes_once_and_retries(self):
         class Expired(grpc.RpcError):
             def code(self):
