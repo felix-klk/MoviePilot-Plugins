@@ -9,7 +9,9 @@ import shutil
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..matching.subtitle_language import required_auto_languages
-from ..online_subtitles.matcher import AUTO_SEASON_ATTEMPT_LIMIT, log_auto_download_candidate, rank_auto_download_candidates
+from ..online_subtitles.matcher import (
+    AUTO_SEASON_ATTEMPT_LIMIT, auto_download_attempts, log_auto_download_candidate, rank_auto_download_candidates,
+)
 from ..matching.subtitle_validation import validate_online_subtitle_files
 from ..online.online_subtitle import build_search_keywords
 
@@ -183,12 +185,15 @@ class AutoTransferSeasonCache:
             targets=targets,
             scope="season",
         )
+        legacy_ranking = getattr(owner, "_auto_subtitle_legacy_ranking", False)
         candidates = rank_auto_download_candidates(
             search_result.get("results") or [],
             targets,
             getattr(owner, "_auto_subtitle_language_priority", None),
             strict=bool(getattr(owner, "_auto_subtitle_language_strict", False)),
             min_score=owner._auto_search_min_score,
+            legacy=legacy_ranking,
+            logger=self._logger,
         )
         if not candidates:
             return {
@@ -200,7 +205,9 @@ class AutoTransferSeasonCache:
 
         last_reason = ""
         best_partial_result: Optional[Dict[str, Any]] = None
-        for selected in candidates[:AUTO_SEASON_ATTEMPT_LIMIT]:
+        for selected in auto_download_attempts(
+            candidates, AUTO_SEASON_ATTEMPT_LIMIT, legacy=legacy_ranking, logger=self._logger,
+        ):
             log_auto_download_candidate(self._logger, selected)
             session_id = owner._hash_text(f"auto-season|{datetime.now().isoformat()}|{entries[0].get('id')}")[:16]
             session_dir = owner.services.upload_session().get_session_root() / session_id
@@ -229,27 +236,29 @@ class AutoTransferSeasonCache:
                     prepared_uploads.extend(extracted)
                 if not prepared_uploads:
                     last_reason = "整季结果未解析到字幕文件"
-                    continue
-                self._collaborators.store_cache(entries, prepared_uploads, selected)
-                write_result = self._collaborators.write_prepared_uploads_for_entries(
-                    target_entries=entries,
-                    prepared_uploads=prepared_uploads,
-                    session_dir=session_dir,
-                    selected_result=selected,
+                else:
+                    self._collaborators.store_cache(entries, prepared_uploads, selected)
+                    write_result = self._collaborators.write_prepared_uploads_for_entries(
+                        target_entries=entries,
+                        prepared_uploads=prepared_uploads,
+                        session_dir=session_dir,
+                        selected_result=selected,
+                    )
+                    last_reason = write_result.get("reason") or "整季包未匹配全部目标"
+                    if write_result.get("status") == "written":
+                        write_result["candidate_count"] = len(candidates)
+                        write_result["search_results"] = len(search_result.get("results") or [])
+                        write_result["season_package"] = True
+                        if write_result.get("coverage_complete", True):
+                            return write_result
+                        current_completed = owner._safe_int(write_result.get("completed_count"), 0)
+                        best_completed = owner._safe_int((best_partial_result or {}).get("completed_count"), 0)
+                        if not best_partial_result or current_completed > best_completed:
+                            best_partial_result = write_result
+                self._logger.info(
+                    "[SubtitleManualUpload] 整季字幕候选未完整入库 provider=%s id=%s reason=%s",
+                    selected.get("provider"), selected.get("result_id"), last_reason,
                 )
-                if write_result.get("status") == "written":
-                    write_result["candidate_count"] = len(candidates)
-                    write_result["search_results"] = len(search_result.get("results") or [])
-                    write_result["season_package"] = True
-                    if write_result.get("coverage_complete", True):
-                        return write_result
-                    current_completed = owner._safe_int(write_result.get("completed_count"), 0)
-                    best_completed = owner._safe_int((best_partial_result or {}).get("completed_count"), 0)
-                    if not best_partial_result or current_completed > best_completed:
-                        best_partial_result = write_result
-                    last_reason = write_result.get("reason") or "整季包未完整覆盖当前集数"
-                    continue
-                last_reason = write_result.get("reason") or "整季包未匹配当前集数"
             except Exception as exc:
                 last_reason = f"整季包下载/解析失败: {owner._normalize_text(exc)}"
                 self._logger.warning(

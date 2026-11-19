@@ -104,12 +104,13 @@ def test_subhd_unassociated_official_subtitle_is_excluded_from_auto_download(cli
         <div class="clearfix">
           <a href="/a/Ewznah" class="link-secondary">未关联</a>
           <a href="/a/Ewznah" class="link-dark">诺曼底72小时Pressure.2026.2160p.iT.WEB-DL.DV.HDR10+</a>
-          <span class="rounded p-1 text-white">官方字幕</span> 简体 SRT
+          <span class="rounded p-1 text-white">官方字幕</span><span class="p-1 fw-bold">简体</span> SRT
         </div>
         <div class="clearfix">
           <a href="/a/yI4GKr" class="link-dark align-middle">诺曼底72小时</a>
           <a href="/a/yI4GKr" class="link-dark">Pressure.2026.1080p.WEBRip</a>
-          <span class="rounded p-1 text-white">AI校对</span> 双语 简体 英语
+          <span class="rounded p-1 text-white">AI校对</span>
+          <span class="p-1 fw-bold">双语</span><span class="p-1 fw-bold">简体</span><span class="p-1 fw-bold">英语</span>
         </div>
     '''
     provider = module.SubHDProvider(
@@ -125,12 +126,14 @@ def test_subhd_unassociated_official_subtitle_is_excluded_from_auto_download(cli
     assert unassociated["result_id"] == "Ewznah"
     assert unassociated["identity_status"] == "strong"
     assert unassociated["subtitle_type"] == "官方字幕"
+    assert unassociated["language_bucket"] == "chi"
     assert unassociated["subhd_unassociated"] is True
     assert unassociated["downloadable"] is True
     assert unassociated["page_url"] == "https://subhd.tv/a/Ewznah"
     assert "标题别名命中 / 年份一致" in unassociated["match_detail"]
     assert "SubHD 未关联 · 仅手动选择" in unassociated["match_detail"]
     assert "subhd_unassociated" not in linked
+    assert linked["language"] == "简英双语"
 
     matcher = importlib.import_module("cf_test.online_subtitles.matcher")
     rejections = {}
@@ -245,7 +248,7 @@ def test_auto_download_ranks_same_version_by_match_popularity_and_recency(client
         item("other-source", 95, provider="subtitlecat"),
     ]
     ranked = matcher.rank_auto_download_candidates(
-        candidates, [{"basename": "压力 - 2160p WEB-DL"}], ["chi&eng", "chi"], strict=False,
+        candidates, [{"basename": "压力 - 2160p WEB-DL"}], ["chi&eng", "chi"], strict=False, legacy=True,
     )
 
     assert [item["result_id"] for item in ranked] == [
@@ -283,11 +286,89 @@ def test_auto_download_prioritizes_subhd_type_within_compatible_release(clients)
         ]
     ]
     ranked = matcher.rank_auto_download_candidates(
-        candidates, [{"basename": "Pressure_2160p_WEB-DL_Theatrical_Cut"}], ["chi&eng"], strict=False,
+        candidates, [{"basename": "Pressure_2160p_WEB-DL_Theatrical_Cut"}], ["chi&eng"], strict=False, legacy=True,
     )
     assert [item["result_id"] for item in ranked] == ["official", "ai", "other", "untagged", "different-release"]
     assert ranked[0]["auto_rank"]["subtitle_type"] == "官方字幕"
     assert ranked[3]["auto_rank"]["subtitle_type"] == "未标注"
+
+
+def test_auto_download_orders_release_identity_site_and_language_before_quality(clients):
+    matcher = importlib.import_module("cf_test.online_subtitles.matcher")
+    base = {
+        "provider": "subhd", "title": "Sample.S01E05.2160p.WEB-DL.HDR10.Theatrical Cut",
+        "identity_status": "strong", "language": "中英双语", "score": 62,
+    }
+    candidates = [
+        {**base, "result_id": "foreign-site-official", "provider": "subtitlecat", "subtitle_type": "官方字幕", "score": 99},
+        {**base, "result_id": "subhd-weak", "identity_status": "weak", "score": 99},
+        {**base, "result_id": "subhd-unmarked"},
+        {**base, "result_id": "subhd-lower-language", "language": "中日双语", "subtitle_type": "官方字幕", "score": 98},
+        {**base, "result_id": "compatible", "title": "Sample.S01E05.1080p.WEBRip.SDR.Theatrical Cut"},
+        {**base, "result_id": "no-release-evidence", "title": "Sample.S01E05"},
+        {**base, "result_id": "wrong-family", "title": "Sample.S01E05.2160p.BluRay.HDR10.Theatrical Cut"},
+        {**base, "result_id": "wrong-cut", "title": "Sample.S01E05.2160p.WEB-DL.HDR10.Director's Cut"},
+        {**base, "result_id": "wrong-episode", "title": "Sample.S01E06.2160p.WEB-DL.HDR10.Theatrical Cut"},
+        {**base, "result_id": "wrong-season", "title": "Sample.S02.2160p.WEB-DL.HDR10.Theatrical Cut"},
+        {**base, "result_id": "wrong-language", "language": "中韩双语"},
+        {**base, "result_id": "wrong-identity", "identity_status": "failed"},
+    ]
+    target = {"basename": base["title"], "season": 1, "episode": 5}
+    for ordering in (candidates, list(reversed(candidates))):
+        rejections = {}
+        ranked = matcher.rank_auto_download_candidates(
+            ordering, [target], ["chi&eng", "chi&jp"], strict=True, rejections=rejections,
+        )
+        assert [item["result_id"] for item in ranked] == [
+            "subhd-unmarked", "subhd-lower-language", "foreign-site-official", "subhd-weak",
+            "compatible", "no-release-evidence",
+        ]
+        assert ranked[0]["auto_rank"]["provider_priority"] == 35
+        assert ranked[-2]["auto_rank"]["release"] == "片源兼容"
+        assert ranked[-1]["auto_rank"]["release"] == "片源未确认"
+        assert rejections == {
+            "片源类型冲突": 1, "片源剪辑版本冲突": 1, "季集不匹配": 2,
+            "字幕语言不符合要求": 1, "媒体身份不匹配": 1,
+        }
+
+
+def test_auto_download_quality_scores_labels_recency_and_downloads(clients, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    matcher = importlib.import_module("cf_test.online_subtitles.matcher")
+    now = datetime(2026, 11, 19, 12, tzinfo=timezone.utc)
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, _timezone):
+            return now
+
+    monkeypatch.setattr(matcher, "datetime", FixedDatetime)
+    base = {"provider": "subhd", "title": "Sample.2160p.WEB-DL 官方字幕", "identity_status": "strong", "language": "中英双语"}
+    candidates = [
+        {**base, "result_id": "official", "score": 62, "subtitle_type": "官方字幕", "download_count": 463,
+         "uploaded_at": (now - timedelta(days=60)).isoformat()},
+        {**base, "result_id": "ai", "score": 80, "subtitle_type": "AI精校", "download_count": 99_999,
+         "uploaded_at": now.isoformat()},
+        {**base, "result_id": "other", "score": 85, "subtitle_type": "其他来源",
+         "uploaded_at": (now - timedelta(days=7)).isoformat()},
+        {**base, "result_id": "human", "score": 80, "subtitle_type": "人工校对",
+         "uploaded_at": (now - timedelta(days=90)).isoformat()},
+        {**base, "result_id": "unmarked-b", "score": 80, "uploaded_at": (now + timedelta(days=1)).isoformat()},
+        {**base, "result_id": "unmarked-a", "score": 80, "uploaded_at": "invalid"},
+        {**base, "result_id": "raw-ai", "score": 80, "subtitle_type": "未经校对AI翻译"},
+    ]
+    ranked = matcher.rank_auto_download_candidates(candidates, [{"basename": "Sample.2160p.WEB-DL"}], [], strict=False)
+    assert [item["result_id"] for item in ranked] == ["other", "ai", "human", "unmarked-a", "unmarked-b", "raw-ai", "official"]
+    by_id = {item["result_id"]: item["auto_rank"] for item in ranked}
+    assert by_id["ai"]["total"] == 87.5
+    assert by_id["other"]["total"] == pytest.approx(87.767)
+    assert by_id["official"]["type_bonus"] - by_id["ai"]["type_bonus"] == 1
+    assert by_id["human"]["type_bonus"] == 3
+    assert by_id["human"]["time_bonus"] == 0
+    assert by_id["official"]["time_bonus"] == 1
+    assert by_id["raw-ai"]["type_bonus"] == -1
+    for result_id in ["unmarked-a", "unmarked-b"]:
+        assert by_id[result_id]["download_bonus"] == by_id[result_id]["time_bonus"] == by_id[result_id]["type_bonus"] == 0
 
 
 @pytest.mark.parametrize("direct_body", [b"PK\x03\x04subtitle", b"<html>unavailable</html>", None])

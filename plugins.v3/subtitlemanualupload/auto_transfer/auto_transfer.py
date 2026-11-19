@@ -10,6 +10,7 @@ from ..online_subtitles.matcher import (
     _episode_from_text,
     _safe_int,
     _season_matches_text,
+    auto_download_attempts,
     rank_auto_download_candidates,
 )
 from ..online_subtitles.models import OnlineSubtitleResult
@@ -30,17 +31,20 @@ from ..matching.subtitle_language import (
 
 
 def _result_matches_preview_targets(
-    item: Dict[str, Any], targets: List[Dict[str, Any]], require_season_evidence: bool,
+    item: Dict[str, Any], targets: List[Dict[str, Any]], require_season_evidence: bool, *, legacy: bool,
 ) -> bool:
     season, episode = _episode_from_text(item["title"]) or (0, 0)
     season = item["season"] or season
+    has_season_evidence = not require_season_evidence or bool(season) or _season_matches_text(item["title"], targets)
+    if not legacy:
+        return has_season_evidence
     episode = item["episode"] or episode
     seasons = {_safe_int(target.get("season")) for target in targets} - {0}
     if season and seasons and season not in seasons:
         return False
     if episode and not any(_safe_int(target.get("episode")) == episode for target in targets):
         return False
-    return not require_season_evidence or bool(season) or _season_matches_text(item["title"], targets)
+    return has_season_evidence
 
 
 @dataclass(frozen=True)
@@ -424,6 +428,7 @@ class AutoTransferService:
         providers = self.auto_search_providers()
         priority = getattr(owner, "_auto_subtitle_language_priority", None)
         strict = bool(getattr(owner, "_auto_subtitle_language_strict", False))
+        legacy_ranking = getattr(owner, "_auto_subtitle_legacy_ranking", False)
         strategy = owner._normalize_auto_transfer_subtitle_strategy(owner._auto_transfer_subtitle_strategy)
         available = [item.to_dict() for item in results if item.provider in providers]
         skipped = []
@@ -459,15 +464,17 @@ class AutoTransferService:
             candidates = [
                 item for item in available
                 if targets[0].get("media_type") != "tv"
-                or _result_matches_preview_targets(item, targets, require_season_evidence)
+                or _result_matches_preview_targets(item, targets, require_season_evidence, legacy=legacy_ranking)
             ]
             if len(candidates) < len(available):
                 rejections["季集不匹配或未确认"] = len(available) - len(candidates)
             candidates = rank_auto_download_candidates(
                 candidates, targets, priority,
                 strict=strict, min_score=owner._auto_search_min_score, rejections=rejections,
+                legacy=legacy_ranking,
             )
             attempt_limit = AUTO_SEASON_ATTEMPT_LIMIT if season_scope else AUTO_DOWNLOAD_ATTEMPT_LIMIT
+            attempts = auto_download_attempts(candidates, attempt_limit, legacy=legacy_ranking)
             label = targets[0]["label"]
             if len(targets) > 1:
                 label = f"第 {targets[0].get('season') or 0} 季 · {len(targets)} 个目标"
@@ -477,7 +484,7 @@ class AutoTransferService:
                 "scope": "season" if season_scope else "single",
                 "candidates": [
                     {key: item[key] for key in ("provider", "result_id", "title", "match_detail", "auto_rank")}
-                    for item in candidates[:attempt_limit]
+                    for item in attempts
                 ],
                 "candidate_count": len(candidates),
                 "rejections": rejections,
@@ -486,6 +493,7 @@ class AutoTransferService:
             "enabled": bool(owner.get_state() and owner._auto_search_on_transfer),
             "min_score": owner._auto_search_min_score,
             "required_languages": required_auto_languages(priority, strict=strict),
+            "legacy_ranking": legacy_ranking,
             "plans": plans,
             "skipped": skipped,
         }

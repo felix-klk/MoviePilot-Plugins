@@ -14,11 +14,20 @@ from .base import BaseSubtitleProvider, _subhd_manual_url
 
 _SUBHD_LABELS = {
     "官方字幕": "官方字幕",
+    "AI精校": "AI精校",
     "AI校对": "AI校对",
     "AI校對": "AI校对",
+    "人工校对": "人工校对",
+    "人工校對": "人工校对",
+    "未经校对AI翻译": "未经校对AI翻译",
+    "未經校對AI翻譯": "未经校对AI翻译",
     "其他来源": "其他来源",
     "其他來源": "其他来源",
 }
+_SUBHD_LANGUAGE_BADGES = {
+    "双语", "简体", "繁体", "英语", "日语", "韩语", "其他", "其它",
+}
+_SUBHD_BADGE_TRANSLATION = str.maketrans("雙簡體語韓", "双简体语韩")
 
 
 def _subtitle_listing_metadata(text: str) -> Dict[str, Dict[str, Any]]:
@@ -53,6 +62,12 @@ def _subtitle_listing_metadata(text: str) -> Dict[str, Dict[str, Any]]:
         }
         if len(labels) == 1:
             fields["subtitle_type"] = labels.pop()
+        language_badges = [
+            label for badge in container.select("span.fw-bold")
+            if (label := badge.get_text(strip=True).translate(_SUBHD_BADGE_TRANSLATION)) in _SUBHD_LANGUAGE_BADGES
+        ]
+        if language_badges:
+            fields["language_text"] = " ".join(language_badges)
 
         count = count_node.get_text(strip=True) if count_node is not None else ""
         if re.fullmatch(r"[0-9]{1,15}|[0-9]{1,3}(?:[,，][0-9]{3}){1,4}", count):
@@ -323,7 +338,8 @@ class SubHDProvider(BaseSubtitleProvider):
                 match_detail = " / ".join(filter(None, (match_detail, "SubHD 未关联 · 仅手动选择")))
             window_start = max(0, match.start() - 700)
             window_end = min(len(text or ""), match.end() + 300)
-            language_text = f"{title} {_strip_tags((text or '')[window_start:window_end])}"
+            listing_text = f"{title} {_strip_tags((text or '')[window_start:window_end])}"
+            language_text = listing.get("language_text") or listing_text
             page = urljoin(self.root_url, href)
             results.append(
                 OnlineSubtitleResult(
@@ -338,7 +354,7 @@ class SubHDProvider(BaseSubtitleProvider):
                     download_url=f"subhd-page:{page}",
                     language=_guess_language_label(language_text),
                     language_category=_language_category_from_text(language_text),
-                    format=_guess_subtitle_format(language_text),
+                    format=_guess_subtitle_format(listing_text),
                     season=season,
                     episode=episode,
                     score=assessment["score"] + 10,

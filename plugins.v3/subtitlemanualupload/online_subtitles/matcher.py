@@ -9,7 +9,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from ..matching.subtitle_language import (
     auto_candidate_language_bucket,
     auto_candidate_language_rank,
-    auto_rank_candidates,
+    normalize_auto_language_priority,
+    online_result_language_bucket,
     required_auto_languages,
 )
 from .keyword_builder import (
@@ -79,21 +80,29 @@ def online_search_sort_key(item: Any) -> Tuple[int, int, int, int, str]:
     return _provider_priority(item), _identity_priority(item), _language_priority(item), item.score, item.title
 
 
-def _release_profile(value: str) -> Tuple[str, str]:
+def _release_profile(value: str, *, legacy: bool = False) -> Tuple[str, str]:
     value = value.replace("_", " ")
-    source = re.search(
+    source_markers = re.findall(
         r"\b(?:web[ .-]*dl|web[ .-]*rip|remux|blu[ .-]*ray|b[dr][ .-]*rip|hdtv|dvd[ .-]*rip)\b",
         value,
         re.I,
     )
-    kind = re.sub(r"[ ._-]+", "", source.group(0).lower()) if source else ""
-    if kind in {"bdrip", "brrip"}:
-        kind = "bluray"
-    resolution = re.search(r"\b(?:4320|2160|1080|720|576|480)[pi]\b", value, re.I)
-    return kind, resolution.group(0).lower() if resolution else ""
+    sources = [re.sub(r"[ ._-]+", "", marker.lower()) for marker in source_markers]
+    sources = ["bluray" if source in {"bdrip", "brrip"} else source for source in sources]
+    families = {_RELEASE_FAMILY.get(source) for source in sources}
+    kind = sources[0] if sources and (legacy or len(families) == 1) else ""
+    resolutions = re.findall(r"\b(?:4320|2160|1080|720|576|480)[pi]\b", value.lower())
+    resolution = resolutions[0] if resolutions and (legacy or len(set(resolutions)) == 1) else ""
+    return kind, resolution
 
 
 _SUBTITLE_TYPE_ORDER = {"官方字幕": 0, "AI校对": 1, "其他来源": 2}
+_SUBTITLE_TYPE_BONUS = {"官方字幕": 4, "AI精校": 3, "AI校对": 3, "人工校对": 3, "未经校对AI翻译": -1}
+_AUTO_IDENTITY_PRIORITY = {"strong": 2, "weak": 1}
+_RELEASE_FAMILY = {
+    "webdl": "web", "webrip": "web", "bluray": "bluray", "remux": "bluray",
+    "dvdrip": "dvd", "hdtv": "broadcast",
+}
 AUTO_DOWNLOAD_ATTEMPT_LIMIT = 5
 AUTO_SEASON_ATTEMPT_LIMIT = 3
 _RELEASE_EDITION = re.compile(
@@ -109,6 +118,52 @@ def _release_edition(title: str) -> str:
     return next(iter(editions)) if len(editions) == 1 else ""
 
 
+def _release_dynamic_range(title: str) -> str:
+    markers = re.findall(r"\b(?:SDR|HDR(?:10)?\+?|HLG|DV|DOLBY[ .-]+VISION)\b", title.replace("_", " "), re.I)
+    ranges = {"sdr" if marker.lower() == "sdr" else "hdr" for marker in markers}
+    return next(iter(ranges)) if len(ranges) == 1 else ""
+
+
+def _release_compatibility(
+    target: Tuple[str, str, str, str], candidate: Tuple[str, str, str, str],
+) -> int:
+    source, resolution, edition, dynamic_range = target
+    found_source, found_resolution, found_edition, found_range = candidate
+    source_family = _RELEASE_FAMILY.get(source)
+    found_family = _RELEASE_FAMILY.get(found_source)
+    if source_family and found_family and source_family != found_family:
+        return -1
+    if (source and source == found_source and resolution and resolution == found_resolution
+            and edition == found_edition and (not dynamic_range or dynamic_range == found_range)):
+        return 2
+    if (source_family and source_family == found_family) or (resolution and resolution == found_resolution):
+        return 1
+    return 0
+
+
+def _has_episode_conflict(item: Dict[str, Any], targets: List[Dict[str, Any]]) -> bool:
+    title = str(item.get("title") or "").replace("_", " ")
+    season_hint, episode_hint = _episode_from_text(title) or (0, 0)
+    seasons = {_safe_int(item.get("season")) or season_hint} - {0}
+    if not seasons:
+        seasons = {
+            int(first or second)
+            for first, second in re.findall(r"(?i)\bS(\d{1,2})\b|第\s*(\d{1,2})\s*季", title)
+        }
+    episode = _safe_int(item.get("episode")) or episode_hint
+    if re.search(r"(?i)E\d{1,3}\s*[-~至]\s*(?:S\d{1,2})?E\d{1,3}\b", title):
+        episode = 0
+    for target in targets:
+        season = _safe_int(target.get("season"))
+        expected_episode = _safe_int(target.get("episode"))
+        if seasons and season and season not in seasons:
+            continue
+        if episode and expected_episode and episode != expected_episode:
+            continue
+        return False
+    return bool(targets)
+
+
 def rank_auto_download_candidates(
     candidates: List[Dict[str, Any]],
     targets: List[Dict[str, Any]],
@@ -117,23 +172,34 @@ def rank_auto_download_candidates(
     strict: bool,
     min_score: Optional[int] = None,
     rejections: Optional[Dict[str, int]] = None,
+    legacy: bool = False,
+    logger: Any = None,
 ) -> List[Dict[str, Any]]:
     required = required_auto_languages(language_priority, strict=strict)
     priority = language_priority if required is None else required
+    language_order = normalize_auto_language_priority(priority)
     target_names = [
         str(target.get("basename") or target.get("filename") or target.get("label") or "")
         for target in targets
     ]
-    target_profiles = {_release_profile(name) for name in target_names} - {("", "")}
+    target_profiles = {_release_profile(name, legacy=legacy) for name in target_names} - {("", "")}
     target_release = next(iter(target_profiles)) if len(target_profiles) == 1 else ("", "")
     target_editions = {_release_edition(name) for name in target_names}
     target_edition = next(iter(target_editions)) if len(target_editions) == 1 else ""
+    target_ranges = {_release_dynamic_range(name) for name in target_names} - {""}
+    target_range = next(iter(target_ranges)) if len(target_ranges) == 1 else ""
 
     eligible = []
     provider_order = {}
     identity_order = {}
     for item in candidates:
-        edition = _release_edition(str(item.get("title") or ""))
+        title = str(item.get("title") or "")
+        edition = _release_edition(title)
+        release = _release_profile(title, legacy=legacy)
+        release_rank = _release_compatibility(
+            (*target_release, target_edition, target_range), (*release, edition, _release_dynamic_range(title)),
+        )
+        bucket = auto_candidate_language_bucket(item)
         reason = ""
         if item.get("provider") == "subhd" and item.get("subhd_unassociated") is True:
             reason = "SubHD 未关联"
@@ -143,74 +209,125 @@ def rank_auto_download_candidates(
             reason = f"匹配分低于 {min_score}"
         elif item.get("identity_status") == "failed":
             reason = "媒体身份不匹配"
+        elif not legacy and _has_episode_conflict(item, targets):
+            reason = "季集不匹配"
         elif edition and target_edition and edition != target_edition:
             reason = "片源剪辑版本冲突"
+        elif not legacy and release_rank == -1:
+            reason = "片源类型冲突"
+        if not reason and legacy:
+            provider = item.get("provider")
+            identity = provider, item.get("identity_status")
+            provider_order.setdefault(provider, len(provider_order))
+            identity_order.setdefault(identity, len(identity_order))
+        if not reason and (required == [] or (required is not None and bucket != "und" and bucket not in required)):
+            reason = "字幕语言不符合要求"
         if reason:
             if rejections is not None:
                 rejections[reason] = rejections.get(reason, 0) + 1
+            if logger is not None:
+                logger.info(
+                    "[SubtitleManualUpload] 自动字幕候选跳过 provider=%s id=%s title=%s reason=%s",
+                    item.get("provider"), item.get("result_id"), title, reason,
+                )
             continue
-        provider = item.get("provider")
-        identity = provider, item.get("identity_status")
-        provider_order.setdefault(provider, len(provider_order))
-        identity_order.setdefault(identity, len(identity_order))
-        eligible.append(item)
-    allowed = auto_rank_candidates(eligible, language_priority, strict=strict)
-    if rejections is not None and len(allowed) < len(eligible):
-        rejections["字幕语言不符合要求"] = len(eligible) - len(allowed)
+        eligible.append((dict(item), release, edition, release_rank))
     now = datetime.now(timezone.utc)
 
-    def rank(item: Dict[str, Any]) -> Tuple[int, int, int, Tuple[int, int], int, float, int]:
-        title = str(item.get("title") or "")
-        release = _release_profile(title)
-        edition = _release_edition(title)
-        release_rank = 0
-        if any(known and found and known != found for known, found in zip(target_release, release)):
-            release_rank = -1
-        elif (
-            target_release[0] and target_edition == edition
-            and all(not known or known == found for known, found in zip(target_release, release))
-        ):
-            release_rank = 1
+    def rank(candidate: Tuple[Dict[str, Any], Tuple[str, str], str, int]) -> tuple:
+        item, release, edition, release_rank = candidate
+        if legacy:
+            release_rank = 0
+            if any(known and found and known != found for known, found in zip(target_release, release)):
+                release_rank = -1
+            elif (
+                target_release[0] and target_edition == edition
+                and all(not known or known == found for known, found in zip(target_release, release))
+            ):
+                release_rank = 1
 
         score = _safe_int(item.get("score"))
         count = item.get("download_count")
-        download_bonus = min(3.0, 0.75 * log10(count + 1)) if type(count) is int and count >= 0 else 0.0
+        max_download_bonus = 3.0 if legacy else 1.5
+        download_bonus = (
+            min(max_download_bonus, max_download_bonus / 4 * log10(count + 1))
+            if type(count) is int and count >= 0 else 0.0
+        )
         uploaded_at = item.get("uploaded_at")
         time_bonus = 0.0
+        upload_age = float("inf")
         if isinstance(uploaded_at, str) and uploaded_at:
             try:
                 uploaded = datetime.fromisoformat(uploaded_at)
                 if uploaded.utcoffset() is not None:
                     age = (now - uploaded).total_seconds() / 86400
-                    if 0 <= age < 90:
-                        time_bonus = 2.0 * (1.0 - age / 90)
+                    if age >= 0:
+                        upload_age = age
+                        time_bonus = (2.0 if legacy else 3.0) * max(0.0, 1.0 - age / 90)
             except (ValueError, OverflowError):
                 pass
-        total = score + download_bonus + time_bonus
         subtitle_type = item.get("subtitle_type") or "未标注"
+        type_bonus = 0 if legacy else _SUBTITLE_TYPE_BONUS.get(subtitle_type, 0)
+        total = score + type_bonus + download_bonus + time_bonus
+        provider = item.get("provider")
+        provider_priority = PROVIDER_SPECS.get(provider, {}).get("priority", 0)
+        identity_status = item.get("identity_status") or ""
+        language_bucket = auto_candidate_language_bucket(item)
+        language_rank = auto_candidate_language_rank(item, priority)
+        if not legacy and language_bucket == "und":
+            listed_language = online_result_language_bucket(item)
+            if listed_language in language_order:
+                language_bucket = listed_language
+                language_rank = (0, language_order.index(listed_language))
+        release_labels = ("片源不同", "片源未确认", "片源匹配") if legacy else ("片源未确认", "片源兼容", "片源匹配")
         item["auto_rank"] = {
-            "release": ("片源不同", "片源未确认", "片源匹配")[release_rank + 1],
+            "release": release_labels[release_rank + int(legacy)],
+            "identity_status": identity_status,
+            "provider_priority": provider_priority,
             "subtitle_type": subtitle_type,
-            "language_bucket": auto_candidate_language_bucket(item),
+            "language_bucket": language_bucket,
             "match": score,
             "downloads": count,
             "uploaded_at": uploaded_at,
+            "type_bonus": type_bonus,
             "download_bonus": round(download_bonus, 3),
             "time_bonus": round(time_bonus, 3),
             "total": round(total, 3),
         }
-        provider = item.get("provider")
+        if legacy:
+            return (
+                -release_rank, provider_order[provider],
+                _SUBTITLE_TYPE_ORDER.get(subtitle_type, len(_SUBTITLE_TYPE_ORDER)),
+                language_rank, identity_order[provider, item.get("identity_status")], -total, -score,
+            )
         return (
-            -release_rank,
-            provider_order[provider],
-            _SUBTITLE_TYPE_ORDER.get(subtitle_type, len(_SUBTITLE_TYPE_ORDER)),
-            auto_candidate_language_rank(item, priority),
-            identity_order[provider, item.get("identity_status")],
-            -total,
-            -score,
+            -release_rank, -_AUTO_IDENTITY_PRIORITY.get(identity_status, 0), -provider_priority,
+            language_rank, -total, -score, -type_bonus, upload_age,
+            str(provider or ""), str(item.get("result_id") or ""),
         )
 
-    return sorted((dict(item) for item in allowed), key=rank)
+    return [candidate[0] for candidate in sorted(eligible, key=rank)]
+
+
+def auto_download_attempts(
+    candidates: List[Dict[str, Any]], limit: int, *, legacy: bool = False, logger: Any = None,
+) -> List[Dict[str, Any]]:
+    attempts = candidates[:limit]
+    fallback = None
+    if not legacy and attempts and len(attempts) == limit and all(item.get("provider") == "subhd" for item in attempts):
+        fallback = next((item for item in candidates[limit:] if item.get("provider") != "subhd"), None)
+        if fallback is not None:
+            attempts[-1] = fallback
+    if logger is not None and attempts:
+        logger.info(
+            "[SubtitleManualUpload] 自动字幕尝试顺序 candidates=%s attempts=%s cross_site_fallback=%s",
+            len(candidates), [(item.get("provider"), item.get("result_id")) for item in attempts],
+            fallback is not None,
+        )
+    return [
+        {**item, "auto_rank": {**item["auto_rank"], "position": position, "fallback": item is fallback}}
+        for position, item in enumerate(attempts, start=1)
+    ]
 
 
 def log_auto_download_candidate(logger: Any, candidate: Dict[str, Any]) -> None:

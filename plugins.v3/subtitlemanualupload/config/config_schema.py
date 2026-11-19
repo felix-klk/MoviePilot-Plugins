@@ -53,6 +53,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "manual_strm_paths": [],
     "auto_search_on_manual_strm": False,
     "auto_multi_subtitle_mode": "best",
+    "auto_subtitle_legacy_ranking": False,
     "auto_subtitle_language_priority": list(DEFAULT_AUTO_LANGUAGE_PRIORITY),
     "auto_subtitle_language_strict": False,
     "auto_subtitle_format_priority": list(DEFAULT_AUTO_FORMAT_PRIORITY),
@@ -268,6 +269,7 @@ def normalize_plugin_config(
         "manual_strm_paths": normalize_manual_strm_paths(raw_config.get("manual_strm_paths")),
         "auto_search_on_manual_strm": bool(raw_config.get("auto_search_on_manual_strm", False)),
         "auto_multi_subtitle_mode": normalize_auto_multi_subtitle_mode(raw_config.get("auto_multi_subtitle_mode")),
+        "auto_subtitle_legacy_ranking": bool(raw_config.get("auto_subtitle_legacy_ranking", False)),
         "auto_subtitle_language_priority": language_priority,
         "auto_subtitle_language_strict": language_strict,
         "auto_subtitle_format_priority": normalize_auto_format_priority(
@@ -416,6 +418,11 @@ def build_config_form(
                     _col(
                         "VSwitch",
                         {"model": "auto_skip_chinese_media_on_transfer", "label": "入库自动处理跳过中文资源"},
+                        md=6,
+                    ),
+                    _col(
+                        "VSwitch",
+                        {"model": "auto_subtitle_legacy_ranking", "label": "使用 1.2.34 自动字幕排序"},
                         md=6,
                     ),
                     _col(

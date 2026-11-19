@@ -138,6 +138,37 @@ def serve_zip(workflow, content, titles=("Show 双语",)):
     workflow.online.download.side_effect = lambda selected: [{"provider": "assrt", "source_name": "Show.zip", "content": content, "result": selected[0]}]
 
 
+@pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)
+@pytest.mark.parametrize("is_season", [False, True])
+def test_v3_attempts_other_site_within_download_budget(workflow, tmp_path, is_season):
+    episodes = (1, 2) if is_season else (1,)
+    entries = [entry_for(tmp_path, episode) for episode in episodes]
+    title = "Show.S01" if is_season else "Show.S01E01"
+    candidate = {"title": title, "score": 80, "language": "简英双语", "identity_status": "strong"}
+    workflow.online.search.return_value = {"results": [
+        {**candidate, "provider": "subhd", "result_id": f"subhd-{index}"} for index in range(6)
+    ] + [{**candidate, "provider": "assrt", "result_id": "backup"}]}
+
+    def download(selected):
+        result = selected[0]
+        if result["result_id"] == "subhd-0":
+            raise ValueError("download failed")
+        languages = ("chi.eng",) if result["result_id"] == "backup" else ("chi",)
+        return [{
+            "provider": result["provider"], "source_name": "Show.zip",
+            "content": subtitle_zip(episodes=episodes, languages=languages), "result": result,
+        }]
+
+    workflow.online.download.side_effect = download
+    result = workflow.season.search_write_package(entries) if is_season else workflow.processor.process_entry(entries[0])
+    assert result["status"] == "written", result
+    tried = [call.args[0][0]["result_id"] for call in workflow.online.download.call_args_list]
+    subhd_limit = 2 if is_season else 4
+    assert tried == [*(f"subhd-{index}" for index in range(subhd_limit)), "backup"]
+    assert len(list(tmp_path.glob("*.中英双语.zh-CN.srt"))) == len(episodes)
+    workflow.ai.assert_not_called()
+
+
 @pytest.mark.parametrize("strict", [False, True])
 @pytest.mark.parametrize("mode", ["best", "chinese_all", "all"])
 def test_selected_bilingual_zip_writes_only_required_pair(workflow, tmp_path, mode, strict):
@@ -224,6 +255,17 @@ def test_language_config_round_trip_and_empty_validation(sup_modules):
         assert reloaded["auto_subtitle_language_strict"] is True
     with pytest.raises(ValueError, match="至少选择一种语言"):
         schema.normalize_plugin_config({"auto_subtitle_language_priority": [], "auto_subtitle_language_strict": True})
+
+
+@pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)
+def test_v3_legacy_ranking_switch_round_trips(sup_modules):
+    schema = sup_modules.load("config.config_schema")
+    runtime = sup_modules.load("config.config_runtime")
+    assert schema.normalize_plugin_config({})["auto_subtitle_legacy_ranking"] is False
+    owner = types.SimpleNamespace()
+    runtime.apply_runtime_config(owner, schema.normalize_plugin_config({"auto_subtitle_legacy_ranking": True}))
+    saved = runtime.build_save_config_payload(owner)
+    assert schema.normalize_plugin_config(saved)["auto_subtitle_legacy_ranking"] is True
 
 
 @pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)

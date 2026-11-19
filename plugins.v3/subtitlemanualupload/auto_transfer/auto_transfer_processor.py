@@ -7,7 +7,9 @@ import shutil
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..matching.subtitle_language import required_auto_languages
-from ..online_subtitles.matcher import AUTO_DOWNLOAD_ATTEMPT_LIMIT, log_auto_download_candidate, rank_auto_download_candidates
+from ..online_subtitles.matcher import (
+    AUTO_DOWNLOAD_ATTEMPT_LIMIT, auto_download_attempts, log_auto_download_candidate, rank_auto_download_candidates,
+)
 from ..online.online_subtitle import build_search_keywords
 
 
@@ -82,12 +84,15 @@ class AutoTransferProcessor:
             targets=[target],
             scope="auto",
         )
+        legacy_ranking = getattr(owner, "_auto_subtitle_legacy_ranking", False)
         candidates = rank_auto_download_candidates(
             search_result.get("results") or [],
             [target],
             getattr(owner, "_auto_subtitle_language_priority", None),
             strict=bool(getattr(owner, "_auto_subtitle_language_strict", False)),
             min_score=owner._auto_search_min_score,
+            legacy=legacy_ranking,
+            logger=self._logger,
         )
         if not candidates:
             return {
@@ -99,7 +104,9 @@ class AutoTransferProcessor:
             }
 
         last_reason = ""
-        for selected in candidates[:AUTO_DOWNLOAD_ATTEMPT_LIMIT]:
+        for selected in auto_download_attempts(
+            candidates, AUTO_DOWNLOAD_ATTEMPT_LIMIT, legacy=legacy_ranking, logger=self._logger,
+        ):
             log_auto_download_candidate(self._logger, selected)
             session_id = owner._hash_text(f"auto|{datetime.now().isoformat()}|{entry.get('id')}")[:16]
             session_dir = owner.services.upload_session().get_session_root() / session_id
@@ -195,6 +202,10 @@ class AutoTransferProcessor:
                         "search_results": len(search_result.get("results") or []),
                     }
                 last_reason = write_result.get("reason") or "下载包字幕未按偏好匹配"
+                self._logger.info(
+                    "[SubtitleManualUpload] 自动字幕候选未入库 provider=%s id=%s reason=%s",
+                    selected.get("provider"), selected.get("result_id"), last_reason,
+                )
             except Exception as exc:
                 last_reason = f"自动下载在线字幕失败: {owner._normalize_text(exc)}"
                 self._logger.warning(

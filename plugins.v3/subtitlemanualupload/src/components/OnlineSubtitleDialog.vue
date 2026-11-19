@@ -1,6 +1,5 @@
 <script setup>
 import { computed } from 'vue'
-import { onlineLanguageItems } from '../utils/onlineResult'
 
 const downloadCountFormat = new Intl.NumberFormat('zh-CN')
 const uploadTimeFormat = new Intl.DateTimeFormat('zh-CN', {
@@ -92,11 +91,16 @@ const hasActiveFilters = computed(() => (
   props.onlineLanguageFilter !== 'all' || props.onlineProviderFilter !== 'all'
   || ['days', 'minimum', 'type'].some(field => props.onlineResultFilters[field] !== 'all')
 ))
+const languageLabels = {
+  chi: '简体中文', cht: '繁体中文', eng: '英文', jpn: '日文', kor: '韩文',
+  'chi&eng': '中英双语', 'chi&jp': '中日双语', 'chi&kr': '中韩双语', other_bilingual: '其他中外双语',
+  und: '待解包确认',
+}
+const identityLabels = { strong: '强匹配', weak: '弱匹配' }
 const requiredLanguages = computed(() => {
   const languages = props.onlineAutoPreview?.required_languages
   if (languages === null || languages === undefined) return ''
-  const labels = { chi: '简体中文', cht: '繁体中文', eng: '英文', ...Object.fromEntries(onlineLanguageItems.map(item => [item.value, item.title])) }
-  return languages.length ? languages.map(language => labels[language] || language).join('、') : '未配置可接受的语言'
+  return languages.length ? languages.map(language => languageLabels[language] || language).join('、') : '未配置可接受的语言'
 })
 </script>
 
@@ -324,6 +328,7 @@ const requiredLanguages = computed(() => {
               <p v-else-if="onlineAutoPreview.error" role="alert">{{ onlineAutoPreview.error }}</p>
               <template v-else>
                 <p v-if="!onlineAutoPreview.enabled">入库自动搜索未启用，以下为按当前配置预判。</p>
+                <p v-if="onlineAutoPreview.legacy_ranking">当前使用 1.2.34 排序。</p>
                 <div v-for="skipped in onlineAutoPreview.skipped" :key="skipped.target_id" class="online-auto-skipped">
                   <strong>{{ skipped.target }}</strong>
                   <span>{{ skipped.reason }}</span>
@@ -352,20 +357,35 @@ const requiredLanguages = computed(() => {
                     <ol v-if="plan.candidates.length">
                       <li v-for="candidate in plan.candidates" :key="onlineResultKey(candidate)">
                         <strong>{{ candidate.title }}</strong>
+                        <span v-if="candidate.auto_rank.fallback" class="online-auto-badge">跨站备选</span>
                         <p>
-                          {{ providerName(candidate.provider) }} · {{ candidate.auto_rank.release }}
+                          {{ candidate.auto_rank.release }}
+                          · 身份{{ identityLabels[candidate.auto_rank.identity_status] || '待确认' }}
+                          · {{ providerName(candidate.provider) }}（优先级 {{ candidate.auto_rank.provider_priority }}）
                           · {{ candidate.auto_rank.subtitle_type }}
-                          <template v-if="candidate.auto_rank.language_bucket === 'und'"> · 语言待解包确认</template>
+                          · 语言{{ languageLabels[candidate.auto_rank.language_bucket] || '待解包确认' }}
                         </p>
                         <p>
-                          基础 {{ candidate.auto_rank.match }} · 下载量 +{{ candidate.auto_rank.download_bonus }}
+                          基础 {{ candidate.auto_rank.match }}
+                          <template v-if="!onlineAutoPreview.legacy_ranking">
+                            · 类型 {{ candidate.auto_rank.type_bonus >= 0 ? '+' : '' }}{{ candidate.auto_rank.type_bonus }}
+                          </template>
+                          · 下载量 +{{ candidate.auto_rank.download_bonus }}
                           · 发布时效 +{{ candidate.auto_rank.time_bonus }} · 合计 {{ candidate.auto_rank.total }}
+                        </p>
+                        <p v-if="Number.isSafeInteger(candidate.auto_rank.downloads) || formatUploadTime(candidate.auto_rank.uploaded_at)">
+                          <span v-if="Number.isSafeInteger(candidate.auto_rank.downloads)">
+                            下载 {{ downloadCountFormat.format(candidate.auto_rank.downloads) }} 次
+                          </span>
+                          <time v-if="formatUploadTime(candidate.auto_rank.uploaded_at)" :datetime="candidate.auto_rank.uploaded_at">
+                            上传 {{ formatUploadTime(candidate.auto_rank.uploaded_at) }}
+                          </time>
                         </p>
                         <p v-if="candidate.match_detail">{{ candidate.match_detail }}</p>
                       </li>
                     </ol>
                     <p v-if="plan.candidate_count > plan.candidates.length">
-                      本轮会尝试前 {{ plan.candidates.length }} 条，另有 {{ plan.candidate_count - plan.candidates.length }} 条符合条件。
+                      本轮最多尝试上面 {{ plan.candidates.length }} 条，另有 {{ plan.candidate_count - plan.candidates.length }} 条符合条件。
                     </p>
                     <ul v-if="Object.keys(plan.rejections).length">
                       <li v-for="(count, reason) in plan.rejections" :key="reason">{{ reason }} · {{ count }} 条</li>

@@ -124,15 +124,23 @@ try {
   console.log('Delayed partial preview, visible failure reasons, timeout and cancellation passed')
 
   const official = { provider: 'subhd', result_id: 'official', title: 'Pressure 官方简中', subtitle_type: '官方字幕', download_count: 1200 }
-  const ai = { provider: 'subhd', result_id: 'ai', title: 'Pressure AI 校对', subtitle_type: 'AI校对', download_count: 600 }
+  const ai = { provider: 'subtitlecat', result_id: 'ai', title: 'Pressure AI 校对', subtitle_type: 'AI校对', download_count: 600 }
   const prediction = {
     enabled: true,
     min_score: 20,
     plans: [{
-      target_ids: ['movie'], target: 'Pressure', scope: 'single', candidate_count: 2, rejections: {},
+      target_ids: ['movie'], target: 'Pressure', scope: 'single', candidate_count: 3, rejections: { 'SubHD 未关联': 1 },
       candidates: [
-        { ...official, auto_rank: { release: '片源匹配', subtitle_type: '官方字幕', match: 60, download_bonus: 2, time_bonus: 1, total: 63 } },
-        { ...ai, auto_rank: { release: '片源匹配', subtitle_type: 'AI校对', match: 62, download_bonus: 2, time_bonus: 0, total: 64 } },
+        { ...official, auto_rank: {
+          release: '片源匹配', identity_status: 'strong', provider_priority: 35, language_bucket: 'chi&eng',
+          subtitle_type: '官方字幕', match: 60, type_bonus: 4, download_bonus: 1.15, time_bonus: 1,
+          total: 66.15, downloads: 1200, uploaded_at: '2026-09-11T11:37:00Z', position: 1,
+        } },
+        { ...ai, auto_rank: {
+          release: '片源匹配', identity_status: 'strong', provider_priority: 10, language_bucket: 'und',
+          subtitle_type: 'AI校对', match: 62, type_bonus: 3, download_bonus: 1.04, time_bonus: 0, total: 66.04,
+          position: 2, fallback: true,
+        } },
       ],
     }],
     skipped: [],
@@ -140,7 +148,7 @@ try {
   let previewCalls = 0
   const search = useOnlineSubtitles({
     pluginApi: ref({
-      onlineSearchProvider: async () => ({ data: { results: [official, ai] } }),
+      onlineSearchProvider: async ({ provider }) => ({ data: { results: [provider === 'subhd' ? official : ai] } }),
       onlineAutoPreview: async payload => {
         previewCalls++
         assert.deepEqual(payload.results.map(item => item.result_id), ['official', 'ai'])
@@ -153,7 +161,7 @@ try {
     lockedTargetPayload: () => [], aiAvailable: ref(false),
   })
   search.onlineTargets.value = targets
-  search.onlineSelectedProviders.value = ['subhd']
+  search.onlineSelectedProviders.value = ['subhd', 'subtitlecat']
   await search.runOnlineSearch()
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(previewCalls, 1)
@@ -178,7 +186,11 @@ try {
   assert.match(dialogHtml, /首选候选已被当前筛选隐藏/)
   assert.match(dialogHtml, /含隐藏的 1 条/)
   assert.match(dialogHtml, /Pressure 官方简中/)
-  assert.match(dialogHtml, /基础 60 · 下载量 \+2/)
+  assert.match(dialogHtml, /身份强匹配 · subhd（优先级 35）/)
+  assert.match(dialogHtml, /类型 \+4/)
+  assert.match(dialogHtml, /下载量 \+1\.15 · 发布时效 \+1 · 合计 66\.15/)
+  assert.match(dialogHtml, /跨站备选/)
+  assert.match(dialogHtml, /SubHD 未关联 · 1 条/)
   assert.match(dialogHtml, /下载量升序/)
   console.log('Search prediction uses the full result batch and the dialog shows hidden selections and ranking details')
 } finally {

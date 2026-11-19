@@ -34,6 +34,7 @@ const localConfig = ref({
   manual_strm_paths: '',
   auto_search_on_manual_strm: false,
   auto_multi_subtitle_mode: 'best',
+  auto_subtitle_legacy_ranking: false,
   auto_subtitle_language_priority: ['chi&eng', 'chi&jp', 'chi&kr', 'other_bilingual', 'chi', 'cht', 'eng'],
   auto_subtitle_language_strict: false,
   auto_subtitle_format_priority: ['.ass', '.srt', '.ssa', '.vtt'],
@@ -255,6 +256,7 @@ function normalizeConfig(input) {
       : 'best',
     auto_subtitle_language_priority: normalizeLanguages(input?.auto_subtitle_language_priority),
     auto_subtitle_language_strict: Boolean(input?.auto_subtitle_language_strict),
+    auto_subtitle_legacy_ranking: Boolean(input?.auto_subtitle_legacy_ranking),
     auto_subtitle_format_priority: normalizeList(
       input?.auto_subtitle_format_priority,
       autoFormatItems.map(item => item.value),
@@ -454,6 +456,11 @@ onMounted(() => {
               label="自动多字幕处理"
               variant="outlined"
               density="comfortable"
+              hide-details
+            />
+            <VSwitch
+              v-model="localConfig.auto_subtitle_legacy_ranking"
+              label="使用 1.2.34 自动字幕排序"
               hide-details
             />
             <VSelect

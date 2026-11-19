@@ -1541,12 +1541,31 @@ def test_v3_online_auto_preview_uses_current_policy_without_downloading(tmp_path
     result = preview()
     assert result["enabled"] is True
     plan = result["plans"][0]
-    assert [item["result_id"] for item in plan["candidates"]] == ["official", "ai"]
+    assert [item["result_id"] for item in plan["candidates"]] == ["ai", "official"]
     assert plan["candidates"][0]["auto_rank"]["release"] == "片源匹配"
-    assert plan["candidates"][0]["auto_rank"]["download_bonus"] > 2
+    assert plan["candidates"][0]["auto_rank"]["type_bonus"] == 3
+    assert 1 < plan["candidates"][1]["auto_rank"]["download_bonus"] < 1.5
     assert plan["rejections"] == {
         "匹配分低于 20": 1, "仅支持手动下载": 1, "字幕源未启用自动入库": 1, "SubHD 未关联": 1,
     }
+
+    plugin._auto_subtitle_legacy_ranking = True
+    result = preview()
+    assert result["legacy_ranking"] is True
+    assert [item["result_id"] for item in result["plans"][0]["candidates"]] == ["official", "ai"]
+    plugin._auto_subtitle_legacy_ranking = False
+
+    saved_results = body["results"]
+    plugin._online_provider_ids = ["subhd", "subtitlecat"]
+    body["results"] = [{**normal, "result_id": f"subhd-{index}"} for index in range(6)] + [
+        {**normal, "result_id": "backup", "provider": "subtitlecat"},
+    ]
+    attempts = preview()["plans"][0]["candidates"]
+    assert [item["result_id"] for item in attempts] == ["subhd-0", "subhd-1", "subhd-2", "subhd-3", "backup"]
+    assert attempts[-1]["auto_rank"]["fallback"] is True
+    assert [item["auto_rank"]["position"] for item in attempts] == [1, 2, 3, 4, 5]
+    plugin._online_provider_ids = ["subhd"]
+    body["results"] = saved_results
 
     plugin._auto_subtitle_language_priority = ["chi&jp"]
     result = preview()
