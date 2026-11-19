@@ -268,7 +268,7 @@ class LocalMediaCatalog:
                 previous = previous_by_path.get(owner._normalize_text(item.get("path"))) or {}
                 for key in (
                     "media_source", "media_id", "tmdb_id", "douban_id", "poster_url", "poster_thumb_url",
-                    "backdrop_url", "overview", "vote_average", "original_language", "original_title", "en_title",
+                    "backdrop_url", "overview", "vote_average", "original_language", "original_title", "en_title", "zh_title",
                 ):
                     if not item.get(key) and previous.get(key):
                         item[key] = previous[key]
@@ -533,7 +533,7 @@ class LocalMediaCatalog:
             entry_changed = False
             for key in (
                 "media_source", "media_id", "tmdb_id", "poster_url", "poster_thumb_url",
-                "backdrop_url", "overview", "vote_average", "original_language", "original_title", "en_title",
+                "backdrop_url", "overview", "vote_average", "original_language", "original_title", "en_title", "zh_title",
             ):
                 value = enriched.get(key)
                 if value not in (None, "", [], {}) and entry.get(key) != value:

@@ -126,6 +126,32 @@ def build_search_keywords(media: Dict[str, Any], targets: List[Dict[str, Any]], 
     return _unique_keywords([item for item in keywords if item])
 
 
+def subhd_search_keywords(
+    keywords: List[str], targets: List[Dict[str, Any]], scope: str, *, manual_keyword: str = "",
+) -> List[str]:
+    localized = _explicit_title_values({}, targets, ["zh_title"])
+    if not localized:
+        localized = [
+            title for title in _explicit_title_values({}, targets, ["title"])
+            if _contains_cjk(title) and not _contains_japanese(title) and not _contains_korean(title)
+            and not any(
+                _normalize_code(target.get("original_language")) in {"ja", "ko"}
+                and title in _original_titles({}, [target])
+                for target in targets
+            )
+        ]
+    if not localized:
+        return keywords
+
+    target = targets[0]
+    preferred = build_search_keywords(
+        {"title": localized[0], "year": target.get("year"), "media_type": target.get("media_type")},
+        [{key: item.get(key) for key in ("season", "episode")} for item in targets],
+        scope,
+    )
+    return _unique_keywords([manual_keyword, *preferred, *keywords])
+
+
 def _clean_tv_basename_keyword(value: Any) -> str:
     basename = _clean_keyword(value)
     if not basename:

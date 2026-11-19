@@ -94,6 +94,7 @@ def enrich_targets_with_media(targets: List[Dict[str, Any]], media: Any) -> List
         "english_title",
     )
     metadata_fields = (
+        "zh_title",
         "original_language",
         "origin_country",
         "production_countries",

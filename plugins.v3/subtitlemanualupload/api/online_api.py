@@ -163,12 +163,14 @@ class OnlineApi:
         owner._check_online_rate_limit(providers)
         scope = owner._normalize_text(body.get("scope")) or "auto"
         service = services.online_subtitles()
+        manual_keyword = owner._normalize_text(body.get("keyword"))
         search_result = await run_in_threadpool(
             service.search,
             keywords=keywords,
             providers=providers,
             targets=targets,
             scope=scope,
+            **({"manual_keyword": manual_keyword} if manual_keyword and "subhd" in providers else {}),
         )
         manual_links = service.manual_links(keywords, providers=providers)
         logger.info(
@@ -216,12 +218,14 @@ class OnlineApi:
         owner._check_online_rate_limit(providers)
         scope = owner._normalize_text(body.get("scope")) or "auto"
         service = services.online_subtitles()
+        manual_keyword = owner._normalize_text(body.get("keyword"))
         search_result = await run_in_threadpool(
             service.search,
             keywords=keywords,
             providers=providers,
             targets=targets,
             scope=scope,
+            **({"manual_keyword": manual_keyword} if manual_keyword and providers[0] == "subhd" else {}),
         )
         logger.info(
             "[SubtitleManualUpload] 在线字幕单源搜索完成 scope=%s provider=%s targets=%s results=%s",

@@ -461,6 +461,7 @@ class MediaTargetResolver:
             "original_title": entry.get("original_title"),
             "original_name": entry.get("original_name"),
             "en_title": entry.get("en_title"),
+            "zh_title": entry.get("zh_title"),
             "tmdb_aliases": entry.get("tmdb_aliases"),
             "storage": entry.get("storage", "local"),
             "writable": entry.get("writable", True),

@@ -13,6 +13,10 @@ def _latin_title(text: str) -> bool:
     return bool(text and re.search(r"[A-Za-z]", text) and not re.search(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]", text))
 
 
+def _chinese_title(text: str) -> bool:
+    return bool(re.search(r"[\u3400-\u9fff]", text) and not re.search(r"[\u3040-\u30ff\uac00-\ud7af]", text))
+
+
 def english_title_from_aliases(aliases: List[str]) -> str:
     for item in aliases or []:
         if _latin_title(item):
@@ -45,45 +49,60 @@ def tmdb_aliases(
     return result[:80]
 
 
+def _tmdb_title_records(value: Any) -> Iterable[Dict[str, Any]]:
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _tmdb_title_records(item)
+    elif isinstance(value, dict):
+        yield value
+        for key in ("data", "titles", "results", "translations", "alternative_titles", "aliases"):
+            yield from _tmdb_title_records(value.get(key))
+
+
+def _localized_tmdb_title(
+    values: Iterable[Any],
+    *,
+    locale_priority: Callable[[str, str], int],
+    valid_title: Callable[[str], bool],
+    extract_title_aliases_func: TitleAliasExtractor,
+    normalize_text: NormalizeText,
+) -> str:
+    candidates: List[Tuple[int, str]] = []
+    for record in _tmdb_title_records(tuple(values)):
+        language = normalize_text(record.get("iso_639_1")).lower()
+        country = normalize_text(record.get("iso_3166_1")).lower()
+        priority = locale_priority(language, country)
+        if priority:
+            data = record.get("data")
+            if isinstance(data, dict):
+                titles = extract_title_aliases_func({key: data.get(key) for key in ("title", "name")})
+            else:
+                titles = []
+            titles.extend(extract_title_aliases_func({key: record.get(key) for key in ("title", "name")}))
+            candidates.extend((priority, title) for title in titles if valid_title(title))
+    return max(candidates, key=lambda item: item[0], default=(0, ""))[1]
+
+
 def english_title_from_tmdb_values(
     *values: Any,
     extract_title_aliases_func: TitleAliasExtractor,
     normalize_text: NormalizeText = _default_normalize_text,
 ) -> str:
-    candidates: List[str] = []
+    return _localized_tmdb_title(
+        values,
+        locale_priority=lambda language, country: int(language == "en" or country in {"us", "gb", "uk"}),
+        valid_title=_latin_title,
+        extract_title_aliases_func=extract_title_aliases_func,
+        normalize_text=normalize_text,
+    )
 
-    def add_title(value: Any) -> None:
-        for item in extract_title_aliases_func(value):
-            if _latin_title(item):
-                candidates.append(item)
 
-    def walk(value: Any) -> None:
-        if isinstance(value, (list, tuple)):
-            for item in value:
-                walk(item)
-            return
-        if not isinstance(value, dict):
-            return
-        lang = normalize_text(value.get("iso_639_1")).lower()
-        country = normalize_text(value.get("iso_3166_1")).lower()
-        if lang == "en" or country in {"us", "gb", "uk"}:
-            data = value.get("data")
-            if isinstance(data, dict):
-                add_title({key: data.get(key) for key in ("title", "name")})
-            add_title({key: value.get(key) for key in ("title", "name")})
-        for key in ["data", "titles", "results", "translations", "alternative_titles", "aliases"]:
-            walk(value.get(key))
-
-    for value in values:
-        walk(value)
-    seen = set()
-    for item in candidates:
-        key = item.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        return item
-    return ""
+def _chinese_locale_priority(language: str, country: str) -> int:
+    if language and language not in {"zh", "cn", "cmn", "zh-cn", "zh-hans", "zh-tw", "zh-hant", "yue"}:
+        return 0
+    if country == "cn" or language in {"zh-cn", "zh-hans"}:
+        return 2
+    return int(bool(language) or country in {"tw", "hk"})
 
 
 def tmdb_detail_payload(
@@ -110,6 +129,19 @@ def tmdb_detail_payload(
         alternative_titles,
         extract_title_aliases_func=extract_title_aliases_func,
     )
+    local_title = normalize_text(value("title") or value("name"))
+    original_language = normalize_text(value("original_language")).lower()
+    original_title = normalize_text(value("original_title") or value("original_name"))
+    chinese_title = _localized_tmdb_title(
+        (translations, alternative_titles),
+        locale_priority=_chinese_locale_priority,
+        valid_title=_chinese_title,
+        extract_title_aliases_func=extract_title_aliases_func,
+        normalize_text=normalize_text,
+    )
+    if not chinese_title and _chinese_title(local_title):
+        if original_language not in {"ja", "ko"} or local_title != original_title:
+            chinese_title = local_title
     return {
         "media_source": normalize_text(value("media_source", "source")),
         "media_id": normalize_text(value("media_id", "tmdb_id", "tmdbid", "id")),
@@ -122,6 +154,7 @@ def tmdb_detail_payload(
         "origin_country": value("origin_country") or [],
         "production_countries": value("production_countries") or [],
         "original_title": value("original_title", "original_name") or "",
+        "zh_title": chinese_title,
         "en_title": english_title_from_tmdb_values(
             translations,
             alternative_titles,
@@ -136,7 +169,7 @@ def apply_tmdb_detail(target: Dict[str, Any], detail: Dict[str, Any]) -> None:
     for key in [
         "media_source", "media_id", "tmdb_id", "poster_url", "backdrop_url", "overview",
         "vote_average", "original_language", "origin_country", "production_countries",
-        "original_title", "tmdb_aliases",
+        "original_title", "tmdb_aliases", "zh_title",
     ]:
         value = detail.get(key)
         if value not in (None, "", [], {}) and not target.get(key):
@@ -238,6 +271,7 @@ def auto_media_for_entry(
         "production_countries": entry.get("production_countries"),
         "original_title": entry.get("original_title") or entry.get("original_name"),
         "en_title": entry.get("en_title"),
+        "zh_title": entry.get("zh_title"),
         "tmdb_aliases": entry.get("tmdb_aliases"),
     }
     tmdb_detail = tmdb_detail_for_media_func(media)

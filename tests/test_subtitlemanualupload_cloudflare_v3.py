@@ -117,6 +117,47 @@ def test_subhd_download_count_column_uses_the_header_and_subtitle_id(clients):
     }
 
 
+@pytest.mark.parametrize(
+    "scope, suffix, manual_keyword, expected",
+    [
+        ("movie", "2026", "", ["诺曼底72小时 2026", "诺曼底72小时", "Pressure 2026"]),
+        ("movie", "2026", "Pressure 2026", ["Pressure 2026"]),
+        ("episode", "S01E02", "", ["诺曼底72小时 S01E02", "Pressure S01E02"]),
+        ("season", "S01", "", ["诺曼底72小时 S01", "Pressure S01"]),
+    ],
+)
+def test_subhd_tries_tmdb_chinese_title_then_original(
+    clients, monkeypatch, scope, suffix, manual_keyword, expected,
+):
+    metadata = importlib.import_module("cf_test.catalog.media_metadata")
+    builder = importlib.import_module("cf_test.online_subtitles.keyword_builder")
+    module = importlib.import_module("cf_test.online_subtitles.providers.subhd")
+    detail = metadata.tmdb_detail_payload({
+        "title": "Pressure", "original_title": "Pressure", "original_language": "en",
+        "translations": {"translations": [
+            {"iso_639_1": "zh", "iso_3166_1": "TW", "data": {"title": "諾曼第風暴"}},
+            {"iso_639_1": "zh", "iso_3166_1": "CN", "data": {"title": "诺曼底72小时"}},
+        ]},
+    }, extract_title_aliases_func=builder.extract_title_aliases)
+    assert detail["zh_title"] == "诺曼底72小时"
+    entry = {"title": "Pressure", "year": 2026, "media_type": "movie" if scope == "movie" else "tv",
+             "season": 1, "episode": 2}
+    metadata.apply_tmdb_detail(entry, detail)
+    targets = [entry]
+    keywords = builder.build_search_keywords(entry, targets, scope)
+    assert keywords[0] == f"Pressure {suffix}"
+    provider = module.SubHDProvider(types.SimpleNamespace(), root_url="https://subhd.tv")
+    tried = []
+
+    def search_keyword(keyword, _targets):
+        tried.append(keyword)
+        return ["matched subtitle"] if keyword == f"Pressure {suffix}" else []
+
+    monkeypatch.setattr(provider, "_search_keyword", search_keyword)
+    assert provider.search_all(keywords, targets, scope, manual_keyword=manual_keyword) == ["matched subtitle"]
+    assert tried == expected
+
+
 def test_signed_cdn_filename_uses_response_header_or_url_path(clients):
     name_from = clients.OnlineDirectDownloader._filename_from_response
     url = "https://dl.subhd.me/download/movie.srt?expiry=100&signature=example#fragment"

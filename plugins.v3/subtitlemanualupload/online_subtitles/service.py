@@ -103,6 +103,7 @@ class OnlineSubtitleSearchService:
         providers: List[str],
         targets: List[Dict[str, Any]],
         scope: str,
+        manual_keyword: str = "",
     ) -> Dict[str, Any]:
         provider_ids = [item for item in providers if item in self.providers]
         if not provider_ids:
@@ -127,7 +128,8 @@ class OnlineSubtitleSearchService:
                 provider_errors: List[str] = []
                 found: List[OnlineSubtitleResult] = []
                 try:
-                    found = provider.search_all(keywords, targets, scope)
+                    options = {"manual_keyword": manual_keyword} if provider_id == "subhd" and manual_keyword else {}
+                    found = provider.search_all(keywords, targets, scope, **options)
                     results.extend(found)
                 except Exception as exc:
                     message = _compact_error_message(str(exc))

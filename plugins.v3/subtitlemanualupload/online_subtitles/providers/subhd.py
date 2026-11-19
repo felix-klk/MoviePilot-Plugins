@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from ..captcha.subhd import SubHDSvgCaptchaSolver
 from ..clients import *  # noqa: F401,F403
+from ..keyword_builder import subhd_search_keywords
 from ..language import *  # noqa: F401,F403
 from ..matcher import *  # noqa: F401,F403
 from ..models import *  # noqa: F401,F403
@@ -102,7 +103,10 @@ class SubHDProvider(BaseSubtitleProvider):
     def search(self, keyword: str, targets: List[Dict[str, Any]], scope: str) -> List[OnlineSubtitleResult]:
         return self._search_keyword(keyword, targets)
 
-    def search_all(self, keywords: List[str], targets: List[Dict[str, Any]], scope: str) -> List[OnlineSubtitleResult]:
+    def search_all(
+        self, keywords: List[str], targets: List[Dict[str, Any]], scope: str, *, manual_keyword: str = "",
+    ) -> List[OnlineSubtitleResult]:
+        title_keywords = subhd_search_keywords(keywords, targets, scope, manual_keyword=manual_keyword)
         errors: List[str] = []
 
         def attempt(label: str, callback):
@@ -122,7 +126,7 @@ class SubHDProvider(BaseSubtitleProvider):
                 return []
 
         def search_keywords() -> List[OnlineSubtitleResult]:
-            for keyword in keywords:
+            for keyword in title_keywords:
                 found = attempt(f"keyword:{keyword}", lambda keyword=keyword: self._search_keyword(keyword, targets))
                 if found:
                     return found
@@ -160,7 +164,7 @@ class SubHDProvider(BaseSubtitleProvider):
                 if found:
                     return found
         if errors:
-            raise ValueError(_provider_error_summary(errors, len(keywords)))
+            raise ValueError(_provider_error_summary(errors, len(title_keywords)))
         return []
 
     def _search_keyword(self, keyword: str, targets: List[Dict[str, Any]]) -> List[OnlineSubtitleResult]:

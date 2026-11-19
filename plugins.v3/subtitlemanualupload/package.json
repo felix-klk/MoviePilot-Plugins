@@ -1,7 +1,7 @@
 {
   "name": "moviepilot-subtitlemanualupload-plugin",
   "private": true,
-  "version": "1.2.32",
+  "version": "1.2.33",
   "type": "module",
   "scripts": {
     "build": "vite build"
