@@ -19,6 +19,10 @@ PYSUBS2_FORMATS = {
 }
 
 
+def subtitle_download_basename(value: str) -> str:
+    return value.split("?", 1)[0].replace("\\", "/").rsplit("/", 1)[-1].strip()
+
+
 def is_bitmap_subtitle(path: str | Path, raw_bytes: bytes | None = None) -> bool:
     suffix = Path(path).suffix.lower()
     if suffix in BITMAP_SUBTITLE_EXTS:

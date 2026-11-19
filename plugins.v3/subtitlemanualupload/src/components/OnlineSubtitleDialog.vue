@@ -1,5 +1,18 @@
 <script setup>
 const downloadCountFormat = new Intl.NumberFormat('zh-CN')
+const uploadTimeFormat = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+})
+
+function formatUploadTime(value) {
+  const timestamp = Date.parse(value)
+  return Number.isNaN(timestamp) ? '' : uploadTimeFormat.format(timestamp).replaceAll('/', '-')
+}
 
 defineProps({
   modelValue: { type: Boolean, default: false },
@@ -247,6 +260,15 @@ defineEmits([
                   <div class="online-result-meta">
                     <span>{{ providerName(item.provider) }}</span>
                     <span>{{ onlineResultMeta(item) }}</span>
+                    <span v-if="item.subtitle_type" class="online-listing-metadata">
+                      {{ item.subtitle_type }}
+                    </span>
+                    <span v-if="Number.isSafeInteger(item.download_count) && item.download_count >= 0" class="online-listing-metadata">
+                      下载 {{ downloadCountFormat.format(item.download_count) }} 次
+                    </span>
+                    <time v-if="formatUploadTime(item.uploaded_at)" :datetime="item.uploaded_at" class="online-listing-metadata">
+                      上传 {{ formatUploadTime(item.uploaded_at) }}
+                    </time>
                     <span v-if="!isOnlineResultDownloadable(item)" class="online-manual-badge">
                       需手动下载
                     </span>
@@ -255,9 +277,6 @@ defineEmits([
                   <p v-if="item.match_detail" class="online-match-detail">{{ item.match_detail }}</p>
                 </div>
                 <div class="online-result-actions">
-                  <span v-if="Number.isSafeInteger(item.download_count) && item.download_count >= 0" class="online-download-count">
-                    下载 {{ downloadCountFormat.format(item.download_count) }} 次
-                  </span>
                   <a
                     v-if="item.page_url"
                     class="online-open-link"
@@ -559,7 +578,7 @@ defineEmits([
   gap: 10px;
 }
 
-.online-download-count {
+.online-listing-metadata {
   color: var(--smu-text-muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;

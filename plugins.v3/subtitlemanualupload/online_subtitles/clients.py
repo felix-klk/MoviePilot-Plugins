@@ -16,6 +16,7 @@ from urllib.parse import unquote, urlparse, urlunparse
 from app.sdk.config import settings
 from app.sdk.logging import logger
 
+from ..matching.subtitle_formats import subtitle_download_basename
 from .models import CaptchaRequiredError, OnlineJSONError
 from .cloudflare import is_challenge, browser_session
 
@@ -349,10 +350,8 @@ class OnlineDirectDownloader:
     def _filename_from_response(headers: Any, url: str) -> str:
         disposition = headers.get("Content-Disposition", "")
         match = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)', disposition, re.I)
-        if match:
-            return unquote(match.group(1)).strip() or "subtitle.zip"
-        name = Path(url).name
-        return name or "subtitle.zip"
+        filename = subtitle_download_basename(unquote(match.group(1))) if match else ""
+        return filename or subtitle_download_basename(unquote(urlparse(url).path)) or "subtitle.zip"
 
 
 def _content_magic(content: bytes) -> str:

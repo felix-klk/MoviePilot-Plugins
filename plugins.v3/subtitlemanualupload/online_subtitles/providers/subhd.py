@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from ..captcha.subhd import SubHDSvgCaptchaSolver
 from ..clients import *  # noqa: F401,F403
 from ..language import *  # noqa: F401,F403
@@ -9,42 +11,79 @@ from ..shared import *  # noqa: F401,F403
 from .base import BaseSubtitleProvider, _subhd_manual_url
 
 
-def _subtitle_download_counts(text: str) -> Dict[str, int]:
+_SUBHD_LABELS = {
+    "官方字幕": "官方字幕",
+    "AI校对": "AI校对",
+    "AI校對": "AI校对",
+    "其他来源": "其他来源",
+    "其他來源": "其他来源",
+}
+
+
+def _subtitle_listing_metadata(text: str) -> Dict[str, Dict[str, Any]]:
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(text or "", "html.parser")
-    counts = {}
+    metadata: Dict[str, Dict[str, Any]] = {}
 
-    def add_count(container, node):
-        if container is None or node is None:
+    def add_metadata(container, count_node, time_node):
+        if container is None:
             return
-        value = node.get_text(strip=True)
-        if not re.fullmatch(r"[0-9]{1,15}|[0-9]{1,3}(?:[,，][0-9]{3}){1,4}", value):
+        links = [
+            link for link in container.select('a[href^="/a/"]')
+            if re.fullmatch(r"/a/[A-Za-z0-9_-]+", link["href"])
+        ]
+        ids = {link["href"][3:] for link in links}
+        if len(ids) != 1:
             return
-        ids = {
-            href[3:] for link in container.select('a[href^="/a/"]')
-            if re.fullmatch(r"/a/[A-Za-z0-9_-]+", href := link["href"])
+        fields = metadata.setdefault(ids.pop(), {})
+        for link in links:
+            classes = link.get("class", [])
+            label = link.get_text(" ", strip=True)
+            if label and "link-dark" in classes:
+                field = "movie_name" if "align-middle" in classes else "listing_title"
+                fields.setdefault(field, label)
+        labels = {
+            _SUBHD_LABELS[label]
+            for badge in container.select("span.rounded.text-white")
+            if (label := badge.get_text(strip=True).replace(" ", "")) in _SUBHD_LABELS
         }
-        if len(ids) == 1:
-            counts[ids.pop()] = int(value.replace(",", "").replace("，", ""))
+        if len(labels) == 1:
+            fields["subtitle_type"] = labels.pop()
 
-    for icon in soup.select("svg.bi-download"):
-        value = icon.find_next_sibling()
-        if value is not None and value.name == "span":
-            add_count(icon.find_parent("div", class_="clearfix"), value)
+        count = count_node.get_text(strip=True) if count_node is not None else ""
+        if re.fullmatch(r"[0-9]{1,15}|[0-9]{1,3}(?:[,，][0-9]{3}){1,4}", count):
+            fields["download_count"] = int(count.replace(",", "").replace("，", ""))
+        if time_node is not None:
+            value = time_node.get("datetime", "")
+            try:
+                stamp = datetime.fromisoformat(value)
+                if stamp.utcoffset() is not None:
+                    fields["uploaded_at"] = stamp.astimezone(timezone.utc).isoformat()
+            except (ValueError, OverflowError):
+                pass
+
+    for card in soup.select("div.clearfix"):
+        icon = card.select_one("svg.bi-download")
+        time_node = card.select_one("time[datetime]")
+        count_node = icon.find_next_sibling() if icon is not None else None
+        add_metadata(card, count_node if count_node is not None and count_node.name == "span" else None, time_node)
 
     for header in soup.select(".rounded-top > .row"):
         columns = header.find_all("div", recursive=False)
-        for index, column in enumerate(columns):
-            if column.get_text(strip=True) not in {"下载次数", "下載次數"}:
-                continue
-            for row in header.parent.find_next_siblings("div", class_="row"):
-                cells = row.find_all("div", recursive=False)
-                if len(cells) == len(columns):
-                    add_count(row, cells[index])
-            break
+        headers = [column.get_text(strip=True) for column in columns]
+        counts = next((i for i, value in enumerate(headers) if value in {"下载次数", "下載次數"}), None)
+        uploader = next((i for i, value in enumerate(headers) if value in {"上传人", "上傳人", "上传时间", "上傳時間"}), None)
+        if counts is None and uploader is None:
+            continue
+        for row in header.parent.find_next_siblings("div", class_="row"):
+            cells = row.find_all("div", recursive=False)
+            if len(cells) == len(columns):
+                time_node = cells[uploader].select_one("time[datetime]") if uploader is not None else row.select_one("time[datetime]")
+                count_node = cells[counts] if counts is not None else None
+                add_metadata(row, count_node, time_node)
 
-    return counts
+    return {sid: fields for sid, fields in metadata.items() if fields}
 
 
 class SubHDProvider(BaseSubtitleProvider):
@@ -257,16 +296,19 @@ class SubHDProvider(BaseSubtitleProvider):
     ) -> List[OnlineSubtitleResult]:
         results: List[OnlineSubtitleResult] = []
         target_episode = _target_episode_from_targets(targets)
-        download_counts = _subtitle_download_counts(text)
+        listing_metadata = _subtitle_listing_metadata(text)
         for match in re.finditer(r'<a[^>]+href=["\'](/a/([A-Za-z0-9_-]+))["\'][^>]*>(.*?)</a>', text or "", flags=re.I | re.S):
             href, sid, raw_title = match.groups()
-            title = _strip_tags(raw_title) or f"SubHD 字幕 {sid}"
+            listing = listing_metadata.get(sid, {})
+            title = listing.get("listing_title") or _strip_tags(raw_title) or f"SubHD 字幕 {sid}"
             if target_episode:
                 include, _ = _episode_include_for_title(title, target_episode)
                 if not include:
                     continue
             season, episode = _episode_from_text(title) or (0, 0)
-            assessment = _assess_result_match(title=title, keyword=match_keyword, targets=targets)
+            assessment = _assess_result_match(
+                title=title, keyword=match_keyword, targets=targets, attrs={"movie_name": listing.get("movie_name")},
+            )
             if assessment["identity_status"] == "failed" and targets:
                 continue
             window_start = max(0, match.start() - 700)
@@ -279,7 +321,9 @@ class SubHDProvider(BaseSubtitleProvider):
                     provider_label=self.display_name,
                     result_id=sid,
                     title=title,
-                    download_count=download_counts.get(sid),
+                    download_count=listing.get("download_count"),
+                    uploaded_at=listing.get("uploaded_at", ""),
+                    subtitle_type=listing.get("subtitle_type", ""),
                     page_url=page,
                     download_url=f"subhd-page:{page}",
                     language=_guess_language_label(language_text),

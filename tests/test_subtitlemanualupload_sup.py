@@ -544,6 +544,19 @@ def emby_refresh_test_runtime(monkeypatch, generation, *, http_module_name="app.
 
 
 @pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)
+def test_online_subtitle_sniffing_handles_a_split_utf8_character(sup_modules, tmp_path):
+    header = b"\xef\xbb\xbf1\r\n00:00:01,000 --> 00:00:03,000\r\n"
+    content = header + b"x" * (4095 - len(header)) + "中文字幕".encode() + b"\r\n"
+    uploader = make_upload_service(sup_modules, tmp_path)
+    uploader._decode_preview_bytes = sup_modules.language.decode_preview_bytes
+    name = uploader.normalize_online_download_name("download.bin", content, {"title": "Pressure"})
+    session = tmp_path / "session"
+    session.mkdir()
+    assert name == "Pressure.srt"
+    assert len(uploader.extract_online_subtitle_files(name, content, session)) == 1
+
+
+@pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)
 def test_automatic_full_subtitle_write_preserves_forced_sidecar(sup_modules, tmp_path):
     video = tmp_path / "Show.Forced.S01E01.mkv"
     video.touch()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 import importlib.util
 import json
 import os
@@ -14,7 +15,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from fastapi import HTTPException
 
-from ..matching.subtitle_formats import BITMAP_SUBTITLE_EXTS, is_bitmap_subtitle
+from ..matching.subtitle_formats import BITMAP_SUBTITLE_EXTS, is_bitmap_subtitle, subtitle_download_basename
 from ..matching.subtitle_validation import validate_online_subtitle_files
 
 
@@ -763,7 +764,7 @@ def normalize_online_download_name(
     normalize_text: NormalizeText,
     decode_preview_bytes: DecodePreviewBytes,
 ) -> str:
-    safe_name = Path(normalize_text(name)).name
+    safe_name = subtitle_download_basename(normalize_text(name))
     suffix = Path(safe_name).suffix.lower()
     magic_suffix = archive_suffix_from_content(content)
     if magic_suffix:
@@ -790,7 +791,12 @@ def normalize_online_download_name(
         return f"{title}.zip"
     if content.startswith(b"Rar!\x1a\x07"):
         return f"{title}.rar"
-    text_head = decode_preview_bytes(content[:4096]).lstrip()
+    sample = content[:4096]
+    try:
+        text_head = codecs.getincrementaldecoder("utf-8-sig")().decode(sample, final=len(sample) == len(content))
+    except UnicodeDecodeError:
+        text_head = decode_preview_bytes(sample)
+    text_head = text_head.lstrip()
     if re.match(r"^\d+\s*\n\d{2}:\d{2}:\d{2}[,.]\d{3}\s+-->", text_head):
         return f"{title}.srt"
     if "[Script Info]" in text_head or "[V4+ Styles]" in text_head:

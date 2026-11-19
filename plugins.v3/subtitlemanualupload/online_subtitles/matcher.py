@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
+from math import log10
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from ..matching.subtitle_language import (
+    auto_candidate_language_rank,
+    auto_rank_candidates,
+    required_auto_languages,
+)
 from .keyword_builder import (
     _is_ambiguous_single_title_alias,
     _is_cjk_text,
@@ -66,6 +72,130 @@ def _identity_priority(item: Any) -> int:
         "weak": 10,
         "failed": 0,
     }.get(item.identity_status or "", 0)
+
+
+def _release_profile(value: str) -> Tuple[str, str]:
+    value = value.replace("_", " ")
+    source = re.search(
+        r"\b(?:web[ .-]*dl|web[ .-]*rip|remux|blu[ .-]*ray|b[dr][ .-]*rip|hdtv|dvd[ .-]*rip)\b",
+        value,
+        re.I,
+    )
+    kind = re.sub(r"[ ._-]+", "", source.group(0).lower()) if source else ""
+    if kind in {"bdrip", "brrip"}:
+        kind = "bluray"
+    resolution = re.search(r"\b(?:4320|2160|1080|720|576|480)[pi]\b", value, re.I)
+    return kind, resolution.group(0).lower() if resolution else ""
+
+
+_SUBTITLE_TYPE_ORDER = {"官方字幕": 0, "AI校对": 1, "其他来源": 2}
+_RELEASE_EDITION = re.compile(
+    r"(?P<theatrical>院线版|院線版|公映版|公映(?=[简繁雙双])|剧场版|劇場版|\btheatrical[ .-]+(?:cut|edition|version)\b)"
+    r"|(?P<directors>导演剪辑版|導演剪輯版|\bdirector(?:['’]s|s)?[ .-]+cut\b)"
+    r"|(?P<extended>加长版|加長版|延长版|延長版|\bextended[ .-]+(?:cut|edition|version)\b)",
+    re.I,
+)
+
+
+def _release_edition(title: str) -> str:
+    editions = {match.lastgroup for match in _RELEASE_EDITION.finditer(title.replace("_", " "))}
+    return next(iter(editions)) if len(editions) == 1 else ""
+
+
+def rank_auto_download_candidates(
+    candidates: List[Dict[str, Any]],
+    targets: List[Dict[str, Any]],
+    language_priority: Optional[List[str]],
+    *,
+    strict: bool,
+) -> List[Dict[str, Any]]:
+    required = required_auto_languages(language_priority, strict=strict)
+    priority = language_priority if required is None else required
+    target_names = [
+        str(target.get("basename") or target.get("filename") or target.get("label") or "")
+        for target in targets
+    ]
+    target_profiles = {_release_profile(name) for name in target_names} - {("", "")}
+    target_release = next(iter(target_profiles)) if len(target_profiles) == 1 else ("", "")
+    target_editions = {_release_edition(name) for name in target_names}
+    target_edition = next(iter(target_editions)) if len(target_editions) == 1 else ""
+
+    eligible = []
+    provider_order = {}
+    identity_order = {}
+    for item in candidates:
+        edition = _release_edition(str(item.get("title") or ""))
+        if item.get("identity_status") == "failed" or (edition and target_edition and edition != target_edition):
+            continue
+        provider = item.get("provider")
+        identity = provider, item.get("identity_status")
+        provider_order.setdefault(provider, len(provider_order))
+        identity_order.setdefault(identity, len(identity_order))
+        eligible.append(item)
+    allowed = auto_rank_candidates(eligible, language_priority, strict=strict)
+    now = datetime.now(timezone.utc)
+
+    def rank(item: Dict[str, Any]) -> Tuple[int, int, int, Tuple[int, int], int, float, int]:
+        title = str(item.get("title") or "")
+        release = _release_profile(title)
+        edition = _release_edition(title)
+        release_rank = 0
+        if any(known and found and known != found for known, found in zip(target_release, release)):
+            release_rank = -1
+        elif (
+            target_release[0] and target_edition == edition
+            and all(not known or known == found for known, found in zip(target_release, release))
+        ):
+            release_rank = 1
+
+        score = _safe_int(item.get("score"))
+        count = item.get("download_count")
+        download_bonus = min(3.0, 0.75 * log10(count + 1)) if type(count) is int and count >= 0 else 0.0
+        uploaded_at = item.get("uploaded_at")
+        time_bonus = 0.0
+        if isinstance(uploaded_at, str) and uploaded_at:
+            try:
+                uploaded = datetime.fromisoformat(uploaded_at)
+                if uploaded.utcoffset() is not None:
+                    age = (now - uploaded).total_seconds() / 86400
+                    if 0 <= age < 90:
+                        time_bonus = 2.0 * (1.0 - age / 90)
+            except (ValueError, OverflowError):
+                pass
+        total = score + download_bonus + time_bonus
+        subtitle_type = item.get("subtitle_type") or "未标注"
+        item["auto_rank"] = {
+            "release": ("片源不同", "片源未确认", "片源匹配")[release_rank + 1],
+            "subtitle_type": subtitle_type,
+            "match": score,
+            "downloads": count,
+            "uploaded_at": uploaded_at,
+            "download_bonus": round(download_bonus, 3),
+            "time_bonus": round(time_bonus, 3),
+            "total": round(total, 3),
+        }
+        provider = item.get("provider")
+        return (
+            -release_rank,
+            provider_order[provider],
+            _SUBTITLE_TYPE_ORDER.get(subtitle_type, len(_SUBTITLE_TYPE_ORDER)),
+            auto_candidate_language_rank(item, priority),
+            identity_order[provider, item.get("identity_status")],
+            -total,
+            -score,
+        )
+
+    return sorted((dict(item) for item in allowed), key=rank)
+
+
+def log_auto_download_candidate(logger: Any, candidate: Dict[str, Any]) -> None:
+    logger.info(
+        "[SubtitleManualUpload] 自动字幕候选 provider=%s id=%s title=%s rank=%s",
+        candidate.get("provider"),
+        candidate.get("result_id"),
+        candidate.get("title"),
+        candidate["auto_rank"],
+    )
 
 
 def _target_year_from_targets(targets: List[Dict[str, Any]]) -> int:

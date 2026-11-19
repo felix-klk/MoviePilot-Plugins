@@ -63,12 +63,17 @@ class Opener:
 def test_subhd_download_counts_use_search_response_and_keep_zero(clients):
     module = importlib.import_module("cf_test.online_subtitles.providers.subhd")
     first = '''
-        <div class="clearfix"><a href="/a/abc">Tulsa King S04E05</a>
+        <div class="clearfix">
+        <a href="/a/abc" class="link-dark align-middle">塔尔萨之王 第四季</a>
+        <a href="/a/abc" class="link-dark">Tulsa King S04E05.2160p.WEB-DL</a>
+        <span class="rounded p-1 text-white">AI校对</span>
         <svg class="bi bi-file-earmark-fill"></svg><span>112</span>
-        <svg class="bi bi-download"></svg><span>1,411</span></div>
+        <svg class="bi bi-download"></svg><span>1,411</span>
+        <svg class="bi bi-clock-fill"></svg><span><time datetime="2026-09-11T11:37:00.000Z">09-11 19:37</time></span></div>
         <div class="clearfix"><a href="/a/zero">Tulsa King S04E05</a>
         <svg class="bi bi-download"></svg><span>0</span></div>
         <div class="clearfix"><a href="/a/absent">Tulsa King S04E05</a>
+        <span class="rounded p-1 text-white">官方字幕</span>
         <svg class="bi bi-chat"></svg><span>99</span></div>
     '''
     pages = iter([first, first.replace("1,411", "1,427")])
@@ -80,8 +85,14 @@ def test_subhd_download_counts_use_search_response_and_keep_zero(clients):
     for expected in (1411, 1427):
         results = {item.result_id: item.to_dict() for item in provider.search("Tulsa King S04E05", [], "episode")}
         assert results["abc"]["download_count"] == expected
+        assert results["abc"]["title"] == "Tulsa King S04E05.2160p.WEB-DL"
+        assert results["abc"]["uploaded_at"] == "2026-09-11T11:37:00+00:00"
+        assert results["abc"]["subtitle_type"] == "AI校对"
         assert results["zero"]["download_count"] == 0
+        assert "subtitle_type" not in results["zero"]
+        assert results["absent"]["subtitle_type"] == "官方字幕"
         assert "download_count" not in results["absent"]
+        assert "uploaded_at" not in results["absent"]
         assert results["abc"]["page_url"] == "https://subhd.tv/a/abc"
         assert "match_detail" in results["abc"]
     assert len(calls) == 2 and all("/search/" in url for url in calls)
@@ -93,11 +104,101 @@ def test_subhd_download_count_column_uses_the_header_and_subtitle_id(clients):
         <div class="rounded-top bg-purple"><div class="row">
           <div>字幕信息</div><div>上传人</div><div>下载次数</div>
         </div></div>
-        <div class="row"><div><a href="/a/one">字幕一</a></div><div>99</div><div>1，629</div></div>
-        <div class="row"><div><a href="/a/two">字幕二</a></div><div>100</div><div>—</div></div>
+        <div class="row"><div><a href="/a/one">字幕一</a>
+            <span class="rounded text-white">其他來源</span></div><div>99</div><div>1，629</div></div>
+        <div class="row"><div><a href="/a/two">字幕二</a></div>
+            <div>100 <time datetime="2026-08-22T10:39:58+08:00">08-22 10:39</time></div><div>—</div></div>
         <div class="row"><div><a href="/a/three">字幕三</a></div><div>101</div><div>0</div></div>
     '''
-    assert module._subtitle_download_counts(html) == {"one": 1629, "three": 0}
+    assert module._subtitle_listing_metadata(html) == {
+        "one": {"download_count": 1629, "subtitle_type": "其他来源"},
+        "two": {"uploaded_at": "2026-08-22T02:39:58+00:00"},
+        "three": {"download_count": 0},
+    }
+
+
+def test_signed_cdn_filename_uses_response_header_or_url_path(clients):
+    name_from = clients.OnlineDirectDownloader._filename_from_response
+    url = "https://dl.subhd.me/download/movie.srt?expiry=100&signature=example#fragment"
+    assert name_from({}, url) == "movie.srt"
+    assert name_from({"Content-Disposition": 'attachment; filename="movie.ass?token=example"'}, url) == "movie.ass"
+    assert name_from({}, "https://example.com/down/My%20Subtitle.srt?key=example") == "My Subtitle.srt"
+
+
+def test_auto_download_ranks_same_version_by_match_popularity_and_recency(clients):
+    from datetime import datetime, timedelta, timezone
+    matcher = importlib.import_module("cf_test.online_subtitles.matcher")
+    now = datetime.now(timezone.utc)
+
+    def item(result_id, score, downloads=None, age=None, version="2160p WEB-DL", **fields):
+        return {
+            "result_id": result_id,
+            "title": f"Pressure {version}",
+            "provider": "subhd",
+            "language": "中英双语",
+            "identity_status": "strong",
+            "score": score,
+            "download_count": downloads,
+            "uploaded_at": (now - timedelta(days=age)).isoformat() if age is not None else "",
+            **fields,
+        }
+
+    candidates = [
+        item("high-fit", 82),
+        item("maximum-bonus", 77, 1000000, 0),
+        item("large-old", 64, 1003, 80),
+        item("small-new", 63, 995, 2),
+        item("one-download", 63, 1, 2),
+        item("too-old", 63, 1, 100),
+        item("other-cut", 96, 10000, 2, version="1080p BluRay"),
+        item("bad-identity", 96, 10000, 2, identity_status="failed"),
+        item("other-language", 96, 10000, 2, language="中日双语"),
+        item("other-source", 95, provider="subtitlecat"),
+    ]
+    ranked = matcher.rank_auto_download_candidates(
+        candidates, [{"basename": "压力 - 2160p WEB-DL"}], ["chi&eng", "chi"], strict=False,
+    )
+
+    assert [item["result_id"] for item in ranked] == [
+        "high-fit", "maximum-bonus", "small-new", "large-old", "one-download", "too-old", "other-source", "other-cut",
+    ]
+    assert ranked[0]["auto_rank"]["total"] == 82
+    assert ranked[1]["auto_rank"]["download_bonus"] == 3
+    assert ranked[1]["auto_rank"]["time_bonus"] == 2
+    assert ranked[2]["auto_rank"]["time_bonus"] > ranked[3]["auto_rank"]["time_bonus"]
+    assert ranked[2]["auto_rank"]["download_bonus"] > ranked[4]["auto_rank"]["download_bonus"]
+    assert ranked[-1]["auto_rank"]["release"] == "片源不同"
+    assert "auto_rank" not in candidates[0]
+
+
+def test_auto_download_prioritizes_subhd_type_within_compatible_release(clients):
+    matcher = importlib.import_module("cf_test.online_subtitles.matcher")
+    candidates = [
+        {
+            "result_id": result_id,
+            "title": f"Pressure {release}",
+            "provider": "subhd",
+            "language": language,
+            "identity_status": "strong",
+            "score": score,
+            "subtitle_type": subtitle_type,
+        }
+        for result_id, release, language, score, subtitle_type in [
+            ("other", "2160p WEB-DL Theatrical Cut", "中英双语", 95, "其他来源"),
+            ("ai", "2160p WEB-DL Theatrical Cut", "中英双语", 77, "AI校对"),
+            ("official", "2160p WEB-DL 公映简繁双语", "未知", 62, "官方字幕"),
+            ("untagged", "2160p WEB-DL Theatrical Cut", "中英双语", 96, ""),
+            ("wrong-edition", "2160p WEB-DL Director's Cut", "中英双语", 99, "官方字幕"),
+            ("wrong-language", "2160p WEB-DL Theatrical Cut", "中日双语", 99, "官方字幕"),
+            ("different-release", "1080p BluRay Theatrical Cut", "中英双语", 99, "官方字幕"),
+        ]
+    ]
+    ranked = matcher.rank_auto_download_candidates(
+        candidates, [{"basename": "Pressure_2160p_WEB-DL_Theatrical_Cut"}], ["chi&eng"], strict=False,
+    )
+    assert [item["result_id"] for item in ranked] == ["official", "ai", "other", "untagged", "different-release"]
+    assert ranked[0]["auto_rank"]["subtitle_type"] == "官方字幕"
+    assert ranked[3]["auto_rank"]["subtitle_type"] == "未标注"
 
 
 @pytest.mark.parametrize("direct_body", [b"PK\x03\x04subtitle", b"<html>unavailable</html>", None])

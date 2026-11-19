@@ -8,7 +8,8 @@ import json
 import shutil
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-from ..matching.subtitle_language import auto_rank_candidates, required_auto_languages
+from ..matching.subtitle_language import required_auto_languages
+from ..online_subtitles.matcher import log_auto_download_candidate, rank_auto_download_candidates
 from ..matching.subtitle_validation import validate_online_subtitle_files
 from ..online.online_subtitle import build_search_keywords
 
@@ -187,8 +188,9 @@ class AutoTransferSeasonCache:
             for item in search_result.get("results") or []
             if item.get("downloadable") is not False and owner._safe_int(item.get("score"), 0) >= owner._auto_search_min_score
         ]
-        candidates = auto_rank_candidates(
+        candidates = rank_auto_download_candidates(
             candidates,
+            targets,
             getattr(owner, "_auto_subtitle_language_priority", None),
             strict=bool(getattr(owner, "_auto_subtitle_language_strict", False)),
         )
@@ -203,6 +205,7 @@ class AutoTransferSeasonCache:
         last_reason = ""
         best_partial_result: Optional[Dict[str, Any]] = None
         for selected in candidates[:3]:
+            log_auto_download_candidate(self._logger, selected)
             session_id = owner._hash_text(f"auto-season|{datetime.now().isoformat()}|{entries[0].get('id')}")[:16]
             session_dir = owner.services.upload_session().get_session_root() / session_id
             session_dir.mkdir(parents=True, exist_ok=True)
