@@ -5,7 +5,10 @@ import { fileURLToPath } from 'node:url'
 const require = createRequire(new URL('../plugins.v3/subtitlemanualupload/package.json', import.meta.url))
 const { createServer } = require('vite')
 const root = fileURLToPath(new URL('..', import.meta.url))
-const server = await createServer({ root, configFile: false, server: { middlewareMode: true }, appType: 'custom' })
+const server = await createServer({
+  root, configFile: false, server: { middlewareMode: true, ws: false }, appType: 'custom',
+  resolve: { alias: [{ find: /^vue$/, replacement: require.resolve('vue/dist/vue.runtime.esm-browser.js') }] },
+})
 try {
   for (const version of ['plugins.v2', 'plugins.v3']) {
     const { useOnlineSubtitles } = await server.ssrLoadModule(`/${version}/subtitlemanualupload/src/composables/useOnlineSubtitles.js`)
@@ -51,6 +54,36 @@ try {
     assert.equal(ids().length, 13)
     state.onlineProviderFilter.value = 'subdl'
     assert.equal(ids().length, 2)
+
+    if (version === 'plugins.v3') {
+      const now = new Date().toISOString()
+      state.onlineResults.value = [
+        { ...result('official', 'chi'), subtitle_type: '官方字幕', download_count: 1200, uploaded_at: now },
+        { ...result('zero', 'chi'), subtitle_type: '官方字幕', download_count: 0 },
+        { ...result('ai', 'chi&eng'), subtitle_type: 'AI校对', download_count: 400, uploaded_at: '2020-01-01' },
+        result('unmarked', 'eng', 'subdl'),
+      ]
+      state.resetOnlineFilters()
+      state.onlineResultFilters.value.order = 'downloads-asc'
+      assert.deepEqual(ids(), ['zero', 'ai', 'official', 'unmarked'])
+      state.onlineResultFilters.value.order = 'downloads-desc'
+      assert.deepEqual(ids(), ['official', 'ai', 'zero', 'unmarked'])
+      state.onlineResultFilters.value.order = 'recent'
+      assert.deepEqual(ids().slice(0, 2), ['official', 'ai'])
+      state.selectedOnlineResultIds.value = ['subhd:official', 'subdl:unmarked']
+      state.onlineAutoPreview.value = { plans: [{ candidates: [state.onlineResults.value[0]] }] }
+      state.onlineResultFilters.value.type = '未标注'
+      assert.deepEqual(ids(), ['unmarked'])
+      assert.equal(state.selectedOnlineResults.value.length, 2)
+      assert.equal(state.onlineAutoPreview.value.plans[0].candidates[0].result_id, 'official')
+      Object.assign(state.onlineResultFilters.value, { days: '7', minimum: '1000', type: '官方字幕' })
+      assert.deepEqual(ids(), ['official'])
+      state.onlineLanguageFilter.value = 'chi&eng'
+      assert.deepEqual(ids(), [])
+      state.resetOnlineFilters()
+      assert.equal(state.onlineResultFilters.value.order, 'recent')
+      assert.equal(ids().length, 4)
+    }
     console.log(`${version}: precise language filters, intersection, counts and reset passed`)
   }
 } finally {

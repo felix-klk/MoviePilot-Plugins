@@ -12,6 +12,8 @@ from app.sdk.logging import logger
 
 from ..config.config_schema import host_from_url, normalize_provider_ids
 from ..online.online_subtitle import CaptchaRequiredError, build_search_keywords
+from ..online_subtitles.matcher import online_search_sort_key
+from ..online_subtitles.models import OnlineSubtitleResult
 from .request_helpers import (
     filter_unlocked_target_ids,
     enrich_targets_with_media,
@@ -238,6 +240,49 @@ class OnlineApi:
                 "messages": search_result.get("messages") or [],
             }
         )
+
+    async def online_auto_preview(self, request: Request) -> Dict[str, Any]:
+        owner = self.owner
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="无效的自动入库预判请求")
+        target_ids, _ = filter_unlocked_target_ids(
+            target_ids_from_body(body, owner._normalize_text),
+            locked_target_ids_from_body(body, owner._normalize_text),
+            owner._normalize_text,
+        )
+        entries = owner.services.local_media_catalog().resolve_targets(target_ids)
+        if not entries or len(entries) != len(set(target_ids)):
+            raise HTTPException(status_code=400, detail="目标视频已失效或已锁定，请重新选择资源")
+        results = []
+        for item in results_from_body(body):
+            fields = {
+                key: owner._normalize_text(item.get(key))
+                for key in (
+                    "provider", "result_id", "title", "language", "language_category", "note",
+                    "identity_status", "match_detail", "subtitle_type", "uploaded_at",
+                )
+            }
+            if fields["provider"] not in owner._available_online_provider_ids or not fields["result_id"] or not fields["title"]:
+                continue
+            count = item.get("download_count")
+            results.append(OnlineSubtitleResult(
+                **fields,
+                page_url="",
+                score=owner._safe_int(item.get("score"), 0),
+                season=owner._safe_int(item.get("season"), 0),
+                episode=owner._safe_int(item.get("episode"), 0),
+                downloadable=item.get("downloadable") is not False,
+                download_count=count if type(count) is int and count >= 0 else None,
+            ))
+        results.sort(key=online_search_sort_key, reverse=True)
+        preview = await run_in_threadpool(
+            owner.services.auto_transfer().preview_online_download,
+            list(entries.values()),
+            results,
+            owner._normalize_text(body.get("scope")),
+        )
+        return owner._ok(preview)
 
     async def online_download_preview(self, request: Request) -> Dict[str, Any]:
         owner = self.owner

@@ -180,6 +180,13 @@ def build_api_routes(owner: Any) -> List[Dict[str, Any]]:
             "summary": "搜索单个在线字幕源",
         },
         {
+            "path": "/online_auto_preview",
+            "endpoint": online_api.online_auto_preview,
+            "methods": ["POST"],
+            "auth": "bear",
+            "summary": "预判当前在线字幕结果的自动入库尝试顺序",
+        },
+        {
             "path": "/online_ai_submit",
             "endpoint": ai_api.online_ai_submit,
             "methods": ["POST"],

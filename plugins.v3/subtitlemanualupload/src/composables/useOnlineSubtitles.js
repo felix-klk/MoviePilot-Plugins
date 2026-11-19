@@ -15,6 +15,23 @@ import {
 
 const ONLINE_PROVIDER_TIMEOUT_MS = 25000
 const ONLINE_DOWNLOAD_TIMEOUT_MS = 180000
+const DEFAULT_RESULT_FILTERS = { days: 'all', minimum: 'all', type: 'all', order: 'default' }
+const DAY_MS = 86_400_000
+
+function resultDownloadCount(item) {
+  return Number.isSafeInteger(item.download_count) && item.download_count >= 0 ? item.download_count : null
+}
+
+function resultUploadTime(item) {
+  const time = Date.parse(item.uploaded_at)
+  return Number.isFinite(time) ? time : null
+}
+
+function compareMetadata(a, b, direction) {
+  if (a === null) return b === null ? 0 : 1
+  if (b === null) return -1
+  return direction * (a - b)
+}
 
 export function useOnlineSubtitles({
   pluginApi,
@@ -56,6 +73,9 @@ export function useOnlineSubtitles({
   const onlineStatus = ref({ providers: [], capabilities: {} })
   const onlineSelectedProviders = ref([...defaultOnlineProviderIds])
   const onlineResults = ref([])
+  const onlineResultFilters = ref({ ...DEFAULT_RESULT_FILTERS })
+  const onlineAutoPreview = ref(null)
+  const onlineAutoPreviewLoading = ref(false)
   const onlineLanguageFilter = ref('all')
   const onlineProviderFilter = ref('all')
   const onlineMessages = ref([])
@@ -69,9 +89,29 @@ export function useOnlineSubtitles({
   const hasOnlineResults = computed(() => onlineResults.value.length > 0)
   const matchesLanguage = item => onlineLanguageFilter.value === 'all' || onlineResultLanguageFilterCategory(item) === onlineLanguageFilter.value
   const matchesProvider = item => onlineProviderFilter.value === 'all' || item.provider === onlineProviderFilter.value
-  const filteredOnlineResults = computed(() => onlineResults.value.filter(item => matchesLanguage(item) && matchesProvider(item)))
+  const metadataFilteredResults = computed(() => {
+    const { days, minimum, type } = onlineResultFilters.value
+    const now = Date.now()
+    return onlineResults.value.filter(item => {
+      if (type !== 'all' && (item.subtitle_type || '未标注') !== type) return false
+      if (minimum !== 'all' && (resultDownloadCount(item) ?? -1) < Number(minimum)) return false
+      if (days === 'all') return true
+      const uploaded = resultUploadTime(item)
+      return uploaded !== null && uploaded <= now && now - uploaded <= Number(days) * DAY_MS
+    })
+  })
+  const filteredOnlineResults = computed(() => {
+    const items = metadataFilteredResults.value.filter(item => matchesLanguage(item) && matchesProvider(item))
+    const order = onlineResultFilters.value.order
+    if (order === 'recent') return items.sort((a, b) => compareMetadata(resultUploadTime(a), resultUploadTime(b), -1))
+    if (order === 'downloads-desc' || order === 'downloads-asc') {
+      const direction = order === 'downloads-desc' ? -1 : 1
+      return items.sort((a, b) => compareMetadata(resultDownloadCount(a), resultDownloadCount(b), direction))
+    }
+    return items
+  })
   const onlineLanguageFilterItems = computed(() => {
-    const results = onlineResults.value.filter(matchesProvider)
+    const results = metadataFilteredResults.value.filter(matchesProvider)
     const counts = results.reduce((acc, item) => {
       const category = onlineResultLanguageFilterCategory(item)
       acc[category] = (acc[category] || 0) + 1
@@ -83,7 +123,7 @@ export function useOnlineSubtitles({
     ]
   })
   const onlineProviderFilterItems = computed(() => {
-    const results = onlineResults.value.filter(matchesLanguage)
+    const results = metadataFilteredResults.value.filter(matchesLanguage)
     const counts = results.reduce((acc, item) => {
       const provider = item.provider || 'unknown'
       acc[provider] = (acc[provider] || 0) + 1
@@ -154,12 +194,17 @@ export function useOnlineSubtitles({
       error.value = '没有可搜索的目标：选中的集数可能都已锁定'
       return
     }
+    const dialogSeq = ++onlineSearchSeq
+    onlineSearching.value = false
     onlineTitle.value = title
     onlineScope.value = scope
     onlineTargets.value = usableTargets
     prepareOnlineUploadState(usableTargets, title)
     onlineKeyword.value = ''
     onlineResults.value = []
+    onlineResultFilters.value = { ...DEFAULT_RESULT_FILTERS }
+    onlineAutoPreview.value = null
+    onlineAutoPreviewLoading.value = false
     onlineLanguageFilter.value = 'all'
     onlineProviderFilter.value = 'all'
     onlineMessages.value = []
@@ -172,7 +217,9 @@ export function useOnlineSubtitles({
     message.value = ''
     onlineDialog.value = true
     await loadOnlineStatus()
+    if (dialogSeq !== onlineSearchSeq) return
     await loadOnlineManualLinks()
+    if (dialogSeq !== onlineSearchSeq) return
     await runOnlineSearch()
   }
 
@@ -224,6 +271,8 @@ export function useOnlineSubtitles({
     onlineSearching.value = true
     onlineError.value = ''
     onlineResults.value = []
+    onlineAutoPreview.value = null
+    onlineAutoPreviewLoading.value = false
     onlineLanguageFilter.value = 'all'
     onlineProviderFilter.value = 'all'
     onlineMessages.value = []
@@ -236,6 +285,7 @@ export function useOnlineSubtitles({
         onlineMessages.value = [{ level: 'info', message: '没有搜索到可自动下载的字幕，可使用右侧手动搜索链接。' }]
       }
       onlineSearching.value = false
+      loadOnlineAutoPreview(searchSeq, payload)
     }
     const searchProvider = async (provider) => {
       try {
@@ -253,6 +303,7 @@ export function useOnlineSubtitles({
         mergeOnlineResults(data.results || [])
         appendOnlineMessages(data.messages || [])
         await nextTick()
+        if (searchSeq !== onlineSearchSeq) return
         onlineProviderProgress.value = { ...onlineProviderProgress.value, [provider]: 'done' }
       } catch (err) {
         if (searchSeq !== onlineSearchSeq) return
@@ -270,7 +321,32 @@ export function useOnlineSubtitles({
     Promise.allSettled(providers.map(provider => searchProvider(provider))).then(finishSearch)
   }
 
-  function stopOnlineSearch() {
+  async function loadOnlineAutoPreview(searchSeq, payload) {
+    if (!onlineResults.value.length) return
+    onlineAutoPreviewLoading.value = true
+    try {
+      const response = await withTimeout(
+        pluginApi.value.onlineAutoPreview({ ...payload, results: onlineResults.value }),
+        Math.max(ONLINE_PROVIDER_TIMEOUT_MS, payload.target_ids.length * 15_000),
+        '自动入库预判超时',
+      )
+      if (searchSeq !== onlineSearchSeq) return
+      onlineAutoPreview.value = unwrapResponse(response)
+    } catch (err) {
+      if (searchSeq !== onlineSearchSeq) return
+      onlineAutoPreview.value = { error: errorMessage(err, '自动入库预判失败') }
+    } finally {
+      if (searchSeq === onlineSearchSeq) onlineAutoPreviewLoading.value = false
+    }
+  }
+
+  function resetOnlineFilters() {
+    onlineLanguageFilter.value = 'all'
+    onlineProviderFilter.value = 'all'
+    onlineResultFilters.value = { ...DEFAULT_RESULT_FILTERS, order: onlineResultFilters.value.order }
+  }
+
+  function stopOnlineSearch({ preview = true } = {}) {
     if (!onlineSearching.value) return
     onlineSearchSeq += 1
     onlineSearching.value = false
@@ -281,15 +357,18 @@ export function useOnlineSubtitles({
       ]),
     )
     appendOnlineMessages([{ level: 'info', message: '已停止等待未返回的字幕源，已显示的结果会保留。' }])
+    if (preview) loadOnlineAutoPreview(onlineSearchSeq, onlinePayload())
   }
 
   function closeOnlineDialog() {
     if (onlineSearching.value) {
-      stopOnlineSearch()
+      stopOnlineSearch({ preview: false })
     }
     if (onlineDownloading.value) {
       stopOnlineDownload()
     }
+    onlineSearchSeq += 1
+    onlineAutoPreviewLoading.value = false
     onlineDialog.value = false
   }
 
@@ -481,6 +560,9 @@ export function useOnlineSubtitles({
     onlineStatus,
     onlineSelectedProviders,
     onlineResults,
+    onlineResultFilters,
+    onlineAutoPreview,
+    onlineAutoPreviewLoading,
     onlineLanguageFilter,
     onlineProviderFilter,
     onlineMessages,
@@ -507,6 +589,7 @@ export function useOnlineSubtitles({
     onlinePayload,
     loadOnlineManualLinks,
     runOnlineSearch,
+    resetOnlineFilters,
     stopOnlineSearch,
     closeOnlineDialog,
     updateOnlineDialog,

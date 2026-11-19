@@ -7,6 +7,7 @@ from math import log10
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ..matching.subtitle_language import (
+    auto_candidate_language_bucket,
     auto_candidate_language_rank,
     auto_rank_candidates,
     required_auto_languages,
@@ -21,7 +22,7 @@ from .keyword_builder import (
     _title_aliases,
     _unique_keywords,
 )
-from .language import _guess_language_label
+from .language import _guess_language_label, _language_priority
 from .catalog import PROVIDER_SPECS
 
 
@@ -74,6 +75,10 @@ def _identity_priority(item: Any) -> int:
     }.get(item.identity_status or "", 0)
 
 
+def online_search_sort_key(item: Any) -> Tuple[int, int, int, int, str]:
+    return _provider_priority(item), _identity_priority(item), _language_priority(item), item.score, item.title
+
+
 def _release_profile(value: str) -> Tuple[str, str]:
     value = value.replace("_", " ")
     source = re.search(
@@ -89,6 +94,8 @@ def _release_profile(value: str) -> Tuple[str, str]:
 
 
 _SUBTITLE_TYPE_ORDER = {"官方字幕": 0, "AI校对": 1, "其他来源": 2}
+AUTO_DOWNLOAD_ATTEMPT_LIMIT = 5
+AUTO_SEASON_ATTEMPT_LIMIT = 3
 _RELEASE_EDITION = re.compile(
     r"(?P<theatrical>院线版|院線版|公映版|公映(?=[简繁雙双])|剧场版|劇場版|\btheatrical[ .-]+(?:cut|edition|version)\b)"
     r"|(?P<directors>导演剪辑版|導演剪輯版|\bdirector(?:['’]s|s)?[ .-]+cut\b)"
@@ -108,6 +115,8 @@ def rank_auto_download_candidates(
     language_priority: Optional[List[str]],
     *,
     strict: bool,
+    min_score: Optional[int] = None,
+    rejections: Optional[Dict[str, int]] = None,
 ) -> List[Dict[str, Any]]:
     required = required_auto_languages(language_priority, strict=strict)
     priority = language_priority if required is None else required
@@ -125,7 +134,18 @@ def rank_auto_download_candidates(
     identity_order = {}
     for item in candidates:
         edition = _release_edition(str(item.get("title") or ""))
-        if item.get("identity_status") == "failed" or (edition and target_edition and edition != target_edition):
+        reason = ""
+        if item.get("downloadable") is False:
+            reason = "仅支持手动下载"
+        elif min_score is not None and _safe_int(item.get("score")) < min_score:
+            reason = f"匹配分低于 {min_score}"
+        elif item.get("identity_status") == "failed":
+            reason = "媒体身份不匹配"
+        elif edition and target_edition and edition != target_edition:
+            reason = "片源剪辑版本冲突"
+        if reason:
+            if rejections is not None:
+                rejections[reason] = rejections.get(reason, 0) + 1
             continue
         provider = item.get("provider")
         identity = provider, item.get("identity_status")
@@ -133,6 +153,8 @@ def rank_auto_download_candidates(
         identity_order.setdefault(identity, len(identity_order))
         eligible.append(item)
     allowed = auto_rank_candidates(eligible, language_priority, strict=strict)
+    if rejections is not None and len(allowed) < len(eligible):
+        rejections["字幕语言不符合要求"] = len(eligible) - len(allowed)
     now = datetime.now(timezone.utc)
 
     def rank(item: Dict[str, Any]) -> Tuple[int, int, int, Tuple[int, int], int, float, int]:
@@ -167,6 +189,7 @@ def rank_auto_download_candidates(
         item["auto_rank"] = {
             "release": ("片源不同", "片源未确认", "片源匹配")[release_rank + 1],
             "subtitle_type": subtitle_type,
+            "language_bucket": auto_candidate_language_bucket(item),
             "match": score,
             "downloads": count,
             "uploaded_at": uploaded_at,

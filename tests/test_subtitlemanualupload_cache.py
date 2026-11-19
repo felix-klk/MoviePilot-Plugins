@@ -1497,6 +1497,95 @@ def test_online_download_preview_uses_upload_session_service(tmp_path, generatio
     module.shutil.rmtree(session_dir, ignore_errors=True)
 
 
+def test_v3_online_auto_preview_uses_current_policy_without_downloading(tmp_path, monkeypatch):
+    module, _, _ = load_plugin_module("plugins.v3")
+    plugin = make_plugin(module)
+    plugin._enabled = True
+    plugin._auto_search_on_transfer = True
+    plugin._auto_skip_chinese_media_on_transfer = False
+    plugin._auto_check_emby_subtitles = False
+    plugin._online_provider_ids = ["subhd"]
+    video = tmp_path / "Pressure.2026.2160p.WEB-DL.strm"
+    video.write_text("https://example.invalid/video", encoding="utf-8")
+    remember_targets(plugin, module, [{
+        "id": "pressure", "title": "Pressure", "path": str(video),
+        "basename": video.stem, "filename": video.name, "target_label": video.name,
+        "storage": "local", "media_type": "movie",
+    }])
+
+    def no_online_service():
+        pytest.fail("Preview must not contact a subtitle provider")
+
+    monkeypatch.setattr(plugin.services, "online_subtitles", no_online_service)
+    endpoint = next(route["endpoint"] for route in plugin.get_api() if route["path"] == "/online_auto_preview")
+    normal = {
+        "provider": "subhd", "title": "Pressure.2026.2160p.WEB-DL", "score": 60,
+        "language": "简英双语", "identity_status": "strong",
+    }
+    body = {
+        "target_ids": ["pressure"], "scope": "movie",
+        "results": [
+            {**normal, "result_id": "ai", "subtitle_type": "AI校对", "score": 85},
+            {**normal, "result_id": "official", "subtitle_type": "官方字幕", "download_count": 1254},
+            {**normal, "result_id": "low", "score": 19},
+            {**normal, "result_id": "manual", "downloadable": False},
+            {**normal, "result_id": "other-provider", "provider": "subtitlecat"},
+        ],
+    }
+
+    def preview():
+        return asyncio.run(endpoint(FakeRequest(body)))["data"]
+
+    result = preview()
+    assert result["enabled"] is True
+    plan = result["plans"][0]
+    assert [item["result_id"] for item in plan["candidates"]] == ["official", "ai"]
+    assert plan["candidates"][0]["auto_rank"]["release"] == "片源匹配"
+    assert plan["candidates"][0]["auto_rank"]["download_bonus"] > 2
+    assert plan["rejections"] == {"匹配分低于 20": 1, "仅支持手动下载": 1, "字幕源未启用自动入库": 1}
+
+    plugin._auto_subtitle_language_priority = ["chi&jp"]
+    result = preview()
+    assert result["required_languages"] == ["chi&jp"]
+    assert result["plans"][0]["candidates"] == []
+    assert result["plans"][0]["rejections"]["字幕语言不符合要求"] == 2
+
+    plugin._auto_subtitle_language_priority = ["chi"]
+    plugin._auto_subtitle_language_strict = True
+    video.with_suffix(".zh-CN.srt").write_text("1\n00:00:01,000 --> 00:00:02,000\n测试\n", encoding="utf-8")
+    plugin.services.subtitle_inventory().invalidate_directory(tmp_path)
+    result = preview()
+    assert result["plans"] == []
+    assert result["skipped"][0]["reason"] == "目标已有符合语言要求的字幕"
+
+    plugin._auto_subtitle_language_priority = ["chi&eng"]
+    plugin._entry_map_max_size = 10
+    episodes = []
+    for season, episode in [(1, 1), (1, 2), (2, 1)]:
+        name = f"Pressure.S{season:02d}E{episode:02d}.2160p.WEB-DL"
+        path = tmp_path / f"{name}.strm"
+        path.write_text("https://example.invalid/video", encoding="utf-8")
+        episodes.append({
+            "id": name, "title": "Pressure", "path": str(path), "basename": name,
+            "filename": path.name, "target_label": name, "storage": "local",
+            "media_type": "tv", "season": season, "episode": episode,
+        })
+    remember_targets(plugin, module, episodes)
+    body.update(
+        target_ids=[entry["id"] for entry in episodes],
+        scope="season",
+        results=[
+            {**normal, "result_id": "s1", "title": "Pressure.S01.2160p.WEB-DL"},
+            {**normal, "result_id": "s2", "title": "Pressure.S02E01.2160p.WEB-DL"},
+            {**normal, "result_id": "e3", "title": "Pressure.S01E03.2160p.WEB-DL"},
+            {**normal, "result_id": "unconfirmed"},
+        ],
+    )
+    plans = preview()["plans"]
+    assert [plan["scope"] for plan in plans] == ["season", "season"]
+    assert [[item["result_id"] for item in plan["candidates"]] for plan in plans] == [["s1"], ["s2"]]
+
+
 def test_7z_archive_extraction_with_unar_tool(tmp_path):
     module, _, _ = load_plugin_module()
     cls = module.SubtitleManualUpload

@@ -452,6 +452,9 @@ const {
   onlineStatus,
   onlineSelectedProviders,
   onlineResults,
+  onlineResultFilters,
+  onlineAutoPreview,
+  onlineAutoPreviewLoading,
   onlineLanguageFilter,
   onlineProviderFilter,
   onlineMessages,
@@ -472,6 +475,7 @@ const {
   openBatchOnlineSearch,
   openSingleOnlineSearch,
   runOnlineSearch,
+  resetOnlineFilters,
   stopOnlineSearch,
   closeOnlineDialog,
   updateOnlineDialog,
@@ -1152,6 +1156,7 @@ defineExpose({
       v-model:online-messages-collapsed="onlineMessagesCollapsed"
       v-model:online-language-filter="onlineLanguageFilter"
       v-model:online-provider-filter="onlineProviderFilter"
+      v-model:online-result-filters="onlineResultFilters"
       v-model:online-ai-confirm-dialog="onlineAiConfirmDialog"
       :online-title="onlineTitle"
       :online-targets="onlineTargets"
@@ -1169,6 +1174,8 @@ defineExpose({
       :has-online-results="hasOnlineResults"
       :filtered-online-results="filteredOnlineResults"
       :online-results="onlineResults"
+      :online-auto-preview="onlineAutoPreview"
+      :online-auto-preview-loading="onlineAutoPreviewLoading"
       :online-language-filter-items="onlineLanguageFilterItems"
       :online-provider-filter-items="onlineProviderFilterItems"
       :online-provider-progress-items="onlineProviderProgressItems"
@@ -1187,6 +1194,7 @@ defineExpose({
       @stop-online-download="stopOnlineDownload"
       @close-online-dialog="closeOnlineDialog"
       @run-online-search="runOnlineSearch"
+      @reset-online-filters="resetOnlineFilters"
       @stop-online-search="stopOnlineSearch"
       @toggle-online-result="toggleOnlineResult"
       @confirm-online-ai-translate="confirmOnlineAiTranslate"

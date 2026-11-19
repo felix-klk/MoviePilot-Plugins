@@ -4,6 +4,15 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..online_subtitles.catalog import AVAILABLE_ONLINE_PROVIDER_IDS
+from ..online_subtitles.matcher import (
+    AUTO_DOWNLOAD_ATTEMPT_LIMIT,
+    AUTO_SEASON_ATTEMPT_LIMIT,
+    _episode_from_text,
+    _safe_int,
+    _season_matches_text,
+    rank_auto_download_candidates,
+)
+from ..online_subtitles.models import OnlineSubtitleResult
 
 from .auto_transfer_processor import AutoTransferProcessor, AutoTransferProcessorCollaborators
 from .auto_transfer_queue import AutoTransferQueue
@@ -18,6 +27,20 @@ from ..matching.subtitle_language import (
     required_auto_languages,
     target_satisfies_auto_subtitle_policy,
 )
+
+
+def _result_matches_preview_targets(
+    item: Dict[str, Any], targets: List[Dict[str, Any]], require_season_evidence: bool,
+) -> bool:
+    season, episode = _episode_from_text(item["title"]) or (0, 0)
+    season = item["season"] or season
+    episode = item["episode"] or episode
+    seasons = {_safe_int(target.get("season")) for target in targets} - {0}
+    if season and seasons and season not in seasons:
+        return False
+    if episode and not any(_safe_int(target.get("episode")) == episode for target in targets):
+        return False
+    return not require_season_evidence or bool(season) or _season_matches_text(item["title"], targets)
 
 
 @dataclass(frozen=True)
@@ -390,6 +413,82 @@ class AutoTransferService:
     def auto_search_providers(self) -> List[str]:
         owner = self._owner
         return [item for item in (owner._online_provider_ids or []) if item in AVAILABLE_ONLINE_PROVIDER_IDS]
+
+    def preview_online_download(
+        self,
+        entries: List[Dict[str, Any]],
+        results: List[OnlineSubtitleResult],
+        scope: str,
+    ) -> Dict[str, Any]:
+        owner = self._owner
+        providers = self.auto_search_providers()
+        priority = getattr(owner, "_auto_subtitle_language_priority", None)
+        strict = bool(getattr(owner, "_auto_subtitle_language_strict", False))
+        strategy = owner._normalize_auto_transfer_subtitle_strategy(owner._auto_transfer_subtitle_strategy)
+        available = [item.to_dict() for item in results if item.provider in providers]
+        skipped = []
+        groups: Dict[str, List[Dict[str, Any]]] = {}
+        require_season_evidence = len({
+            self.auto_transfer_group_key(entry) for entry in entries if entry.get("media_type") == "tv"
+        }) > 1
+
+        for entry in entries:
+            target = self._target_from_entry(entry)
+            reason = ""
+            if not target.get("writable", True):
+                reason = "目标不可写"
+            if not reason and owner._auto_check_emby_subtitles:
+                check = self._check_emby_subtitles_for_task({"entry": entry})
+                if check:
+                    reason = "Emby 尚未扫描到该目标的字幕轨道" if check["status"] == "pending" else check["reason"]
+            if not reason:
+                reason = self._processor.target_skip_reason(entry, target)
+            if not reason and strategy == "ai_source_only" and not target.get("is_stream"):
+                reason = "当前策略仅提交 AI 字幕任务"
+            if reason:
+                skipped.append({"target_id": target["id"], "target": target["label"], "reason": reason})
+                continue
+            groups.setdefault(self.auto_transfer_group_key(entry), []).append(target)
+
+        plans = []
+        for targets in groups.values():
+            season_scope = targets[0].get("media_type") == "tv" and (len(targets) > 1 or scope in {"season", "batch"})
+            rejections: Dict[str, int] = {}
+            if len(available) < len(results):
+                rejections["字幕源未启用自动入库"] = len(results) - len(available)
+            candidates = [
+                item for item in available
+                if targets[0].get("media_type") != "tv"
+                or _result_matches_preview_targets(item, targets, require_season_evidence)
+            ]
+            if len(candidates) < len(available):
+                rejections["季集不匹配或未确认"] = len(available) - len(candidates)
+            candidates = rank_auto_download_candidates(
+                candidates, targets, priority,
+                strict=strict, min_score=owner._auto_search_min_score, rejections=rejections,
+            )
+            attempt_limit = AUTO_SEASON_ATTEMPT_LIMIT if season_scope else AUTO_DOWNLOAD_ATTEMPT_LIMIT
+            label = targets[0]["label"]
+            if len(targets) > 1:
+                label = f"第 {targets[0].get('season') or 0} 季 · {len(targets)} 个目标"
+            plans.append({
+                "target_ids": [target["id"] for target in targets],
+                "target": label,
+                "scope": "season" if season_scope else "single",
+                "candidates": [
+                    {key: item[key] for key in ("provider", "result_id", "title", "match_detail", "auto_rank")}
+                    for item in candidates[:attempt_limit]
+                ],
+                "candidate_count": len(candidates),
+                "rejections": rejections,
+            })
+        return {
+            "enabled": bool(owner.get_state() and owner._auto_search_on_transfer),
+            "min_score": owner._auto_search_min_score,
+            "required_languages": required_auto_languages(priority, strict=strict),
+            "plans": plans,
+            "skipped": skipped,
+        }
 
 
     def auto_search_write_subtitle(

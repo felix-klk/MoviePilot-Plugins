@@ -7,7 +7,7 @@ import shutil
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..matching.subtitle_language import required_auto_languages
-from ..online_subtitles.matcher import log_auto_download_candidate, rank_auto_download_candidates
+from ..online_subtitles.matcher import AUTO_DOWNLOAD_ATTEMPT_LIMIT, log_auto_download_candidate, rank_auto_download_candidates
 from ..online.online_subtitle import build_search_keywords
 
 
@@ -82,16 +82,12 @@ class AutoTransferProcessor:
             targets=[target],
             scope="auto",
         )
-        candidates = [
-            item
-            for item in search_result.get("results") or []
-            if item.get("downloadable") is not False and owner._safe_int(item.get("score"), 0) >= owner._auto_search_min_score
-        ]
         candidates = rank_auto_download_candidates(
-            candidates,
+            search_result.get("results") or [],
             [target],
             getattr(owner, "_auto_subtitle_language_priority", None),
             strict=bool(getattr(owner, "_auto_subtitle_language_strict", False)),
+            min_score=owner._auto_search_min_score,
         )
         if not candidates:
             return {
@@ -103,7 +99,7 @@ class AutoTransferProcessor:
             }
 
         last_reason = ""
-        for selected in candidates[:5]:
+        for selected in candidates[:AUTO_DOWNLOAD_ATTEMPT_LIMIT]:
             log_auto_download_candidate(self._logger, selected)
             session_id = owner._hash_text(f"auto|{datetime.now().isoformat()}|{entry.get('id')}")[:16]
             session_dir = owner.services.upload_session().get_session_root() / session_id
@@ -312,24 +308,9 @@ class AutoTransferProcessor:
             strategy = "online_source_only"
         base = {"strategy": strategy, "target": target.get("label")}
 
-        if self._collaborators.auto_target_has_chinese_subtitle(entry, target):
-            reason = "目标已有符合语言要求的字幕"
+        reason = self.target_skip_reason(entry, target, log=True)
+        if reason:
             return {**base, "status": "skipped", "reason": reason}
-        if target.get("has_subtitle"):
-            self._logger.info(
-                "[SubtitleManualUpload] 目标已有外挂字幕但未满足语言要求，继续自动匹配 target=%s",
-                target.get("label"),
-            )
-
-        if owner._auto_skip_chinese_media_on_transfer:
-            is_chinese, evidence = self._collaborators.chinese_transfer_media_evidence(entry)
-            if is_chinese:
-                return {**base, "status": "skipped", "reason": f"中文资源自动跳过：{evidence}"}
-            self._logger.info(
-                "[SubtitleManualUpload] 入库自动字幕中文识别未跳过 target=%s evidence=%s",
-                target.get("label"),
-                evidence,
-            )
 
         if strategy == "ai_source_only":
             if required is not None:
@@ -349,3 +330,24 @@ class AutoTransferProcessor:
             return {**base, **search_result}
         ai_result = self._collaborators.submit_ai_for_entry(entry, target, "搜索无单一高置信结果后兜底")
         return {**base, **ai_result, "search": search_result}
+
+    def target_skip_reason(self, entry: Dict[str, Any], target: Dict[str, Any], *, log: bool = False) -> str:
+        if self._collaborators.auto_target_has_chinese_subtitle(entry, target):
+            return "目标已有符合语言要求的字幕"
+        if log and target.get("has_subtitle"):
+            self._logger.info(
+                "[SubtitleManualUpload] 目标已有外挂字幕但未满足语言要求，继续自动匹配 target=%s",
+                target.get("label"),
+            )
+
+        if self._owner._auto_skip_chinese_media_on_transfer:
+            is_chinese, evidence = self._collaborators.chinese_transfer_media_evidence(entry)
+            if is_chinese:
+                return f"中文资源自动跳过：{evidence}"
+            if log:
+                self._logger.info(
+                    "[SubtitleManualUpload] 入库自动字幕中文识别未跳过 target=%s evidence=%s",
+                    target.get("label"),
+                    evidence,
+                )
+        return ""

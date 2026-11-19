@@ -158,16 +158,7 @@ class OnlineSubtitleSearchService:
         finally:
             self.fetcher.close()
         results = _dedupe_results(results)
-        results.sort(
-            key=lambda item: (
-                _provider_priority(item),
-                _identity_priority(item),
-                _language_priority(item),
-                item.score,
-                item.title,
-            ),
-            reverse=True,
-        )
+        results.sort(key=online_search_sort_key, reverse=True)
         return {
             "results": [item.to_dict() for item in (results if scope in {"auto", "season"} else results[:80])],
             "messages": provider_messages,

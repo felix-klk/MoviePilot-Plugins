@@ -71,6 +71,9 @@ export function createSubtitleManualUploadApi(api, pluginBase) {
     onlineSearchProvider(payload) {
       return post('/online_search_provider', payload)
     },
+    onlineAutoPreview(payload) {
+      return post('/online_auto_preview', payload)
+    },
     onlineAiSubmit(payload) {
       return post('/online_ai_submit', payload)
     },

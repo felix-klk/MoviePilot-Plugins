@@ -11,7 +11,8 @@ const { renderToString } = require('vue/server-renderer')
 const root = fileURLToPath(new URL('../plugins.v3/subtitlemanualupload', import.meta.url))
 const server = await createServer({
   root, configFile: false, plugins: [vuePlugin()],
-  server: { middlewareMode: true }, appType: 'custom',
+  server: { middlewareMode: true, ws: false }, appType: 'custom',
+  optimizeDeps: { noDiscovery: true },
 })
 const previousWindow = globalThis.window
 let now = 0
@@ -121,6 +122,65 @@ try {
   assert.match(html, /容器内可执行 unar/)
   assert.match(html, /可继续选择已解析的字幕/)
   console.log('Delayed partial preview, visible failure reasons, timeout and cancellation passed')
+
+  const official = { provider: 'subhd', result_id: 'official', title: 'Pressure 官方简中', subtitle_type: '官方字幕', download_count: 1200 }
+  const ai = { provider: 'subhd', result_id: 'ai', title: 'Pressure AI 校对', subtitle_type: 'AI校对', download_count: 600 }
+  const prediction = {
+    enabled: true,
+    min_score: 20,
+    plans: [{
+      target_ids: ['movie'], target: 'Pressure', scope: 'single', candidate_count: 2, rejections: {},
+      candidates: [
+        { ...official, auto_rank: { release: '片源匹配', subtitle_type: '官方字幕', match: 60, download_bonus: 2, time_bonus: 1, total: 63 } },
+        { ...ai, auto_rank: { release: '片源匹配', subtitle_type: 'AI校对', match: 62, download_bonus: 2, time_bonus: 0, total: 64 } },
+      ],
+    }],
+    skipped: [],
+  }
+  let previewCalls = 0
+  const search = useOnlineSubtitles({
+    pluginApi: ref({
+      onlineSearchProvider: async () => ({ data: { results: [official, ai] } }),
+      onlineAutoPreview: async payload => {
+        previewCalls++
+        assert.deepEqual(payload.results.map(item => item.result_id), ['official', 'ai'])
+        return { data: prediction }
+      },
+    }),
+    unwrapResponse: response => response.data, errorMessage: error => error.message,
+    error: ref(''), message, selectedMedia: ref({}), selectedTargets: ref(targets),
+    selectedSeason: ref('all'), batchUploadTargets: ref(targets),
+    lockedTargetPayload: () => [], aiAvailable: ref(false),
+  })
+  search.onlineTargets.value = targets
+  search.onlineSelectedProviders.value = ['subhd']
+  await search.runOnlineSearch()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(previewCalls, 1)
+  assert.equal(search.onlineAutoPreview.value.plans[0].candidates[0].result_id, 'official')
+  search.onlineResultFilters.value.type = 'AI校对'
+  search.selectedOnlineResultIds.value = ['subhd:official']
+  assert.deepEqual(search.filteredOnlineResults.value.map(item => item.result_id), ['ai'])
+  assert.equal(previewCalls, 1)
+
+  const { default: OnlineSubtitleDialog } = await server.ssrLoadModule(`${base}/components/OnlineSubtitleDialog.vue`)
+  const { onlineResultKey, isOnlineResultDownloadable } = await server.ssrLoadModule(`${base}/utils/onlineResult.js`)
+  const dialogSource = await readFile(new URL('../plugins.v3/subtitlemanualupload/src/components/OnlineSubtitleDialog.vue', import.meta.url), 'utf8')
+  const dialog = createSSRApp(OnlineSubtitleDialog, {
+    modelValue: true, hasOnlineResults: true, onlineResults: search.onlineResults.value,
+    onlineResultFilters: search.onlineResultFilters.value, onlineAutoPreview: search.onlineAutoPreview.value,
+    filteredOnlineResults: search.filteredOnlineResults.value, selectedOnlineResults: search.selectedOnlineResults.value,
+    providerName: String, providerProgressColor: String, providerProgressText: String,
+    onlineResultMeta: () => '', onlineResultKey, isOnlineResultDownloadable,
+  })
+  for (const name of new Set(dialogSource.match(/\bV[A-Z][A-Za-z]+/g))) dialog.component(name, stub)
+  const dialogHtml = await renderToString(dialog)
+  assert.match(dialogHtml, /首选候选已被当前筛选隐藏/)
+  assert.match(dialogHtml, /含隐藏的 1 条/)
+  assert.match(dialogHtml, /Pressure 官方简中/)
+  assert.match(dialogHtml, /基础 60 · 下载量 \+2/)
+  assert.match(dialogHtml, /下载量升序/)
+  console.log('Search prediction uses the full result batch and the dialog shows hidden selections and ranking details')
 } finally {
   globalThis.window = previousWindow
   await server.close()
