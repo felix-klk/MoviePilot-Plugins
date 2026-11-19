@@ -1422,8 +1422,10 @@ def test_api_apply_upload_uses_subtitle_writer_and_forwards_risky_offset(tmp_pat
     assert captured["kwargs"]["allow_risky_offset"] is True
 
 
-def test_online_download_preview_uses_upload_session_service(tmp_path):
-    module, _, _ = load_plugin_module()
+@pytest.mark.parametrize("generation", ["plugins.v2", "plugins.v3"])
+@pytest.mark.parametrize("include_invalid", [False, True])
+def test_online_download_preview_uses_upload_session_service(tmp_path, generation, include_invalid):
+    module, _, _ = load_plugin_module(generation)
     plugin = make_plugin(module)
     video = tmp_path / "Movie.mkv"
     video.write_text("video", encoding="utf-8")
@@ -1442,7 +1444,7 @@ def test_online_download_preview_uses_upload_session_service(tmp_path):
 
     class FakeOnlineService:
         def download(self, selected):
-            return [
+            downloaded = [
                 {
                     "provider": selected[0]["provider"],
                     "source_name": "Movie.eng.srt",
@@ -1450,6 +1452,14 @@ def test_online_download_preview_uses_upload_session_service(tmp_path):
                     "result": selected[0],
                 }
             ]
+            if include_invalid:
+                downloaded.insert(0, {
+                    "provider": selected[0]["provider"],
+                    "source_name": "invalid.ass",
+                    "content": b"upstream error",
+                    "result": selected[0],
+                })
+            return downloaded
 
     override_services(plugin, online_subtitles=FakeOnlineService())
     download_endpoint = next(route["endpoint"] for route in plugin.get_api() if route["path"] == "/online_download_preview")
@@ -1476,6 +1486,11 @@ def test_online_download_preview_uses_upload_session_service(tmp_path):
     assert data["source"] == "online"
     assert data["items"][0]["source_name"] == "Movie.eng.srt"
     assert data["items"][0]["online_source"] == "opensubtitles"
+    assert len(data["items"]) == 1
+    assert len(data["invalid_files"]) == int(include_invalid)
+    if include_invalid:
+        assert data["invalid_files"][0]["name"] == "invalid.ass"
+        assert data["invalid_files"][0]["reason"]
     session_dir, session_payload = load_session(plugin, module, data["session_id"])
     assert session_payload["source"] == "online"
     assert Path(session_payload["uploads"][0]["stored_path"]).is_file()

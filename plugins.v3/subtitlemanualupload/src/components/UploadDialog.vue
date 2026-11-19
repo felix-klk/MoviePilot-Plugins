@@ -176,6 +176,21 @@ function onPickFiles(event) {
       </VCardText>
       <VCardText v-else>
         <VAlert v-if="error" type="error" variant="tonal" class="mb-3" role="alert" :text="error" />
+        <VAlert v-if="preview?.invalid_files?.length" type="warning" variant="tonal" class="mb-3" role="alert">
+          <div>以下文件解析失败，可继续选择已解析的字幕。</div>
+          <div v-for="(file, index) in preview.invalid_files" :key="index" class="preview-file-warning">
+            <strong>{{ file.name }}</strong>
+            <div>{{ file.reason }}</div>
+          </div>
+        </VAlert>
+        <VAlert
+          v-if="preview?.unsupported_files?.length"
+          type="warning"
+          variant="tonal"
+          class="mb-3"
+          role="alert"
+          :text="`已忽略不支持的文件 ${preview.unsupported_files.join('、')}`"
+        />
         <div
           v-if="!hasPreviewItems"
           class="dropzone"
@@ -329,6 +344,11 @@ function onPickFiles(event) {
   background: var(--smu-dialog-bg);
   color: var(--smu-text);
   backdrop-filter: blur(16px);
+}
+
+.preview-file-warning {
+  margin-top: 8px;
+  overflow-wrap: anywhere;
 }
 
 .write-conflicts,

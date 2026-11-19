@@ -50,6 +50,12 @@ def download_online_results_to_uploads(
             )
         except ValueError as exc:
             invalid_files.append({"name": source_name, "reason": str(exc)})
+            logger.warning(
+                "[SubtitleManualUpload] 在线字幕文件解析失败 provider=%s filename=%s reason=%s",
+                downloaded.get("provider"),
+                source_name,
+                exc,
+            )
             continue
         if not extracted:
             unsupported_files.append(source_name)

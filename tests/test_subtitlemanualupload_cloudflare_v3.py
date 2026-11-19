@@ -125,6 +125,10 @@ def test_signed_cdn_filename_uses_response_header_or_url_path(clients):
     assert name_from({}, "https://example.com/down/My%20Subtitle.srt?key=example") == "My Subtitle.srt"
 
 
+def test_7z_content_magic_is_not_reported_as_text(clients):
+    assert clients._content_magic(b"7z\xbc\xaf\x27\x1c" + bytes(26)) == "7z"
+
+
 def test_auto_download_ranks_same_version_by_match_popularity_and_recency(clients):
     from datetime import datetime, timedelta, timezone
     matcher = importlib.import_module("cf_test.online_subtitles.matcher")

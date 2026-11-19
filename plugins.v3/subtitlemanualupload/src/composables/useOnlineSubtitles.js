@@ -14,7 +14,7 @@ import {
 } from '../utils/onlineResult'
 
 const ONLINE_PROVIDER_TIMEOUT_MS = 25000
-const ONLINE_DOWNLOAD_TIMEOUT_MS = 35000
+const ONLINE_DOWNLOAD_TIMEOUT_MS = 180000
 
 export function useOnlineSubtitles({
   pluginApi,
@@ -394,7 +394,7 @@ export function useOnlineSubtitles({
           results: selectedOnlineResults.value,
           allow_risky_offset: allowRiskyOffset,
         }),
-        ONLINE_DOWNLOAD_TIMEOUT_MS,
+        ONLINE_DOWNLOAD_TIMEOUT_MS * selectedOnlineResults.value.length,
         'AI 字幕任务提交仍在等待响应，已停止等待；可稍后打开 AI 状态刷新查看。',
       )
       if (downloadSeq !== onlineDownloadSeq) return
@@ -438,7 +438,7 @@ export function useOnlineSubtitles({
           ...onlinePayload(),
           results: selectedOnlineResults.value,
         }),
-        ONLINE_DOWNLOAD_TIMEOUT_MS,
+        ONLINE_DOWNLOAD_TIMEOUT_MS * selectedOnlineResults.value.length,
         '在线字幕源响应超时，已停止等待；可换一个结果重试，或打开手动链接下载后上传。',
       )
       if (downloadSeq !== onlineDownloadSeq) return

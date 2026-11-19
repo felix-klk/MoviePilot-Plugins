@@ -1323,70 +1323,74 @@
 }
 }
 
-.upload-dialog[data-v-6b5493f6] {
+.upload-dialog[data-v-3873df56] {
   background: var(--smu-dialog-bg);
   color: var(--smu-text);
   backdrop-filter: blur(16px);
 }
-.write-conflicts[data-v-6b5493f6],
-.write-conflict-row[data-v-6b5493f6] {
+.preview-file-warning[data-v-3873df56] {
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+.write-conflicts[data-v-3873df56],
+.write-conflict-row[data-v-3873df56] {
   display: grid;
   gap: 10px;
 }
-.write-conflict-row[data-v-6b5493f6] {
+.write-conflict-row[data-v-3873df56] {
   min-width: 0;
   padding: 12px;
   border: 1px solid var(--smu-border);
   border-radius: 14px;
   background: var(--smu-card-bg);
 }
-.write-conflict-title[data-v-6b5493f6] {
+.write-conflict-title[data-v-3873df56] {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
 }
-.write-conflict-paths[data-v-6b5493f6] {
+.write-conflict-paths[data-v-3873df56] {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 4px 10px;
 }
-.write-conflict-paths dt[data-v-6b5493f6],
-.write-ready-count[data-v-6b5493f6] {
+.write-conflict-paths dt[data-v-3873df56],
+.write-ready-count[data-v-3873df56] {
   color: var(--smu-text-muted);
 }
-.write-conflict-paths dd[data-v-6b5493f6] {
+.write-conflict-paths dd[data-v-3873df56] {
   margin: 0;
   overflow-wrap: anywhere;
 }
-.dialog-actions[data-v-6b5493f6]:has(.write-ready-count) {
+.dialog-actions[data-v-3873df56]:has(.write-ready-count) {
   flex-wrap: wrap;
 }
-.dialog-title[data-v-6b5493f6] {
+.dialog-title[data-v-3873df56] {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
-.dialog-title p[data-v-6b5493f6] {
+.dialog-title p[data-v-3873df56] {
   margin: 4px 0 0;
   color: var(--smu-text-muted);
   font-size: 12px;
   font-weight: 400;
 }
-.dialog-actions[data-v-6b5493f6] {
+.dialog-actions[data-v-3873df56] {
   padding: 12px 18px;
 }
-.dialog-actions-top[data-v-6b5493f6] {
+.dialog-actions-top[data-v-3873df56] {
   flex-wrap: wrap;
   gap: 8px;
   background: var(--smu-dialog-bar-bg);
 }
-.timeline-action[data-v-6b5493f6] {
+.timeline-action[data-v-3873df56] {
   display: flex;
   align-items: center;
 }
-.dropzone[data-v-6b5493f6] {
+.dropzone[data-v-3873df56] {
   position: relative;
   display: grid;
   gap: 10px;
@@ -1398,12 +1402,12 @@
   text-align: center;
   transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
 }
-.dropzone.dragging[data-v-6b5493f6] {
+.dropzone.dragging[data-v-3873df56] {
   transform: translateY(-1px);
   border-color: var(--smu-accent);
   background: var(--smu-card-bg-active);
 }
-.dropzone-icon[data-v-6b5493f6] {
+.dropzone-icon[data-v-3873df56] {
   padding: 6px 10px;
   border-radius: 999px;
   background: var(--smu-accent);
@@ -1411,107 +1415,107 @@
   font-size: 12px;
   font-weight: 900;
 }
-.dropzone-title[data-v-6b5493f6] {
+.dropzone-title[data-v-3873df56] {
   font-size: 18px;
   font-weight: 900;
 }
-.dropzone-text[data-v-6b5493f6],
-.support-row[data-v-6b5493f6],
-.file-row span[data-v-6b5493f6],
-.subtitle-source span[data-v-6b5493f6],
-.output-name span[data-v-6b5493f6] {
+.dropzone-text[data-v-3873df56],
+.support-row[data-v-3873df56],
+.file-row span[data-v-3873df56],
+.subtitle-source span[data-v-3873df56],
+.output-name span[data-v-3873df56] {
   color: var(--smu-text-muted);
   font-size: 12px;
 }
-.hidden-input[data-v-6b5493f6] {
+.hidden-input[data-v-3873df56] {
   display: none;
 }
-.support-row[data-v-6b5493f6] {
+.support-row[data-v-3873df56] {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 12px;
 }
-.support-row span[data-v-6b5493f6] {
+.support-row span[data-v-3873df56] {
   padding: 5px 9px;
   border-radius: 999px;
   background: var(--smu-card-bg-soft);
 }
-.support-row span.ok[data-v-6b5493f6] {
+.support-row span.ok[data-v-3873df56] {
   background: var(--smu-success-soft);
   color: var(--smu-success-text);
 }
-.file-list[data-v-6b5493f6],
-.preview-list[data-v-6b5493f6] {
+.file-list[data-v-3873df56],
+.preview-list[data-v-3873df56] {
   display: grid;
   gap: 10px;
   margin-top: 16px;
 }
-.file-row[data-v-6b5493f6],
-.preview-row[data-v-6b5493f6] {
+.file-row[data-v-3873df56],
+.preview-row[data-v-3873df56] {
   border: 1px solid var(--smu-border);
   border-radius: 18px;
   background: var(--smu-card-bg);
 }
-.file-row[data-v-6b5493f6] {
+.file-row[data-v-3873df56] {
   display: flex;
   justify-content: space-between;
   gap: 12px;
   align-items: center;
   padding: 10px 12px;
 }
-.file-row div[data-v-6b5493f6],
-.subtitle-source[data-v-6b5493f6],
-.output-name[data-v-6b5493f6] {
+.file-row div[data-v-3873df56],
+.subtitle-source[data-v-3873df56],
+.output-name[data-v-3873df56] {
   display: grid;
   gap: 4px;
   min-width: 0;
 }
-.preview-head[data-v-6b5493f6] {
+.preview-head[data-v-3873df56] {
   display: flex;
   justify-content: space-between;
   gap: 12px;
   align-items: center;
 }
-.section-kicker[data-v-6b5493f6] {
+.section-kicker[data-v-3873df56] {
   color: var(--smu-accent);
   font-size: 12px;
   font-weight: 900;
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
-.batch-language[data-v-6b5493f6] {
+.batch-language[data-v-3873df56] {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) auto;
   gap: 10px;
   align-items: center;
   min-width: min(100%, 360px);
 }
-.preview-row[data-v-6b5493f6] {
+.preview-row[data-v-3873df56] {
   display: grid;
   grid-template-columns: auto minmax(160px, 1fr) minmax(210px, 1fr) 116px minmax(180px, 1fr);
   gap: 10px;
   align-items: center;
   padding: 12px;
 }
-.preview-row.disabled[data-v-6b5493f6] {
+.preview-row.disabled[data-v-3873df56] {
   opacity: 0.58;
 }
-.subtitle-source strong[data-v-6b5493f6],
-.output-name strong[data-v-6b5493f6] {
+.subtitle-source strong[data-v-3873df56],
+.output-name strong[data-v-3873df56] {
   word-break: break-word;
 }
 @media (max-width: 900px) {
-.preview-row[data-v-6b5493f6] {
+.preview-row[data-v-3873df56] {
     grid-template-columns: 1fr;
 }
-.preview-head[data-v-6b5493f6] {
+.preview-head[data-v-3873df56] {
     display: grid;
 }
-.batch-language[data-v-6b5493f6] {
+.batch-language[data-v-3873df56] {
     grid-template-columns: 1fr;
 }
-.dialog-actions-top[data-v-6b5493f6] {
+.dialog-actions-top[data-v-3873df56] {
     align-items: stretch;
 }
 }

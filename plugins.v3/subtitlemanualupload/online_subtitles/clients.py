@@ -360,6 +360,8 @@ def _content_magic(content: bytes) -> str:
         return "zip"
     if head.startswith(b"Rar!\x1a\x07"):
         return "rar"
+    if head.startswith(b"7z\xbc\xaf\x27\x1c"):
+        return "7z"
     text = _decode_bytes(head, None).lstrip().lower()
     if text.startswith("<!do") or text.startswith("<htm"):
         return "html"
