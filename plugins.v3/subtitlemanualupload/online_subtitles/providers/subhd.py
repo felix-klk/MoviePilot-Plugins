@@ -41,7 +41,9 @@ def _subtitle_listing_metadata(text: str) -> Dict[str, Dict[str, Any]]:
         for link in links:
             classes = link.get("class", [])
             label = link.get_text(" ", strip=True)
-            if label and "link-dark" in classes:
+            if "link-secondary" in classes and label in {"未关联", "未關聯"}:
+                fields["subhd_unassociated"] = True
+            elif label and "link-dark" in classes:
                 field = "movie_name" if "align-middle" in classes else "listing_title"
                 fields.setdefault(field, label)
         labels = {
@@ -304,6 +306,7 @@ class SubHDProvider(BaseSubtitleProvider):
         for match in re.finditer(r'<a[^>]+href=["\'](/a/([A-Za-z0-9_-]+))["\'][^>]*>(.*?)</a>', text or "", flags=re.I | re.S):
             href, sid, raw_title = match.groups()
             listing = listing_metadata.get(sid, {})
+            unassociated = listing.get("subhd_unassociated", False)
             title = listing.get("listing_title") or _strip_tags(raw_title) or f"SubHD 字幕 {sid}"
             if target_episode:
                 include, _ = _episode_include_for_title(title, target_episode)
@@ -315,6 +318,9 @@ class SubHDProvider(BaseSubtitleProvider):
             )
             if assessment["identity_status"] == "failed" and targets:
                 continue
+            match_detail = assessment["match_detail"]
+            if unassociated:
+                match_detail = " / ".join(filter(None, (match_detail, "SubHD 未关联 · 仅手动选择")))
             window_start = max(0, match.start() - 700)
             window_end = min(len(text or ""), match.end() + 300)
             language_text = f"{title} {_strip_tags((text or '')[window_start:window_end])}"
@@ -341,7 +347,8 @@ class SubHDProvider(BaseSubtitleProvider):
                     downloadable=True,
                     query_plan=query_plan,
                     identity_status=assessment["identity_status"],
-                    match_detail=assessment["match_detail"],
+                    match_detail=match_detail,
+                    subhd_unassociated=unassociated,
                 )
             )
         return _dedupe_results(results)

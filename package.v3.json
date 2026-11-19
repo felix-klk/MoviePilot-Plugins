@@ -3,7 +3,7 @@
     "name": "海拉鲁字幕大师(NEO自用版)",
     "description": "支持字幕搜索、上传、匹配、改名、智能调轴与自动入库的字幕管理插件。",
     "labels": "字幕,ChineseSubFinder,媒体库,整理",
-    "version": "1.2.33",
+    "version": "1.2.34",
     "icon": "https://raw.githubusercontent.com/ifsherlock/MoviePilot-Plugins/main/icons/hyrule-subtitle-master.png",
     "author": "ifsherlock",
     "author_url": "https://github.com/ifsherlock",
@@ -11,6 +11,7 @@
     "system_version": ">=3.0.0",
     "release": false,
     "history": {
+      "v1.2.34": "SubHD 明确标注未关联的字幕仅供手动选择，自动入库预判显示跳过原因。压缩包内单个 SUP 图片字幕上限提高至 100 MiB，含 SUP 的包总解压上限为 200 MiB，普通成员合计仍限制为 80 MiB。",
       "v1.2.33": "SubHD 优先使用 TMDB 中文片名搜索，电影沿用年份，剧集沿用季集。中文搜索未找到合格结果时继续尝试英文及其他片名。手动填写的关键词仍最先尝试。",
       "v1.2.32": "在线搜索支持发布时间、最低下载量和字幕类型筛选，可按最新发布或下载量升降序排序。显示当前结果的自动入库首选、备选、分数明细及跳过原因。",
       "v1.2.31": "修复在线下载超过 35 秒后预览无法打开。按所选结果数量分配下载等待时间，预览逐条显示失败文件和原因，日志补充解析错误并正确标识 7z 附件。",

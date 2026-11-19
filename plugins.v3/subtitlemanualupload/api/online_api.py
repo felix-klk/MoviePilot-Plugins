@@ -278,6 +278,7 @@ class OnlineApi:
                 episode=owner._safe_int(item.get("episode"), 0),
                 downloadable=item.get("downloadable") is not False,
                 download_count=count if type(count) is int and count >= 0 else None,
+                subhd_unassociated=item.get("subhd_unassociated") is True,
             ))
         results.sort(key=online_search_sort_key, reverse=True)
         preview = await run_in_threadpool(

@@ -395,12 +395,13 @@ def test_sup_zip_members_larger_than_text_limit_are_allowed(sup_modules, tmp_pat
     assert Path(uploads[0]["stored_path"]).read_bytes() == content
 
 
-def test_sup_member_limit_is_50_mib(sup_modules):
+def test_sup_member_limit_is_specific_to_the_plugin_version(sup_modules):
     guard = sup_modules.upload.ArchiveResourceGuard("subtitles.zip")
+    limit = (100 if sup_modules.generation == "plugins.v3" else 50) * MIB
 
-    guard.check_member_size("maximum.SUP", 50 * MIB)
-    with pytest.raises(sup_modules.upload.ArchiveResourceLimitError, match="52428801.*52428800"):
-        guard.check_member_size("oversized.sup", 50 * MIB + 1)
+    guard.check_member_size("maximum.SUP", limit)
+    with pytest.raises(sup_modules.upload.ArchiveResourceLimitError, match=rf"{limit + 1}.*{limit}"):
+        guard.check_member_size("oversized.sup", limit + 1)
 
 
 def test_text_member_limit_remains_20_mib(sup_modules):
@@ -411,13 +412,66 @@ def test_text_member_limit_remains_20_mib(sup_modules):
         guard.check_member_size("oversized.srt", 20 * MIB + 1)
 
 
-def test_sup_total_extraction_limit_remains_80_mib(sup_modules):
+def test_sup_total_extraction_is_bounded(sup_modules):
     guard = sup_modules.upload.ArchiveResourceGuard("subtitles.zip")
+    limit = (200 if sup_modules.generation == "plugins.v3" else 80) * MIB
 
-    guard.accept_subtitle("first.sup", 40 * MIB)
-    guard.accept_subtitle("second.sup", 40 * MIB)
-    with pytest.raises(sup_modules.upload.ArchiveResourceLimitError, match="83886081.*83886080"):
+    guard.accept_subtitle("first.sup", limit // 2)
+    guard.accept_subtitle("second.sup", limit // 2)
+    with pytest.raises(sup_modules.upload.ArchiveResourceLimitError, match=rf"{limit + 1}.*{limit}"):
         guard.accept_subtitle("third.sup", 1)
+
+
+@pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)
+def test_mixed_archive_retains_the_non_sup_limits(sup_modules):
+    guard = sup_modules.upload.ArchiveResourceGuard("subtitles.7z")
+    for member_name in ("chs&eng.sup", "cht&eng.sup"):
+        guard.accept_subtitle(member_name, 72_449_920)
+    guard.check_member_size("english.srt", 1 * MIB)
+    with pytest.raises(sup_modules.upload.ArchiveResourceLimitError, match="52428801.*52428800"):
+        guard.check_member_size("bitmap.sub", 50 * MIB + 1)
+
+    guard = sup_modules.upload.ArchiveResourceGuard("mixed.zip")
+    guard.accept_subtitle("large.sup", 100 * MIB)
+    for index in range(4):
+        guard.accept_subtitle(f"subtitle-{index}.srt", 20 * MIB)
+    with pytest.raises(sup_modules.upload.ArchiveResourceLimitError, match="83886081.*83886080"):
+        guard.check_member_size("extra.srt", 1)
+
+
+@pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)
+def test_online_7z_accepts_reported_sup_member_size(sup_modules, tmp_path):
+    upload = sup_modules.upload
+    uploader = make_upload_service(sup_modules, tmp_path)
+    subtitle_name = "诺曼底72小时.Pressure.2026-CMCT.chs&eng.sup"
+    size = 72_449_920
+    member = upload.ArchiveMember(subtitle_name, index=0, size=size)
+
+    def extract_members(source_name, archive_path, session_dir, tool_path, *, resource_limits):
+        return upload.extract_command_archive_subtitle_files(
+            source_name, archive_path, session_dir, tool_path,
+            subtitle_exts={".sup"},
+            hash_text=lambda value: hashlib.sha256(value.encode()).hexdigest(),
+            list_members=lambda *_: [member],
+            read_member=lambda *_: PGS_HEADER.ljust(size, b"\x00"),
+            resource_limits=resource_limits,
+        )
+
+    def extract_7z(source_name, archive_path, session_dir, *, resource_limits):
+        return upload.extract_7z_subtitle_files(
+            source_name, archive_path, session_dir,
+            sevenzip_tool_func=lambda: "unar",
+            extract_command_archive_subtitle_files_func=extract_members,
+            resource_limits=resource_limits,
+        )
+
+    uploader._extract_7z_subtitle_files = extract_7z
+    prepared = uploader.extract_online_subtitle_files("1789129092224.7z", b"7z\xbc\xaf\x27\x1c", tmp_path)
+    assert [item["source_name"] for item in prepared] == [subtitle_name]
+    stored_path = Path(prepared[0]["stored_path"])
+    assert stored_path.stat().st_size == size
+    with stored_path.open("rb") as stored:
+        assert stored.read(len(PGS_HEADER)) == PGS_HEADER
 
 
 @pytest.mark.parametrize("language_suffix", ("chi", "cht", "eng", "und"))

@@ -1527,6 +1527,8 @@ def test_v3_online_auto_preview_uses_current_policy_without_downloading(tmp_path
         "results": [
             {**normal, "result_id": "ai", "subtitle_type": "AI校对", "score": 85},
             {**normal, "result_id": "official", "subtitle_type": "官方字幕", "download_count": 1254},
+            {**normal, "result_id": "unassociated", "subtitle_type": "官方字幕", "score": 99,
+             "subhd_unassociated": True},
             {**normal, "result_id": "low", "score": 19},
             {**normal, "result_id": "manual", "downloadable": False},
             {**normal, "result_id": "other-provider", "provider": "subtitlecat"},
@@ -1542,7 +1544,9 @@ def test_v3_online_auto_preview_uses_current_policy_without_downloading(tmp_path
     assert [item["result_id"] for item in plan["candidates"]] == ["official", "ai"]
     assert plan["candidates"][0]["auto_rank"]["release"] == "片源匹配"
     assert plan["candidates"][0]["auto_rank"]["download_bonus"] > 2
-    assert plan["rejections"] == {"匹配分低于 20": 1, "仅支持手动下载": 1, "字幕源未启用自动入库": 1}
+    assert plan["rejections"] == {
+        "匹配分低于 20": 1, "仅支持手动下载": 1, "字幕源未启用自动入库": 1, "SubHD 未关联": 1,
+    }
 
     plugin._auto_subtitle_language_priority = ["chi&jp"]
     result = preview()

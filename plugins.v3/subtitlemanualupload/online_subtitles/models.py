@@ -36,6 +36,7 @@ class OnlineSubtitleResult:
     download_count: Optional[int] = None
     uploaded_at: str = ""
     subtitle_type: str = ""
+    subhd_unassociated: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         from .language import _language_category_from_text
@@ -73,6 +74,7 @@ class OnlineSubtitleResult:
             **({"download_count": self.download_count} if self.download_count is not None else {}),
             **({"uploaded_at": self.uploaded_at} if self.uploaded_at else {}),
             **({"subtitle_type": self.subtitle_type} if self.subtitle_type else {}),
+            **({"subhd_unassociated": True} if self.subhd_unassociated else {}),
         }
 
 

@@ -135,7 +135,9 @@ def rank_auto_download_candidates(
     for item in candidates:
         edition = _release_edition(str(item.get("title") or ""))
         reason = ""
-        if item.get("downloadable") is False:
+        if item.get("provider") == "subhd" and item.get("subhd_unassociated") is True:
+            reason = "SubHD 未关联"
+        elif item.get("downloadable") is False:
             reason = "仅支持手动下载"
         elif min_score is not None and _safe_int(item.get("score")) < min_score:
             reason = f"匹配分低于 {min_score}"

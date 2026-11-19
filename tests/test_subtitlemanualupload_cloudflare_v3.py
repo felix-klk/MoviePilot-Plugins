@@ -98,6 +98,50 @@ def test_subhd_download_counts_use_search_response_and_keep_zero(clients):
     assert len(calls) == 2 and all("/search/" in url for url in calls)
 
 
+def test_subhd_unassociated_official_subtitle_is_excluded_from_auto_download(clients):
+    module = importlib.import_module("cf_test.online_subtitles.providers.subhd")
+    html = '''
+        <div class="clearfix">
+          <a href="/a/Ewznah" class="link-secondary">未关联</a>
+          <a href="/a/Ewznah" class="link-dark">诺曼底72小时Pressure.2026.2160p.iT.WEB-DL.DV.HDR10+</a>
+          <span class="rounded p-1 text-white">官方字幕</span> 简体 SRT
+        </div>
+        <div class="clearfix">
+          <a href="/a/yI4GKr" class="link-dark align-middle">诺曼底72小时</a>
+          <a href="/a/yI4GKr" class="link-dark">Pressure.2026.1080p.WEBRip</a>
+          <span class="rounded p-1 text-white">AI校对</span> 双语 简体 英语
+        </div>
+    '''
+    provider = module.SubHDProvider(
+        types.SimpleNamespace(get_text=lambda url, **kwargs: (200, html, url)),
+        root_url="https://subhd.tv",
+    )
+    targets = [{
+        "title": "诺曼底72小时", "year": 2026, "media_type": "movie",
+        "basename": "诺曼底72小时 (2026) - 2160p WEB-DL HDR H265",
+    }]
+    results = [item.to_dict() for item in provider.search("诺曼底72小时 2026", targets, "movie")]
+    unassociated, linked = results
+    assert unassociated["result_id"] == "Ewznah"
+    assert unassociated["identity_status"] == "strong"
+    assert unassociated["subtitle_type"] == "官方字幕"
+    assert unassociated["subhd_unassociated"] is True
+    assert unassociated["downloadable"] is True
+    assert unassociated["page_url"] == "https://subhd.tv/a/Ewznah"
+    assert "标题别名命中 / 年份一致" in unassociated["match_detail"]
+    assert "SubHD 未关联 · 仅手动选择" in unassociated["match_detail"]
+    assert "subhd_unassociated" not in linked
+
+    matcher = importlib.import_module("cf_test.online_subtitles.matcher")
+    rejections = {}
+    ranked = matcher.rank_auto_download_candidates(
+        results, targets, [], strict=False, min_score=20, rejections=rejections,
+    )
+    assert [item["result_id"] for item in ranked] == ["yI4GKr"]
+    assert rejections == {"SubHD 未关联": 1}
+    assert matcher.rank_auto_download_candidates([unassociated], targets, [], strict=False) == []
+
+
 def test_subhd_download_count_column_uses_the_header_and_subtitle_id(clients):
     module = importlib.import_module("cf_test.online_subtitles.providers.subhd")
     html = '''

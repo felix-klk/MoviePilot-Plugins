@@ -31,6 +31,8 @@ MAX_UPLOAD_CONTENT_BYTES = 50 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 512
 MAX_ARCHIVE_MEMBER_BYTES = 20 * 1024 * 1024
 MAX_ARCHIVE_TOTAL_BYTES = 80 * 1024 * 1024
+MAX_ARCHIVE_SUP_MEMBER_BYTES = 100 * 1024 * 1024
+MAX_ARCHIVE_WITH_SUP_TOTAL_BYTES = 200 * 1024 * 1024
 MAX_SUBTITLE_FILES = 100
 
 
@@ -42,6 +44,8 @@ class ArchiveResourceLimits:
     max_archive_total_bytes: int = MAX_ARCHIVE_TOTAL_BYTES
     max_subtitle_files: int = MAX_SUBTITLE_FILES
     max_bitmap_member_bytes: int = MAX_UPLOAD_CONTENT_BYTES
+    max_sup_member_bytes: int = MAX_ARCHIVE_SUP_MEMBER_BYTES
+    max_archive_with_sup_total_bytes: int = MAX_ARCHIVE_WITH_SUP_TOTAL_BYTES
 
 
 DEFAULT_ARCHIVE_RESOURCE_LIMITS = ArchiveResourceLimits()
@@ -116,6 +120,7 @@ class ArchiveResourceGuard:
         self._member_count = 0
         self._subtitle_count = 0
         self._total_size = 0
+        self._non_sup_size = 0
 
     def count_member(self, member_name: str) -> None:
         self._member_count += 1
@@ -130,11 +135,26 @@ class ArchiveResourceGuard:
         bitmap = suffix in BITMAP_SUBTITLE_EXTS or (
             suffix == ".sub" and (raw_bytes is None or is_bitmap_subtitle(member_name, raw_bytes))
         )
-        limit = self._limits.max_bitmap_member_bytes if bitmap else self._limits.max_archive_member_bytes
+        if suffix == ".sup":
+            limit = self._limits.max_sup_member_bytes
+        else:
+            limit = self._limits.max_bitmap_member_bytes if bitmap else self._limits.max_archive_member_bytes
         if member_size > limit:
             raise ArchiveResourceLimitError(
                 f"压缩包单文件大小超过限制: {member_name or self._source_name} "
                 f"{_size_label(member_size)} > {_size_label(limit)}"
+            )
+        next_total_size = self._total_size + member_size
+        next_non_sup_size = self._non_sup_size + (0 if suffix == ".sup" else member_size)
+        if next_non_sup_size > self._limits.max_archive_total_bytes:
+            raise ArchiveResourceLimitError(
+                f"压缩包总解压大小超过限制: {self._source_name} "
+                f"{_size_label(next_non_sup_size)} > {_size_label(self._limits.max_archive_total_bytes)}"
+            )
+        if next_total_size > next_non_sup_size and next_total_size > self._limits.max_archive_with_sup_total_bytes:
+            raise ArchiveResourceLimitError(
+                f"含 SUP 字幕的压缩包总解压大小超过限制: {self._source_name} "
+                f"{_size_label(next_total_size)} > {_size_label(self._limits.max_archive_with_sup_total_bytes)}"
             )
 
     def accept_subtitle(self, member_name: str, member_size: int, *, raw_bytes: Optional[bytes] = None) -> None:
@@ -146,11 +166,8 @@ class ArchiveResourceGuard:
                 f"{self._subtitle_count} > {self._limits.max_subtitle_files}"
             )
         self._total_size += member_size
-        if self._total_size > self._limits.max_archive_total_bytes:
-            raise ArchiveResourceLimitError(
-                f"压缩包总解压大小超过限制: {self._source_name} "
-                f"{_size_label(self._total_size)} > {_size_label(self._limits.max_archive_total_bytes)}"
-            )
+        if Path(member_name).suffix.lower() != ".sup":
+            self._non_sup_size += member_size
 
 
 def archive_suffix_from_content(content: bytes) -> str:
