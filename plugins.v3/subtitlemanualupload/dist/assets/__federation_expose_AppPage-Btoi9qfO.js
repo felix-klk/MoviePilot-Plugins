@@ -235,6 +235,12 @@ function createSubtitleManualUploadApi(api, pluginBase) {
     retryAutoTransferTask(payload) {
       return post('/auto_transfer_queue/retry', payload)
     },
+    enqueueBilingualFollowup(payload) {
+      return post('/auto_transfer_queue/followup', payload)
+    },
+    cancelBilingualFollowup(payload) {
+      return post('/auto_transfer_queue/cancel_followup', payload)
+    },
     clearAutoTransferHistory(payload = {}) {
       return post('/auto_transfer_queue/clear_history', payload)
     },
@@ -845,7 +851,10 @@ function useAutoTransferQueue({
   const autoQueueSummaryText = computed$d(() => {
     const parts = [];
     if (autoQueueSummary.value.in_progress) parts.push(`${autoQueueSummary.value.in_progress} 个处理中`);
-    if (autoQueueSummary.value.pending) parts.push(`${autoQueueSummary.value.pending} 个排队`);
+    const waiting = Number(autoQueueSummary.value.waiting_bilingual || 0);
+    const pending = Number(autoQueueSummary.value.pending || 0) - waiting;
+    if (pending) parts.push(`${pending} 个排队`);
+    if (waiting) parts.push(`${waiting} 个等待补搜`);
     if (autoQueueSummary.value.failed) parts.push(`${autoQueueSummary.value.failed} 个失败`);
     if (autoQueueSummary.value.completed) parts.push(`${autoQueueSummary.value.completed} 个完成`);
     if (autoQueueSummary.value.skipped) parts.push(`${autoQueueSummary.value.skipped} 个跳过`);
@@ -866,9 +875,11 @@ function useAutoTransferQueue({
   function scheduleAutoQueuePolling() {
     stopAutoQueuePolling();
     if (!autoQueueActive.value) return
+    const waiting = Number(autoQueueSummary.value.waiting_bilingual || 0);
+    const busy = autoQueueSummary.value.in_progress || Number(autoQueueSummary.value.pending || 0) > waiting;
     autoQueueTimer = setTimeout(() => {
       loadAutoTransferQueue();
-    }, 3000);
+    }, busy ? 3000 : 60000);
   }
 
   async function loadAutoTransferQueue() {
@@ -920,6 +931,28 @@ function useAutoTransferQueue({
     }
   }
 
+  async function changeBilingualFollowup({ targetId, taskId }) {
+    if (autoQueueMutating.value) return false
+    autoQueueMutating.value = true;
+    autoQueueActionTaskId.value = taskId || '';
+    error.value = '';
+    try {
+      const response = targetId
+        ? await pluginApi.value.enqueueBilingualFollowup({ target_id: targetId })
+        : await pluginApi.value.cancelBilingualFollowup({ task_id: taskId });
+      autoTransferQueue.value = unwrapResponse(response) || autoTransferQueue.value;
+      message.value = response?.message || (targetId ? '已加入双语字幕补搜' : '已取消双语字幕补搜');
+      scheduleAutoQueuePolling();
+      return true
+    } catch (err) {
+      error.value = errorMessage(err, '更新双语补搜任务失败');
+      return false
+    } finally {
+      autoQueueMutating.value = false;
+      autoQueueActionTaskId.value = '';
+    }
+  }
+
   return {
     autoTransferQueue,
     autoQueueDialog,
@@ -934,6 +967,7 @@ function useAutoTransferQueue({
     scheduleAutoQueuePolling,
     loadAutoTransferQueue,
     retryAutoTransferTask,
+    changeBilingualFollowup,
     clearAutoTransferHistory,
   }
 }
@@ -3344,6 +3378,7 @@ const _sfc_main$d = {
   'load-auto-transfer-queue',
   'retry-auto-transfer-task',
   'force-auto-transfer-task',
+  'cancel-bilingual-followup',
   'clear-auto-transfer-history',
 ],
   setup(__props) {
@@ -3426,7 +3461,7 @@ return (_ctx, _cache) => {
               ]),
               (__props.autoQueueTasks.length)
                 ? (_openBlock$d(), _createElementBlock$d("div", _hoisted_3$b, [
-                    (_openBlock$d(true), _createElementBlock$d(_Fragment$a, null, _renderList$8(__props.autoQueueTasks.slice().reverse().slice(0, 12), (task) => {
+                    (_openBlock$d(true), _createElementBlock$d(_Fragment$a, null, _renderList$8(__props.autoQueueTasks.slice().reverse(), (task) => {
                       return (_openBlock$d(), _createElementBlock$d("div", {
                         key: task.id,
                         class: _normalizeClass$9(["auto-queue-row", `auto-queue-${task.status}`])
@@ -3474,11 +3509,25 @@ return (_ctx, _cache) => {
                                 disabled: __props.autoQueueMutating && __props.autoQueueActionTaskId !== task.id,
                                 onClick: $event => (_ctx.$emit('retry-auto-transfer-task', task))
                               }, {
-                                default: _withCtx$b(() => [...(_cache[8] || (_cache[8] = [
-                                  _createTextVNode$a(" 重试 ", -1)
-                                ]))]),
-                                _: 1
-                              }, 8, ["loading", "disabled", "onClick"])
+                                default: _withCtx$b(() => [
+                                  _createTextVNode$a(_toDisplayString$a(task.waiting_bilingual ? '立即补搜' : '重试'), 1)
+                                ]),
+                                _: 2
+                              }, 1032, ["loading", "disabled", "onClick"]),
+                              (task.waiting_bilingual)
+                                ? (_openBlock$d(), _createBlock$d(_component_VBtn, {
+                                    key: 1,
+                                    size: "small",
+                                    variant: "text",
+                                    disabled: __props.autoQueueMutating,
+                                    onClick: $event => (_ctx.$emit('cancel-bilingual-followup', task))
+                                  }, {
+                                    default: _withCtx$b(() => [...(_cache[8] || (_cache[8] = [
+                                      _createTextVNode$a(" 取消补搜 ", -1)
+                                    ]))]),
+                                    _: 1
+                                  }, 8, ["disabled", "onClick"]))
+                                : _createCommentVNode$d("", true)
                             ]))
                           : _createCommentVNode$d("", true)
                       ], 2))
@@ -3498,7 +3547,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const AutoTransferQueueDialog = /*#__PURE__*/_export_sfc(_sfc_main$d, [['__scopeId',"data-v-7ce45537"]]);
+const AutoTransferQueueDialog = /*#__PURE__*/_export_sfc(_sfc_main$d, [['__scopeId',"data-v-e4ad9800"]]);
 
 const {renderList:_renderList$7,Fragment:_Fragment$9,openBlock:_openBlock$c,createElementBlock:_createElementBlock$c,createCommentVNode:_createCommentVNode$c,toDisplayString:_toDisplayString$9,createElementVNode:_createElementVNode$b,resolveComponent:_resolveComponent$c,createVNode:_createVNode$b,createTextVNode:_createTextVNode$9,withCtx:_withCtx$a,createBlock:_createBlock$c} = await importShared('vue');
 
@@ -4313,6 +4362,7 @@ const _sfc_main$9 = {
   mobile: { type: Boolean, default: false },
   onlineTitle: { type: String, default: '' },
   onlineTargets: { type: Array, default: () => [] },
+  bilingualFollowupLoading: { type: Boolean, default: false },
   selectedOnlineResults: { type: Array, default: () => [] },
   onlineAiDownloading: { type: Boolean, default: false },
   onlinePreviewDownloading: { type: Boolean, default: false },
@@ -4359,6 +4409,7 @@ const _sfc_main$9 = {
   'update:onlineResultFilters',
   'update:onlineAiConfirmDialog',
   'download-online-preview',
+  'enqueue-bilingual-followup',
   'request-online-ai-translate',
   'stop-online-download',
   'close-online-dialog',
@@ -4436,7 +4487,7 @@ return (_ctx, _cache) => {
       fullscreen: __props.mobile,
       scrollable: "",
       "max-width": "1080",
-      "onUpdate:modelValue": _cache[18] || (_cache[18] = $event => (_ctx.$emit('update:modelValue', $event)))
+      "onUpdate:modelValue": _cache[19] || (_cache[19] = $event => (_ctx.$emit('update:modelValue', $event)))
     }, {
       default: _withCtx$7(() => [
         _createVNode$8(_component_VCard, {
@@ -4505,7 +4556,7 @@ return (_ctx, _cache) => {
                   loading: __props.onlineSearching,
                   onClick: _cache[5] || (_cache[5] = $event => (_ctx.$emit('run-online-search')))
                 }, {
-                  default: _withCtx$7(() => [...(_cache[22] || (_cache[22] = [
+                  default: _withCtx$7(() => [...(_cache[23] || (_cache[23] = [
                     _createTextVNode$6(" 搜索 ", -1)
                   ]))]),
                   _: 1
@@ -4517,7 +4568,7 @@ return (_ctx, _cache) => {
                       variant: "tonal",
                       onClick: _cache[6] || (_cache[6] = $event => (_ctx.$emit('stop-online-search')))
                     }, {
-                      default: _withCtx$7(() => [...(_cache[23] || (_cache[23] = [
+                      default: _withCtx$7(() => [...(_cache[24] || (_cache[24] = [
                         _createTextVNode$6(" 停止等待 ", -1)
                       ]))]),
                       _: 1
@@ -4554,7 +4605,7 @@ return (_ctx, _cache) => {
                             variant: "text",
                             onClick: _cache[7] || (_cache[7] = $event => (_ctx.$emit('update:onlineMessagesCollapsed', true)))
                           }, {
-                            default: _withCtx$7(() => [...(_cache[24] || (_cache[24] = [
+                            default: _withCtx$7(() => [...(_cache[25] || (_cache[25] = [
                               _createTextVNode$6(" 收起 ", -1)
                             ]))]),
                             _: 1
@@ -4567,7 +4618,7 @@ return (_ctx, _cache) => {
                 _createElementVNode$8("div", _hoisted_3$7, [
                   _createElementVNode$8("section", _hoisted_4$6, [
                     _createElementVNode$8("div", _hoisted_5$5, [
-                      _cache[25] || (_cache[25] = _createElementVNode$8("div", null, [
+                      _cache[26] || (_cache[26] = _createElementVNode$8("div", null, [
                         _createElementVNode$8("div", { class: "section-kicker" }, "自动搜索"),
                         _createElementVNode$8("h3", null, "选择要下载的字幕")
                       ], -1)),
@@ -4652,11 +4703,11 @@ return (_ctx, _cache) => {
                     (__props.hasOnlineResults)
                       ? (_openBlock$9(), _createElementBlock$9("div", _hoisted_8$5, [
                           _createElementVNode$8("label", null, [
-                            _cache[27] || (_cache[27] = _createTextVNode$6(" 发布时间 ", -1)),
+                            _cache[28] || (_cache[28] = _createTextVNode$6(" 发布时间 ", -1)),
                             _createElementVNode$8("select", {
                               value: __props.onlineResultFilters.days,
                               onChange: _cache[10] || (_cache[10] = $event => (_ctx.$emit('update:onlineResultFilters', { ...__props.onlineResultFilters, days: $event.target.value })))
-                            }, [...(_cache[26] || (_cache[26] = [
+                            }, [...(_cache[27] || (_cache[27] = [
                               _createElementVNode$8("option", { value: "all" }, "不限时间", -1),
                               _createElementVNode$8("option", { value: "7" }, "最近 7 天", -1),
                               _createElementVNode$8("option", { value: "30" }, "最近 30 天", -1),
@@ -4665,11 +4716,11 @@ return (_ctx, _cache) => {
                             ]))], 40, _hoisted_9$5)
                           ]),
                           _createElementVNode$8("label", null, [
-                            _cache[29] || (_cache[29] = _createTextVNode$6(" 下载量 ", -1)),
+                            _cache[30] || (_cache[30] = _createTextVNode$6(" 下载量 ", -1)),
                             _createElementVNode$8("select", {
                               value: __props.onlineResultFilters.minimum,
                               onChange: _cache[11] || (_cache[11] = $event => (_ctx.$emit('update:onlineResultFilters', { ...__props.onlineResultFilters, minimum: $event.target.value })))
-                            }, [...(_cache[28] || (_cache[28] = [
+                            }, [...(_cache[29] || (_cache[29] = [
                               _createElementVNode$8("option", { value: "all" }, "不限下载量", -1),
                               _createElementVNode$8("option", { value: "100" }, "至少 100 次", -1),
                               _createElementVNode$8("option", { value: "500" }, "至少 500 次", -1),
@@ -4677,11 +4728,11 @@ return (_ctx, _cache) => {
                             ]))], 40, _hoisted_10$5)
                           ]),
                           _createElementVNode$8("label", null, [
-                            _cache[31] || (_cache[31] = _createTextVNode$6(" 字幕类型 ", -1)),
+                            _cache[32] || (_cache[32] = _createTextVNode$6(" 字幕类型 ", -1)),
                             _createElementVNode$8("select", {
                               value: __props.onlineResultFilters.type,
                               onChange: _cache[12] || (_cache[12] = $event => (_ctx.$emit('update:onlineResultFilters', { ...__props.onlineResultFilters, type: $event.target.value })))
-                            }, [...(_cache[30] || (_cache[30] = [
+                            }, [...(_cache[31] || (_cache[31] = [
                               _createElementVNode$8("option", { value: "all" }, "全部类型", -1),
                               _createElementVNode$8("option", { value: "官方字幕" }, "官方字幕", -1),
                               _createElementVNode$8("option", { value: "AI校对" }, "AI 校对", -1),
@@ -4690,11 +4741,11 @@ return (_ctx, _cache) => {
                             ]))], 40, _hoisted_11$4)
                           ]),
                           _createElementVNode$8("label", null, [
-                            _cache[33] || (_cache[33] = _createTextVNode$6(" 排序 ", -1)),
+                            _cache[34] || (_cache[34] = _createTextVNode$6(" 排序 ", -1)),
                             _createElementVNode$8("select", {
                               value: __props.onlineResultFilters.order,
                               onChange: _cache[13] || (_cache[13] = $event => (_ctx.$emit('update:onlineResultFilters', { ...__props.onlineResultFilters, order: $event.target.value })))
-                            }, [...(_cache[32] || (_cache[32] = [
+                            }, [...(_cache[33] || (_cache[33] = [
                               _createElementVNode$8("option", { value: "default" }, "默认顺序", -1),
                               _createElementVNode$8("option", { value: "recent" }, "最新发布", -1),
                               _createElementVNode$8("option", { value: "downloads-desc" }, "下载量降序", -1),
@@ -4709,7 +4760,7 @@ return (_ctx, _cache) => {
                                 color: "primary",
                                 onClick: _cache[14] || (_cache[14] = $event => (_ctx.$emit('reset-online-filters')))
                               }, {
-                                default: _withCtx$7(() => [...(_cache[34] || (_cache[34] = [
+                                default: _withCtx$7(() => [...(_cache[35] || (_cache[35] = [
                                   _createTextVNode$6(" 清除筛选 ", -1)
                                 ]))]),
                                 _: 1
@@ -4719,7 +4770,7 @@ return (_ctx, _cache) => {
                       : _createCommentVNode$9("", true),
                     (__props.onlineAutoPreviewLoading || __props.onlineAutoPreview)
                       ? (_openBlock$9(), _createElementBlock$9("section", _hoisted_13$3, [
-                          _cache[36] || (_cache[36] = _createElementVNode$8("h4", null, "自动入库预判", -1)),
+                          _cache[37] || (_cache[37] = _createElementVNode$8("h4", null, "自动入库预判", -1)),
                           (__props.onlineAutoPreviewLoading)
                             ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_14$3, "正在按入库规则计算这批结果…"))
                             : (__props.onlineAutoPreview.error)
@@ -4751,7 +4802,7 @@ return (_ctx, _cache) => {
                                               ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_18$2, _toDisplayString$6(plan.target) + _toDisplayString$6(plan.scope === 'season' ? ' · 整季包' : ''), 1))
                                               : _createCommentVNode$9("", true),
                                             _createElementVNode$8("div", _hoisted_19$2, [
-                                              _cache[35] || (_cache[35] = _createElementVNode$8("span", { class: "online-auto-badge" }, "首选候选", -1)),
+                                              _cache[36] || (_cache[36] = _createElementVNode$8("span", { class: "online-auto-badge" }, "首选候选", -1)),
                                               _createElementVNode$8("strong", null, _toDisplayString$6(plan.candidates[0].title), 1)
                                             ]),
                                             _createElementVNode$8("p", null, _toDisplayString$6(__props.providerName(plan.candidates[0].provider)) + " · " + _toDisplayString$6(plan.candidates[0].auto_rank.release) + " · " + _toDisplayString$6(plan.candidates[0].auto_rank.subtitle_type), 1),
@@ -4898,9 +4949,9 @@ return (_ctx, _cache) => {
                         : _createCommentVNode$9("", true)
                   ]),
                   _createElementVNode$8("aside", _hoisted_47, [
-                    _cache[37] || (_cache[37] = _createElementVNode$8("div", { class: "section-kicker" }, "手动搜索", -1)),
-                    _cache[38] || (_cache[38] = _createElementVNode$8("h3", null, "跳转字幕站", -1)),
-                    _cache[39] || (_cache[39] = _createElementVNode$8("p", null, "自动搜索失败或源站需要验证时，可打开链接下载字幕包后回到本页上传。", -1)),
+                    _cache[38] || (_cache[38] = _createElementVNode$8("div", { class: "section-kicker" }, "手动搜索", -1)),
+                    _cache[39] || (_cache[39] = _createElementVNode$8("h3", null, "跳转字幕站", -1)),
+                    _cache[40] || (_cache[40] = _createElementVNode$8("p", null, "自动搜索失败或源站需要验证时，可打开链接下载字幕包后回到本页上传。", -1)),
                     (_openBlock$9(true), _createElementBlock$9(_Fragment$7, null, _renderList$5(__props.onlineManualLinks, (provider) => {
                       return (_openBlock$9(), _createElementBlock$9("div", {
                         key: provider.provider,
@@ -4936,13 +4987,26 @@ return (_ctx, _cache) => {
                     : _createCommentVNode$9("", true)
                 ]),
                 _createVNode$8(_component_VSpacer),
+                (__props.onlineTargets.length === 1 && __props.onlineTargets[0].media_type === 'tv')
+                  ? (_openBlock$9(), _createBlock$9(_component_VBtn, {
+                      key: 0,
+                      variant: "text",
+                      loading: __props.bilingualFollowupLoading,
+                      onClick: _cache[15] || (_cache[15] = $event => (_ctx.$emit('enqueue-bilingual-followup', __props.onlineTargets[0].id)))
+                    }, {
+                      default: _withCtx$7(() => [...(_cache[41] || (_cache[41] = [
+                        _createTextVNode$6(" 加入补搜 ", -1)
+                      ]))]),
+                      _: 1
+                    }, 8, ["loading"]))
+                  : _createCommentVNode$9("", true),
                 _createVNode$8(_component_VBtn, {
                   color: "success",
                   disabled: !__props.selectedOnlineResults.length || __props.onlineAiDownloading,
                   loading: __props.onlinePreviewDownloading,
-                  onClick: _cache[15] || (_cache[15] = $event => (_ctx.$emit('download-online-preview')))
+                  onClick: _cache[16] || (_cache[16] = $event => (_ctx.$emit('download-online-preview')))
                 }, {
-                  default: _withCtx$7(() => [...(_cache[40] || (_cache[40] = [
+                  default: _withCtx$7(() => [...(_cache[42] || (_cache[42] = [
                     _createTextVNode$6(" 下载并生成预览 ", -1)
                   ]))]),
                   _: 1
@@ -4952,21 +5016,21 @@ return (_ctx, _cache) => {
                   variant: "tonal",
                   disabled: !__props.canSubmitOnlineAiTranslate || __props.onlinePreviewDownloading,
                   loading: __props.onlineAiDownloading,
-                  onClick: _cache[16] || (_cache[16] = $event => (_ctx.$emit('request-online-ai-translate')))
+                  onClick: _cache[17] || (_cache[17] = $event => (_ctx.$emit('request-online-ai-translate')))
                 }, {
-                  default: _withCtx$7(() => [...(_cache[41] || (_cache[41] = [
+                  default: _withCtx$7(() => [...(_cache[43] || (_cache[43] = [
                     _createTextVNode$6(" 提交 AI 翻译 ", -1)
                   ]))]),
                   _: 1
                 }, 8, ["disabled", "loading"]),
                 (__props.onlineDownloading)
                   ? (_openBlock$9(), _createBlock$9(_component_VBtn, {
-                      key: 0,
+                      key: 1,
                       color: "warning",
                       variant: "tonal",
-                      onClick: _cache[17] || (_cache[17] = $event => (_ctx.$emit('stop-online-download')))
+                      onClick: _cache[18] || (_cache[18] = $event => (_ctx.$emit('stop-online-download')))
                     }, {
-                      default: _withCtx$7(() => [...(_cache[42] || (_cache[42] = [
+                      default: _withCtx$7(() => [...(_cache[44] || (_cache[44] = [
                         _createTextVNode$6(" 停止等待 ", -1)
                       ]))]),
                       _: 1
@@ -4984,7 +5048,7 @@ return (_ctx, _cache) => {
     _createVNode$8(_component_VDialog, {
       "model-value": __props.onlineAiConfirmDialog,
       "max-width": "520",
-      "onUpdate:modelValue": _cache[21] || (_cache[21] = $event => (_ctx.$emit('update:onlineAiConfirmDialog', $event)))
+      "onUpdate:modelValue": _cache[22] || (_cache[22] = $event => (_ctx.$emit('update:onlineAiConfirmDialog', $event)))
     }, {
       default: _withCtx$7(() => [
         _createVNode$8(_component_VCard, { rounded: "lg" }, {
@@ -4992,7 +5056,7 @@ return (_ctx, _cache) => {
             _createVNode$8(_component_VCardTitle, { class: "dialog-title compact" }, {
               default: _withCtx$7(() => [
                 _createElementVNode$8("div", null, [
-                  _cache[43] || (_cache[43] = _createElementVNode$8("span", null, "确认提交 AI 翻译", -1)),
+                  _cache[45] || (_cache[45] = _createElementVNode$8("span", null, "确认提交 AI 翻译", -1)),
                   _createElementVNode$8("p", null, _toDisplayString$6(__props.onlineAiConfirmText), 1)
                 ])
               ]),
@@ -5013,9 +5077,9 @@ return (_ctx, _cache) => {
               default: _withCtx$7(() => [
                 _createVNode$8(_component_VBtn, {
                   variant: "text",
-                  onClick: _cache[19] || (_cache[19] = $event => (_ctx.$emit('update:onlineAiConfirmDialog', false)))
+                  onClick: _cache[20] || (_cache[20] = $event => (_ctx.$emit('update:onlineAiConfirmDialog', false)))
                 }, {
-                  default: _withCtx$7(() => [...(_cache[44] || (_cache[44] = [
+                  default: _withCtx$7(() => [...(_cache[46] || (_cache[46] = [
                     _createTextVNode$6("取消", -1)
                   ]))]),
                   _: 1
@@ -5024,9 +5088,9 @@ return (_ctx, _cache) => {
                   color: "primary",
                   variant: "flat",
                   loading: __props.onlineAiDownloading,
-                  onClick: _cache[20] || (_cache[20] = $event => (_ctx.$emit('confirm-online-ai-translate')))
+                  onClick: _cache[21] || (_cache[21] = $event => (_ctx.$emit('confirm-online-ai-translate')))
                 }, {
-                  default: _withCtx$7(() => [...(_cache[45] || (_cache[45] = [
+                  default: _withCtx$7(() => [...(_cache[47] || (_cache[47] = [
                     _createTextVNode$6(" 确认提交 ", -1)
                   ]))]),
                   _: 1
@@ -5045,7 +5109,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const OnlineSubtitleDialog = /*#__PURE__*/_export_sfc(_sfc_main$9, [['__scopeId',"data-v-497fa53f"]]);
+const OnlineSubtitleDialog = /*#__PURE__*/_export_sfc(_sfc_main$9, [['__scopeId',"data-v-56dd5f20"]]);
 
 const {onBeforeUnmount: onBeforeUnmount$1,onMounted: onMounted$2,ref: ref$7} = await importShared('vue');
 
@@ -7531,6 +7595,7 @@ const {
   stopAutoQueuePolling,
   loadAutoTransferQueue,
   retryAutoTransferTask,
+  changeBilingualFollowup,
   clearAutoTransferHistory,
 } = useAutoTransferQueue({
   pluginApi,
@@ -7539,6 +7604,15 @@ const {
   error,
   message,
 });
+
+async function enqueueBilingualFollowup(targetId) {
+  if (await changeBilingualFollowup({ targetId })) {
+    closeOnlineDialog();
+    autoQueueDialog.value = true;
+  } else {
+    onlineError.value = error.value;
+  }
+}
 
 const {
   rootTab,
@@ -8241,7 +8315,7 @@ return (_ctx, _cache) => {
           color: "transparent"
         }, {
           default: _withCtx(() => [
-            _cache[25] || (_cache[25] = _createElementVNode("div", { class: "text-subtitle-1 ms-3" }, "海拉鲁字幕大师(NEO自用版)", -1)),
+            _cache[26] || (_cache[26] = _createElementVNode("div", { class: "text-subtitle-1 ms-3" }, "海拉鲁字幕大师(NEO自用版)", -1)),
             _createVNode(_component_VSpacer),
             _createVNode(_component_VTooltip, {
               text: "插件设置",
@@ -8483,18 +8557,19 @@ return (_ctx, _cache) => {
       onLoadAutoTransferQueue: _unref(loadAutoTransferQueue),
       onRetryAutoTransferTask: _unref(retryAutoTransferTask),
       onForceAutoTransferTask: _cache[8] || (_cache[8] = task => _unref(retryAutoTransferTask)(task, { forceLowConfidence: true })),
+      onCancelBilingualFollowup: _cache[9] || (_cache[9] = task => _unref(changeBilingualFollowup)({ taskId: task.id })),
       onClearAutoTransferHistory: _unref(clearAutoTransferHistory)
     }, null, 8, ["modelValue", "mobile", "auto-queue-summary-text", "auto-transfer-queue", "auto-queue-tasks", "auto-queue-mutating", "auto-queue-action-task-id", "onLoadAutoTransferQueue", "onRetryAutoTransferTask", "onClearAutoTransferHistory"]),
     _createVNode(AiTaskDialog, {
       modelValue: _unref(aiTaskDialog),
-      "onUpdate:modelValue": _cache[9] || (_cache[9] = $event => (_isRef(aiTaskDialog) ? (aiTaskDialog).value = $event : null)),
+      "onUpdate:modelValue": _cache[10] || (_cache[10] = $event => (_isRef(aiTaskDialog) ? (aiTaskDialog).value = $event : null)),
       mobile: _unref(isMobileViewport),
       "ai-restart-source-policy": _unref(aiRestartSourcePolicy),
-      "onUpdate:aiRestartSourcePolicy": _cache[10] || (_cache[10] = $event => (_isRef(aiRestartSourcePolicy) ? (aiRestartSourcePolicy).value = $event : null)),
+      "onUpdate:aiRestartSourcePolicy": _cache[11] || (_cache[11] = $event => (_isRef(aiRestartSourcePolicy) ? (aiRestartSourcePolicy).value = $event : null)),
       "ai-restart-subtitle-path": _unref(aiRestartSubtitlePath),
-      "onUpdate:aiRestartSubtitlePath": _cache[11] || (_cache[11] = $event => (_isRef(aiRestartSubtitlePath) ? (aiRestartSubtitlePath).value = $event : null)),
+      "onUpdate:aiRestartSubtitlePath": _cache[12] || (_cache[12] = $event => (_isRef(aiRestartSubtitlePath) ? (aiRestartSubtitlePath).value = $event : null)),
       "ai-selected-task-ids": _unref(aiSelectedTaskIds),
-      "onUpdate:aiSelectedTaskIds": _cache[12] || (_cache[12] = $event => (_isRef(aiSelectedTaskIds) ? (aiSelectedTaskIds).value = $event : null)),
+      "onUpdate:aiSelectedTaskIds": _cache[13] || (_cache[13] = $event => (_isRef(aiSelectedTaskIds) ? (aiSelectedTaskIds).value = $event : null)),
       "ai-task-dialog-target": _unref(aiTaskDialogTarget),
       "compact-target-name": _unref(compactTargetName),
       "ai-summary-text": _unref(aiSummaryText),
@@ -8523,24 +8598,24 @@ return (_ctx, _cache) => {
     _createVNode(OnlineSubtitleDialog, {
       modelValue: _unref(onlineDialog),
       "onUpdate:modelValue": [
-        _cache[13] || (_cache[13] = $event => (_isRef(onlineDialog) ? (onlineDialog).value = $event : null)),
+        _cache[14] || (_cache[14] = $event => (_isRef(onlineDialog) ? (onlineDialog).value = $event : null)),
         _unref(updateOnlineDialog)
       ],
       mobile: _unref(isMobileViewport),
       "online-keyword": _unref(onlineKeyword),
-      "onUpdate:onlineKeyword": _cache[14] || (_cache[14] = $event => (_isRef(onlineKeyword) ? (onlineKeyword).value = $event : null)),
+      "onUpdate:onlineKeyword": _cache[15] || (_cache[15] = $event => (_isRef(onlineKeyword) ? (onlineKeyword).value = $event : null)),
       "online-selected-providers": _unref(onlineSelectedProviders),
-      "onUpdate:onlineSelectedProviders": _cache[15] || (_cache[15] = $event => (_isRef(onlineSelectedProviders) ? (onlineSelectedProviders).value = $event : null)),
+      "onUpdate:onlineSelectedProviders": _cache[16] || (_cache[16] = $event => (_isRef(onlineSelectedProviders) ? (onlineSelectedProviders).value = $event : null)),
       "online-messages-collapsed": _unref(onlineMessagesCollapsed),
-      "onUpdate:onlineMessagesCollapsed": _cache[16] || (_cache[16] = $event => (_isRef(onlineMessagesCollapsed) ? (onlineMessagesCollapsed).value = $event : null)),
+      "onUpdate:onlineMessagesCollapsed": _cache[17] || (_cache[17] = $event => (_isRef(onlineMessagesCollapsed) ? (onlineMessagesCollapsed).value = $event : null)),
       "online-language-filter": _unref(onlineLanguageFilter),
-      "onUpdate:onlineLanguageFilter": _cache[17] || (_cache[17] = $event => (_isRef(onlineLanguageFilter) ? (onlineLanguageFilter).value = $event : null)),
+      "onUpdate:onlineLanguageFilter": _cache[18] || (_cache[18] = $event => (_isRef(onlineLanguageFilter) ? (onlineLanguageFilter).value = $event : null)),
       "online-provider-filter": _unref(onlineProviderFilter),
-      "onUpdate:onlineProviderFilter": _cache[18] || (_cache[18] = $event => (_isRef(onlineProviderFilter) ? (onlineProviderFilter).value = $event : null)),
+      "onUpdate:onlineProviderFilter": _cache[19] || (_cache[19] = $event => (_isRef(onlineProviderFilter) ? (onlineProviderFilter).value = $event : null)),
       "online-result-filters": _unref(onlineResultFilters),
-      "onUpdate:onlineResultFilters": _cache[19] || (_cache[19] = $event => (_isRef(onlineResultFilters) ? (onlineResultFilters).value = $event : null)),
+      "onUpdate:onlineResultFilters": _cache[20] || (_cache[20] = $event => (_isRef(onlineResultFilters) ? (onlineResultFilters).value = $event : null)),
       "online-ai-confirm-dialog": _unref(onlineAiConfirmDialog),
-      "onUpdate:onlineAiConfirmDialog": _cache[20] || (_cache[20] = $event => (_isRef(onlineAiConfirmDialog) ? (onlineAiConfirmDialog).value = $event : null)),
+      "onUpdate:onlineAiConfirmDialog": _cache[21] || (_cache[21] = $event => (_isRef(onlineAiConfirmDialog) ? (onlineAiConfirmDialog).value = $event : null)),
       "online-title": _unref(onlineTitle),
       "online-targets": _unref(onlineTargets),
       "selected-online-results": _unref(selectedOnlineResults),
@@ -8571,7 +8646,9 @@ return (_ctx, _cache) => {
       "online-result-key": _unref(onlineResultKey),
       "online-result-meta": _unref(onlineResultMeta),
       "is-online-result-downloadable": _unref(isOnlineResultDownloadable),
+      "bilingual-followup-loading": _unref(autoQueueMutating),
       onDownloadOnlinePreview: _unref(downloadOnlinePreview),
+      onEnqueueBilingualFollowup: enqueueBilingualFollowup,
       onRequestOnlineAiTranslate: _unref(requestOnlineAiTranslate),
       onStopOnlineDownload: _unref(stopOnlineDownload),
       onCloseOnlineDialog: _unref(closeOnlineDialog),
@@ -8580,15 +8657,15 @@ return (_ctx, _cache) => {
       onStopOnlineSearch: _unref(stopOnlineSearch),
       onToggleOnlineResult: _unref(toggleOnlineResult),
       onConfirmOnlineAiTranslate: _unref(confirmOnlineAiTranslate)
-    }, null, 8, ["modelValue", "mobile", "online-keyword", "online-selected-providers", "online-messages-collapsed", "online-language-filter", "online-provider-filter", "online-result-filters", "online-ai-confirm-dialog", "online-title", "online-targets", "selected-online-results", "online-ai-downloading", "online-preview-downloading", "can-submit-online-ai-translate", "online-downloading", "online-provider-items", "online-searching", "online-error", "online-messages", "online-message-type", "online-message-summary", "has-online-results", "filtered-online-results", "online-results", "online-auto-preview", "online-auto-preview-loading", "online-language-filter-items", "online-provider-filter-items", "online-provider-progress-items", "selected-online-result-ids", "online-manual-links", "online-ai-confirm-text", "provider-progress-color", "provider-progress-text", "provider-name", "online-result-key", "online-result-meta", "is-online-result-downloadable", "onUpdate:modelValue", "onDownloadOnlinePreview", "onRequestOnlineAiTranslate", "onStopOnlineDownload", "onCloseOnlineDialog", "onRunOnlineSearch", "onResetOnlineFilters", "onStopOnlineSearch", "onToggleOnlineResult", "onConfirmOnlineAiTranslate"]),
+    }, null, 8, ["modelValue", "mobile", "online-keyword", "online-selected-providers", "online-messages-collapsed", "online-language-filter", "online-provider-filter", "online-result-filters", "online-ai-confirm-dialog", "online-title", "online-targets", "selected-online-results", "online-ai-downloading", "online-preview-downloading", "can-submit-online-ai-translate", "online-downloading", "online-provider-items", "online-searching", "online-error", "online-messages", "online-message-type", "online-message-summary", "has-online-results", "filtered-online-results", "online-results", "online-auto-preview", "online-auto-preview-loading", "online-language-filter-items", "online-provider-filter-items", "online-provider-progress-items", "selected-online-result-ids", "online-manual-links", "online-ai-confirm-text", "provider-progress-color", "provider-progress-text", "provider-name", "online-result-key", "online-result-meta", "is-online-result-downloadable", "bilingual-followup-loading", "onUpdate:modelValue", "onDownloadOnlinePreview", "onRequestOnlineAiTranslate", "onStopOnlineDownload", "onCloseOnlineDialog", "onRunOnlineSearch", "onResetOnlineFilters", "onStopOnlineSearch", "onToggleOnlineResult", "onConfirmOnlineAiTranslate"]),
     _createVNode(UploadDialog, {
       modelValue: _unref(uploadDialog),
-      "onUpdate:modelValue": _cache[21] || (_cache[21] = $event => (_isRef(uploadDialog) ? (uploadDialog).value = $event : null)),
+      "onUpdate:modelValue": _cache[22] || (_cache[22] = $event => (_isRef(uploadDialog) ? (uploadDialog).value = $event : null)),
       mobile: _unref(isMobileViewport),
       "fix-timeline": _unref(fixTimeline),
-      "onUpdate:fixTimeline": _cache[22] || (_cache[22] = $event => (_isRef(fixTimeline) ? (fixTimeline).value = $event : null)),
+      "onUpdate:fixTimeline": _cache[23] || (_cache[23] = $event => (_isRef(fixTimeline) ? (fixTimeline).value = $event : null)),
       "batch-language-suffix": _unref(batchLanguageSuffix),
-      "onUpdate:batchLanguageSuffix": _cache[23] || (_cache[23] = $event => (_isRef(batchLanguageSuffix) ? (batchLanguageSuffix).value = $event : null)),
+      "onUpdate:batchLanguageSuffix": _cache[24] || (_cache[24] = $event => (_isRef(batchLanguageSuffix) ? (batchLanguageSuffix).value = $event : null)),
       "upload-title": _unref(uploadTitle),
       error: error.value,
       "has-preview-items": _unref(hasPreviewItems),
@@ -8615,7 +8692,7 @@ return (_ctx, _cache) => {
       "build-output-name": _unref(buildOutputName),
       onResetUploadPreview: _unref(resetUploadPreview),
       onApplyUpload: _unref(applyUpload),
-      onConfirmWrite: _cache[24] || (_cache[24] = $event => (_unref(applyUpload)(true))),
+      onConfirmWrite: _cache[25] || (_cache[25] = $event => (_unref(applyUpload)(true))),
       onBackToPreview: _unref(backToWritePreview),
       onUpdateWriteChoice: _unref(updateWriteChoice),
       onPickFiles: _unref(onPickFiles),
@@ -8634,6 +8711,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-d570fcb9"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-0d319daa"]]);
 
 export { AppPage as default };

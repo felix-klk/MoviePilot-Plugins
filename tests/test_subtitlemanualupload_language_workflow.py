@@ -137,6 +137,26 @@ def serve_zip(workflow, content, titles=("Show 双语",)):
     ]}
     workflow.online.download.side_effect = lambda selected: [{"provider": "assrt", "source_name": "Show.zip", "content": content, "result": selected[0]}]
 
+@pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)
+@pytest.mark.parametrize("cached_name", ["Show.S01.Special.chi.eng.srt", "Show.S01E01.chi.eng.srt"])
+def test_v3_bad_cached_subtitle_can_fall_back_to_episode_search(workflow, tmp_path, cached_name):
+    entry = entry_for(tmp_path)
+    source = tmp_path / "cached.srt"
+    source.write_text("1\n00:00:01,000 --> 00:00:02,000\n缓存字幕。\nCached subtitle.\n", encoding="utf-8")
+    workflow.season.store_cache([entry], [{
+        "stored_path": str(source), "source_name": cached_name, "upload_id": "cached", "ext": ".srt",
+    }], {"provider": "subhd", "title": "cached"})
+    timeline_blocks = [False] if ".Special." in cached_name else [True, False]
+    workflow.owner._timeline_result_blocks_auto_write = Mock(side_effect=timeline_blocks)
+    serve_zip(workflow, subtitle_zip(languages=("chi.eng",)), ("Show.S01E01 简英双语",))
+    single_result = workflow.online.search.return_value
+    workflow.online.search.side_effect = lambda **kwargs: single_result if kwargs["scope"] == "auto" else {"results": []}
+    result = workflow.season.process_group([entry])[entry["id"]]
+    assert result["status"] == "written", result
+    assert [call.kwargs["scope"] for call in workflow.online.search.call_args_list] == ["season", "auto"]
+    assert workflow.owner._timeline_result_blocks_auto_write.call_count == len(timeline_blocks)
+    assert "Hello there." in (tmp_path / "Show.S01E01.中英双语.zh-CN.srt").read_text(encoding="utf-8")
+
 
 @pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)
 @pytest.mark.parametrize("is_season", [False, True])

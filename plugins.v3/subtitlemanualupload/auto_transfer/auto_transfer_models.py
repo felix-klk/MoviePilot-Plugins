@@ -7,6 +7,13 @@ AUTO_TRANSFER_ACTIVE_STATUSES = {"pending", "in_progress"}
 AUTO_TRANSFER_PUBLIC_STATUSES = {"pending", "in_progress", "completed", "skipped", "failed"}
 
 
+def is_bilingual_followup_waiting(task: Dict[str, Any]) -> bool:
+    return bool(
+        task.get("status") == "pending" and task.get("bilingual_retry_since") is not None
+        and task.get("next_run_ts") and not task.get("emby_rechecked")
+    )
+
+
 def build_auto_transfer_task(
     *,
     task_id: str,
@@ -48,15 +55,18 @@ def public_auto_transfer_task(
     queue_position: int = 0,
 ) -> Dict[str, Any]:
     public_task = dict(task)
+    waiting = is_bilingual_followup_waiting(task)
     if public_task.get("status") == "pending" and queue_position:
         public_task["queue_position"] = queue_position
     public_task.pop("entry", None)
     public_task.pop("emby_rechecked", None)
+    public_task.pop("bilingual_retry_since", None)
     public_task["created_at"] = timestamp_iso(public_task.pop("created_ts", 0))
     public_task["updated_at"] = timestamp_iso(public_task.pop("updated_ts", 0))
     public_task["next_run_at"] = timestamp_iso(public_task.pop("next_run_ts", 0))
     status = public_task.get("status")
     message = str(public_task.get("message") or "")
-    public_task["can_retry"] = status in {"failed", "skipped"}
+    public_task["waiting_bilingual"] = waiting
+    public_task["can_retry"] = waiting or status in {"failed", "skipped"}
     public_task["can_force_low_confidence"] = status == "failed" and "低可信" in message
     return public_task

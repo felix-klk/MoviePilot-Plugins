@@ -3945,6 +3945,159 @@ def auto_transfer_service_with(plugin, **methods):
     return service
 
 
+@pytest.fixture
+def durable_auto_transfer_queue(tmp_path):
+    module, _, _ = load_plugin_module("plugins.v3")
+    runtime = plugin_submodule(module, "config.config_runtime")
+    clock = types.SimpleNamespace(now=1_799_999_000.0)
+    clock.time = lambda: clock.now
+    state_path = tmp_path / "plugin-data" / "auto_transfer_queue.json"
+
+    def new_queue(resume=True):
+        plugin = make_plugin(module)
+        plugin.get_data_path = lambda: state_path.parent
+        runtime.reset_runtime_state(plugin)
+        service = plugin._auto_transfer_service()
+        service._queue._time = clock
+        worker_starts = []
+        service.ensure_transfer_auto_worker = lambda: worker_starts.append(True)
+        service.restore(resume=resume)
+        return plugin, service, worker_starts
+
+    return new_queue, clock, state_path, runtime
+
+
+def test_v3_auto_transfer_queue_restores_history_and_interrupted_work(tmp_path, durable_auto_transfer_queue):
+    new_queue, clock, state_path, runtime = durable_auto_transfer_queue
+    plugin, service, _ = new_queue()
+    entries = [make_auto_entry(tmp_path, filename=f"{name}.mkv") for name in ("Done", "Interrupted", "Pending")]
+    assert service.enqueue_transfer_auto_entries(entries) == (3, 0)
+    done_id, interrupted_id, pending_id = plugin._auto_transfer_tasks
+    service.update_auto_transfer_task(done_id, status="completed", result={"written_count": 1})
+    batch, _ = service.claim_next_auto_transfer_batch()
+    assert [task["id"] for task in batch] == [interrupted_id]
+    service.stop()
+    service.update_auto_transfer_task(interrupted_id, status="failed", message="late result from stopped worker")
+    assert {task["id"]: task["status"] for task in json.loads(state_path.read_text(encoding="utf-8"))["tasks"]} == {
+        done_id: "completed", interrupted_id: "in_progress", pending_id: "pending",
+    }
+
+    clock.now += 60
+    restored, resumed_service, starts = new_queue()
+    assert starts == [True]
+    assert {task["id"]: task["status"] for task in resumed_service.auto_transfer_queue_snapshot()["tasks"]} == {
+        done_id: "completed", interrupted_id: "pending", pending_id: "pending",
+    }
+    assert restored._auto_transfer_tasks[done_id]["result"] == {"written_count": 1}
+    previous_lock = restored._transfer_auto_lock
+    runtime.reset_runtime_state(restored)
+    resumed_service.restore(resume=True)
+    assert restored._transfer_auto_lock is previous_lock
+    batch, _ = resumed_service.claim_next_auto_transfer_batch()
+    assert [task["id"] for task in batch] == [interrupted_id]
+
+
+def test_v3_auto_transfer_history_purges_at_three_days_without_a_page_request(tmp_path, durable_auto_transfer_queue):
+    new_queue, clock, state_path, _ = durable_auto_transfer_queue
+    plugin, service, _ = new_queue()
+    entries = [make_auto_entry(tmp_path, filename=f"{name}.mkv") for name in ("Done", "Failed", "Skipped")]
+    assert service.enqueue_transfer_auto_entries(entries) == (3, 0)
+    for task_id, status in zip(list(plugin._auto_transfer_tasks), ("completed", "failed", "skipped")):
+        service.update_auto_transfer_task(task_id, status=status)
+
+    clock.now += 3 * 24 * 60 * 60 - 1
+    _, restored_service, starts = new_queue()
+    assert restored_service.claim_next_auto_transfer_batch() == ([], 1.0)
+    assert starts == [True]
+    assert len(json.loads(state_path.read_text(encoding="utf-8"))["tasks"]) == 3
+    clock.now += 1
+    assert restored_service.claim_next_auto_transfer_batch() == ([], -1)
+    assert json.loads(state_path.read_text(encoding="utf-8"))["tasks"] == []
+
+
+def test_v3_auto_transfer_expiry_and_manual_clear_keep_pending_task(tmp_path, durable_auto_transfer_queue):
+    new_queue, clock, state_path, _ = durable_auto_transfer_queue
+    plugin, service, _ = new_queue()
+    entries = [make_auto_entry(tmp_path, filename=f"{name}.mkv") for name in ("Old", "New", "Pending")]
+    assert service.enqueue_transfer_auto_entries(entries) == (3, 0)
+    old_id, new_id, pending_id = plugin._auto_transfer_tasks
+    service.update_auto_transfer_task(old_id, status="failed")
+    clock.now += 3 * 24 * 60 * 60
+    service.update_auto_transfer_task(new_id, status="skipped")
+
+    _, restored_service, starts = new_queue(resume=False)
+    assert not starts
+    assert set(task["id"] for task in restored_service.auto_transfer_queue_snapshot()["tasks"]) == {new_id, pending_id}
+    assert restored_service.clear_auto_transfer_history() == 1
+    assert [item["id"] for item in json.loads(state_path.read_text(encoding="utf-8"))["tasks"]] == [pending_id]
+
+
+def test_v3_bilingual_followup_survives_restart_and_stops_after_matching(tmp_path, durable_auto_transfer_queue):
+    new_queue, clock, state_path, _ = durable_auto_transfer_queue
+    plugin, service, _ = new_queue()
+    plugin._auto_subtitle_language_priority = ["chi&eng", "chi&jp", "chi"]
+    plugin._auto_transfer_queue_debounce_seconds = 0
+    entry = make_auto_entry(tmp_path, filename="Show.S01E06.mkv", media_type="tv", season=1, episode=6)
+    first_failure = clock.now
+    missing = {"status": "skipped", "reason": "未找到双语", "needs_online_retry": True}
+    service.auto_process_transfer_group = lambda entries, task_ids: {entry["id"]: missing}
+    assert service.enqueue_transfer_auto_entries([entry]) == (1, 0)
+    batch, _ = service.claim_next_auto_transfer_batch()
+    service.process_transfer_auto_task_batch(batch)
+    task_id = batch[0]["id"]
+
+    (tmp_path / "another-file.txt").touch()
+    clock.now += 301
+    assert service.enqueue_transfer_auto_entries([entry]) == (0, 1)
+    service.stop()
+    restored, resumed, _ = new_queue()
+    restored._auto_subtitle_language_priority = ["chi&eng", "chi&jp"]
+    restored._auto_transfer_queue_debounce_seconds = 0
+    resumed.auto_process_transfer_group = lambda *args, **kwargs: pytest.fail("补搜应直接搜索单集")
+    resumed.auto_process_transfer_entry = lambda *args, **kwargs: missing
+
+    for hours in (1, 6, 24, 48, 72):
+        planned_ts = first_failure + hours * 3600
+        assert restored._auto_transfer_tasks[task_id]["next_run_ts"] == planned_ts
+        clock.now = planned_ts - 1
+        assert resumed.claim_next_auto_transfer_batch() == ([], 1.0)
+        clock.now = planned_ts
+        batch, _ = resumed.claim_next_auto_transfer_batch()
+        resumed.process_transfer_auto_task_batch(batch)
+
+    resumed.auto_process_transfer_entry = lambda *args, **kwargs: {"status": "written", "written_count": 1}
+    clock.now = first_failure + 96 * 3600
+    batch, _ = resumed.claim_next_auto_transfer_batch()
+    resumed.process_transfer_auto_task_batch(batch)
+    saved = json.loads(state_path.read_text(encoding="utf-8"))["tasks"][0]
+    assert saved["status"] == "completed"
+    assert saved["next_run_ts"] == 0
+
+
+def test_v3_bilingual_followup_can_run_now_or_be_cancelled(tmp_path, durable_auto_transfer_queue):
+    new_queue, clock, _, _ = durable_auto_transfer_queue
+    plugin, service, _ = new_queue()
+    plugin._auto_subtitle_language_priority = ["chi&eng"]
+    plugin._auto_transfer_queue_debounce_seconds = 0
+    entry = make_auto_entry(tmp_path, filename="Show.S01E06.mkv", media_type="tv", season=1, episode=6)
+    missing = {"status": "skipped", "reason": "未找到双语", "needs_online_retry": True}
+    service.auto_process_transfer_group = lambda entries, task_ids: {entry["id"]: missing}
+    assert service.enqueue_transfer_auto_entries([entry]) == (1, 0)
+    batch, _ = service.claim_next_auto_transfer_batch()
+    task_id = batch[0]["id"]
+    service.process_transfer_auto_task_batch(batch)
+    assert service.auto_transfer_queue_snapshot()["tasks"][0]["waiting_bilingual"]
+    assert service.retry_auto_transfer_task(task_id)
+    batch, _ = service.claim_next_auto_transfer_batch()
+    assert [task["id"] for task in batch] == [task_id]
+    service.auto_process_transfer_entry = lambda *args, **kwargs: missing
+    service.process_transfer_auto_task_batch(batch)
+    assert service.cancel_bilingual_followup(task_id)
+    clock.now += 7200
+    assert service.claim_next_auto_transfer_batch()[0] == []
+    assert service.auto_transfer_queue_snapshot()["tasks"][0]["message"] == "已取消双语字幕补搜"
+
+
 def test_auto_transfer_queue_enqueues_tv_season_tasks_without_starting_immediately(tmp_path):
     module, _, _ = load_plugin_module()
     plugin = make_plugin(module)
@@ -4050,6 +4203,8 @@ def test_stop_service_uses_auto_transfer_service_directly():
 def test_v3_emby_recheck_keeps_other_episodes_moving(tmp_path, monkeypatch):
     module, _, _ = load_plugin_module("plugins.v3")
     plugin = make_plugin(module)
+    plugin.get_data_path = lambda: tmp_path / "plugin-data"
+    plugin_submodule(module, "config.config_runtime").reset_runtime_state(plugin)
     plugin._auto_check_emby_subtitles = True
     plugin._auto_skip_chinese_media_on_transfer = False
     plugin._auto_transfer_queue_debounce_seconds = 0

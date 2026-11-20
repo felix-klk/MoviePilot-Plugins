@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from ..config.config_schema import normalize_auto_multi_subtitle_mode
+from ..config.config_schema import normalize_auto_multi_subtitle_mode, safe_int
 from ..matching.subtitle_language import auto_subtitle_sort_key, is_chinese_language_suffix, language_matches_preferences, required_auto_languages
 from ..matching.subtitle_formats import is_bitmap_subtitle
 from ..catalog.target_resolver import (
@@ -12,6 +13,10 @@ from ..catalog.target_resolver import (
     suggest_target as suggest_target_id,
 )
 
+_SEASON_SPECIAL = re.compile(
+    r"(?i)(?<![a-z0-9])(?:s00[ ._-]*e\d{1,3}\b|"
+    r"(?:s\d{1,2}|season[ ._-]+\d{1,2})[ ._-]+(?:specials?\b|特别篇|特別篇|番外))"
+)
 
 @dataclass(frozen=True)
 class AutoTransferWriteCollaborators:
@@ -47,7 +52,12 @@ class AutoTransferWriteStrategy:
     ) -> List[Dict[str, Any]]:
         owner = self._owner
         items: List[Dict[str, Any]] = []
+        regular_episodes = bool(targets) and all(
+            safe_int(target.get("season")) > 0 and safe_int(target.get("episode")) > 0 for target in targets
+        )
         for prepared in prepared_uploads:
+            if regular_episodes and _SEASON_SPECIAL.search(prepared.get("source_name") or ""):
+                continue
             try:
                 raw_bytes = Path(prepared["stored_path"]).read_bytes()
             except Exception:

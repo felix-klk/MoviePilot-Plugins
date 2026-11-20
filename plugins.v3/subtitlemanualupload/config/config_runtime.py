@@ -108,11 +108,14 @@ def reset_runtime_state(owner: Any) -> None:
     owner._match_history_refresh_lock = threading.Lock()
     owner._match_history_build_lock = threading.Lock()
     owner._timeline_tasks = OrderedDict()
-    owner._transfer_auto_recent = {}
-    owner._transfer_auto_lock = threading.Lock()
-    owner._auto_transfer_tasks = OrderedDict()
-    owner._auto_transfer_worker = None
-    owner._auto_transfer_stopping = False
+    if not hasattr(owner, "_auto_transfer_wakeup"):
+        owner._transfer_auto_recent = {}
+        owner._transfer_auto_lock = threading.Lock()
+        owner._auto_transfer_tasks = OrderedDict()
+        owner._auto_transfer_worker = None
+        owner._auto_transfer_stopping = False
+        owner._auto_transfer_wakeup = threading.Event()
+        owner._auto_transfer_restored = False
     owner._auto_season_package_cache = OrderedDict()
     owner._cache_refreshing = False
     owner._cache_refresh_started_at = ""

@@ -111,3 +111,29 @@ class StatusApi:
             {**service.auto_transfer_queue_snapshot(limit=200), "cleared": cleared},
             message=f"已清空 {cleared} 条自动入库历史任务",
         )
+
+    async def enqueue_bilingual_followup(self, request: Request) -> Dict[str, Any]:
+        owner = self.owner
+        body = await request.json()
+        target_id = owner._normalize_text(body.get("target_id")) if isinstance(body, dict) else ""
+        if not target_id:
+            raise HTTPException(status_code=400, detail="缺少剧集目标 ID")
+        entry = owner.services.local_media_catalog().resolve_targets([target_id]).get(target_id)
+        if not entry:
+            raise HTTPException(status_code=409, detail="剧集目标已失效，请重新选择")
+        service = owner.services.auto_transfer()
+        if not owner.get_state() or not service.can_follow_up_bilingual_subtitle(entry):
+            raise HTTPException(status_code=422, detail="双语补搜需要已启用的插件、剧集目标、双语语言选项和在线字幕源")
+        queued, _ = service.enqueue_transfer_auto_entries([entry])
+        if not queued:
+            raise HTTPException(status_code=409, detail="已在队列中、刚处理过或目标不可用")
+        return owner._ok(service.auto_transfer_queue_snapshot(limit=200), message="已加入双语字幕补搜")
+
+    async def cancel_bilingual_followup(self, request: Request) -> Dict[str, Any]:
+        owner = self.owner
+        body = await request.json()
+        task_id = owner._normalize_text(body.get("task_id")) if isinstance(body, dict) else ""
+        service = owner.services.auto_transfer()
+        if not task_id or not service.cancel_bilingual_followup(task_id):
+            raise HTTPException(status_code=409, detail="只有等待补搜的任务可以取消")
+        return owner._ok(service.auto_transfer_queue_snapshot(limit=200), message="已取消双语字幕补搜")

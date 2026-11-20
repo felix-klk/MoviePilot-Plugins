@@ -21,6 +21,7 @@ const props = defineProps({
   mobile: { type: Boolean, default: false },
   onlineTitle: { type: String, default: '' },
   onlineTargets: { type: Array, default: () => [] },
+  bilingualFollowupLoading: { type: Boolean, default: false },
   selectedOnlineResults: { type: Array, default: () => [] },
   onlineAiDownloading: { type: Boolean, default: false },
   onlinePreviewDownloading: { type: Boolean, default: false },
@@ -68,6 +69,7 @@ defineEmits([
   'update:onlineResultFilters',
   'update:onlineAiConfirmDialog',
   'download-online-preview',
+  'enqueue-bilingual-followup',
   'request-online-ai-translate',
   'stop-online-download',
   'close-online-dialog',
@@ -489,6 +491,14 @@ const requiredLanguages = computed(() => {
           已选 {{ selectedOnlineResults.length }} 条<span v-if="hiddenSelectionCount">（含隐藏的 {{ hiddenSelectionCount }} 条）</span>
         </span>
         <VSpacer />
+        <VBtn
+          v-if="onlineTargets.length === 1 && onlineTargets[0].media_type === 'tv'"
+          variant="text"
+          :loading="bilingualFollowupLoading"
+          @click="$emit('enqueue-bilingual-followup', onlineTargets[0].id)"
+        >
+          加入补搜
+        </VBtn>
         <VBtn
           color="success"
           :disabled="!selectedOnlineResults.length || onlineAiDownloading"

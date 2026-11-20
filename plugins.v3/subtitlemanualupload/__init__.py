@@ -163,7 +163,7 @@ class SubtitleManualUpload(_PluginBase):
     plugin_name = "海拉鲁字幕大师(NEO自用版)"
     plugin_desc = "脱胎自 ChineseSubFinder，支持字幕搜索、上传、匹配、改名与智能调轴。"
     plugin_icon = "https://raw.githubusercontent.com/ifsherlock/MoviePilot-Plugins/main/icons/hyrule-subtitle-master.png"
-    plugin_version = "1.2.35"
+    plugin_version = "1.2.36"
     plugin_author = "ifsherlock"
     author_url = "https://github.com/ifsherlock"
     plugin_config_prefix = "subtitlemanualupload_"
@@ -184,7 +184,6 @@ class SubtitleManualUpload(_PluginBase):
     _online_rate_records: Dict[str, List[float]] = {}
     _online_rate_limit_per_minute = 5
     _auto_transfer_queue_debounce_seconds = 3
-    _auto_transfer_queue_history_limit = 200
     _transfer_auto_dedupe_seconds = 300
     _transfer_auto_recent: Dict[str, float] = {}
     _transfer_auto_lock = threading.Lock()
@@ -320,6 +319,7 @@ class SubtitleManualUpload(_PluginBase):
         self._save_config()
         self._prepare_rar_dependency()
         self.services.upload_session().cleanup_old_sessions()
+        self.services.auto_transfer().restore(resume=self.get_state())
         self.services.manual_strm_monitor().start()
 
     def get_state(self) -> bool:

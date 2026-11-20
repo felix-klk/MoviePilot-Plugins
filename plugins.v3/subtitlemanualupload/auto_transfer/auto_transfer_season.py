@@ -321,7 +321,13 @@ class AutoTransferSeasonCache:
                     continue
             pending_entries.append(entry)
 
-        cache_result = self._collaborators.write_from_cache(pending_entries)
+        try:
+            cache_result = self._collaborators.write_from_cache(pending_entries)
+        except Exception as exc:
+            if not isinstance(exc, (OSError, ValueError)) and getattr(exc, "status_code", None) != 409:
+                raise
+            self._logger.warning("[SubtitleManualUpload] 整季字幕缓存未能使用，继续在线匹配: %s", exc)
+            cache_result = {}
         remaining_entries = self._collect_remaining_after_season_result(
             entries=pending_entries,
             results=results,

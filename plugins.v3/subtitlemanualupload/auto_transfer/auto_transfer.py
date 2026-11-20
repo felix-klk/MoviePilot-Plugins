@@ -142,6 +142,7 @@ class AutoTransferService:
         self._queue = AutoTransferQueue(
             owner,
             time_module=self._time,
+            logger=self._logger,
             ensure_worker=lambda: self.ensure_transfer_auto_worker(),
             rate_status=self.auto_transfer_rate_status,
         )
@@ -312,6 +313,9 @@ class AutoTransferService:
     def _auto_season_cache_dir(self, cache_key: str) -> Path:
         return self._season_cache.cache_dir(cache_key)
 
+    def restore(self, *, resume: bool) -> None:
+        self._queue.restore(resume=resume)
+
     def stop(self) -> None:
         self._queue.stop()
 
@@ -372,6 +376,19 @@ class AutoTransferService:
     def retry_auto_transfer_task(self, task_id: str, *, force_low_confidence: bool = False) -> bool:
         return self._queue.retry_task(task_id, force_low_confidence=force_low_confidence)
 
+    def can_follow_up_bilingual_subtitle(self, entry: Dict[str, Any]) -> bool:
+        owner = self._owner
+        return (
+            entry.get("media_type") == "tv"
+            and owner._safe_int(entry.get("episode"), 0) > 0
+            and required_auto_languages(owner._auto_subtitle_language_priority) is not None
+            and owner._normalize_auto_transfer_subtitle_strategy(owner._auto_transfer_subtitle_strategy) != "ai_source_only"
+            and bool(self.auto_search_providers())
+        )
+
+    def cancel_bilingual_followup(self, task_id: str) -> bool:
+        return self._queue.cancel_bilingual_followup(task_id)
+
     def clear_auto_transfer_history(self) -> int:
         return self._queue.clear_history()
 
@@ -397,7 +414,7 @@ class AutoTransferService:
             if wait_seconds < 0:
                 return
             if not batch:
-                self._time.sleep(max(0.2, wait_seconds))
+                owner._auto_transfer_wakeup.wait(timeout=max(0.2, wait_seconds))
                 continue
             try:
                 owner._process_transfer_auto_task_batch(batch)
@@ -693,9 +710,19 @@ class AutoTransferService:
 
     def process_transfer_auto_task_batch(self, tasks: List[Dict[str, Any]]) -> None:
         owner = self._owner
-        pending = tasks
+        pending = []
+        for task in tasks:
+            if task.get("bilingual_retry_since") is not None:
+                entry = task.get("entry") or {}
+                if not self.can_follow_up_bilingual_subtitle(entry):
+                    owner._update_auto_transfer_task(task["id"], status="skipped", message="当前设置不适用双语补搜")
+                    continue
+                if not owner.services.local_media_catalog().filter_existing_local_entries([entry]):
+                    owner._update_auto_transfer_task(task["id"], status="skipped", message="补搜目标已失效")
+                    continue
+            pending.append(task)
         if getattr(owner, "_auto_check_emby_subtitles", False):
-            pending = []
+            tasks, pending = pending, []
             for task in tasks:
                 result = self._check_emby_subtitles_for_task(task) if isinstance(task.get("entry"), dict) else None
                 if not result:
@@ -716,7 +743,10 @@ class AutoTransferService:
                         "[SubtitleManualUpload] %s target=%s", result["reason"], task.get("target_label"),
                     )
 
-        entries = [task["entry"] for task in pending if isinstance(task.get("entry"), dict)]
+        entries = [
+            task["entry"] for task in pending
+            if isinstance(task.get("entry"), dict) and task.get("bilingual_retry_since") is None
+        ]
         task_ids = [task["id"] for task in pending if task.get("id")]
         is_tv_batch = (
             bool(entries)
@@ -736,10 +766,19 @@ class AutoTransferService:
             }
         for task in pending:
             entry = task.get("entry") or {}
-            result = results.get(self._auto_task_result_key(entry)) or {
+            if task.get("bilingual_retry_since") is not None:
+                result = self.auto_process_transfer_entry(entry, queue_rate_limited=True, task_ids=[task["id"]])
+            else:
+                result = results.get(self._auto_task_result_key(entry))
+            result = result or {
                 "status": "failed",
                 "reason": "入库自动字幕任务没有返回结果",
             }
+            if result.get("needs_online_retry") and self.can_follow_up_bilingual_subtitle(entry):
+                self._queue.defer_bilingual_followup(task, result)
+                self._logger.info("[SubtitleManualUpload] 已安排双语字幕补搜 target=%s reason=%s",
+                                  task.get("target_label"), result.get("reason"))
+                continue
             status = result.get("status") if result.get("status") in {"completed", "written", "skipped", "failed", "ai_submitted"} else "completed"
             public_status = "completed" if status in {"written", "ai_submitted"} else status
             owner._update_auto_transfer_task(

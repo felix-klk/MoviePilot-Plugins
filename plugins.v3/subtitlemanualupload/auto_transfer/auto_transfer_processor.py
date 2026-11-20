@@ -97,6 +97,7 @@ class AutoTransferProcessor:
         if not candidates:
             return {
                 "status": "skipped",
+                "needs_online_retry": True,
                 "reason": "未找到符合语言要求的字幕" if required is not None else "没有高置信可下载结果",
                 "target": target.get("label"),
                 "results": len(search_result.get("results") or []),
@@ -220,6 +221,7 @@ class AutoTransferProcessor:
 
         return {
             "status": "skipped",
+            "needs_online_retry": True,
             "reason": last_reason or ("未找到符合语言要求的字幕" if required is not None else "高置信结果未解析到可用字幕文件"),
             "target": target.get("label"),
             "candidate_count": len(candidates),

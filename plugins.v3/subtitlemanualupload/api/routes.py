@@ -89,6 +89,20 @@ def build_api_routes(owner: Any) -> List[Dict[str, Any]]:
             "summary": "清空自动入库字幕历史任务",
         },
         {
+            "path": "/auto_transfer_queue/followup",
+            "endpoint": status_api.enqueue_bilingual_followup,
+            "methods": ["POST"],
+            "auth": "bear",
+            "summary": "将剧集加入双语字幕补搜",
+        },
+        {
+            "path": "/auto_transfer_queue/cancel_followup",
+            "endpoint": status_api.cancel_bilingual_followup,
+            "methods": ["POST"],
+            "auth": "bear",
+            "summary": "取消等待中的双语字幕补搜",
+        },
+        {
             "path": "/prepare_upload",
             "endpoint": upload_api.prepare_upload,
             "methods": ["POST"],

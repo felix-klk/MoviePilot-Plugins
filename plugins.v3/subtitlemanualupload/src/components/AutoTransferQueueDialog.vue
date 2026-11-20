@@ -14,6 +14,7 @@ defineEmits([
   'load-auto-transfer-queue',
   'retry-auto-transfer-task',
   'force-auto-transfer-task',
+  'cancel-bilingual-followup',
   'clear-auto-transfer-history',
 ])
 </script>
@@ -70,7 +71,7 @@ defineEmits([
         </div>
         <div v-if="autoQueueTasks.length" class="auto-queue-list">
           <div
-            v-for="task in autoQueueTasks.slice().reverse().slice(0, 12)"
+            v-for="task in autoQueueTasks.slice().reverse()"
             :key="task.id"
             class="auto-queue-row"
             :class="`auto-queue-${task.status}`"
@@ -103,7 +104,16 @@ defineEmits([
                 :disabled="autoQueueMutating && autoQueueActionTaskId !== task.id"
                 @click="$emit('retry-auto-transfer-task', task)"
               >
-                重试
+                {{ task.waiting_bilingual ? '立即补搜' : '重试' }}
+              </VBtn>
+              <VBtn
+                v-if="task.waiting_bilingual"
+                size="small"
+                variant="text"
+                :disabled="autoQueueMutating"
+                @click="$emit('cancel-bilingual-followup', task)"
+              >
+                取消补搜
               </VBtn>
             </div>
           </div>

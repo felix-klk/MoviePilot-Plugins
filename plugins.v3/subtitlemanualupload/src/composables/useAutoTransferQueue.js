@@ -35,7 +35,10 @@ export function useAutoTransferQueue({
   const autoQueueSummaryText = computed(() => {
     const parts = []
     if (autoQueueSummary.value.in_progress) parts.push(`${autoQueueSummary.value.in_progress} 个处理中`)
-    if (autoQueueSummary.value.pending) parts.push(`${autoQueueSummary.value.pending} 个排队`)
+    const waiting = Number(autoQueueSummary.value.waiting_bilingual || 0)
+    const pending = Number(autoQueueSummary.value.pending || 0) - waiting
+    if (pending) parts.push(`${pending} 个排队`)
+    if (waiting) parts.push(`${waiting} 个等待补搜`)
     if (autoQueueSummary.value.failed) parts.push(`${autoQueueSummary.value.failed} 个失败`)
     if (autoQueueSummary.value.completed) parts.push(`${autoQueueSummary.value.completed} 个完成`)
     if (autoQueueSummary.value.skipped) parts.push(`${autoQueueSummary.value.skipped} 个跳过`)
@@ -56,9 +59,11 @@ export function useAutoTransferQueue({
   function scheduleAutoQueuePolling() {
     stopAutoQueuePolling()
     if (!autoQueueActive.value) return
+    const waiting = Number(autoQueueSummary.value.waiting_bilingual || 0)
+    const busy = autoQueueSummary.value.in_progress || Number(autoQueueSummary.value.pending || 0) > waiting
     autoQueueTimer = setTimeout(() => {
       loadAutoTransferQueue()
-    }, 3000)
+    }, busy ? 3000 : 60000)
   }
 
   async function loadAutoTransferQueue() {
@@ -110,6 +115,28 @@ export function useAutoTransferQueue({
     }
   }
 
+  async function changeBilingualFollowup({ targetId, taskId }) {
+    if (autoQueueMutating.value) return false
+    autoQueueMutating.value = true
+    autoQueueActionTaskId.value = taskId || ''
+    error.value = ''
+    try {
+      const response = targetId
+        ? await pluginApi.value.enqueueBilingualFollowup({ target_id: targetId })
+        : await pluginApi.value.cancelBilingualFollowup({ task_id: taskId })
+      autoTransferQueue.value = unwrapResponse(response) || autoTransferQueue.value
+      message.value = response?.message || (targetId ? '已加入双语字幕补搜' : '已取消双语字幕补搜')
+      scheduleAutoQueuePolling()
+      return true
+    } catch (err) {
+      error.value = errorMessage(err, '更新双语补搜任务失败')
+      return false
+    } finally {
+      autoQueueMutating.value = false
+      autoQueueActionTaskId.value = ''
+    }
+  }
+
   return {
     autoTransferQueue,
     autoQueueDialog,
@@ -124,6 +151,7 @@ export function useAutoTransferQueue({
     scheduleAutoQueuePolling,
     loadAutoTransferQueue,
     retryAutoTransferTask,
+    changeBilingualFollowup,
     clearAutoTransferHistory,
   }
 }

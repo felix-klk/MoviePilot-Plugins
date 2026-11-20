@@ -170,6 +170,7 @@ const {
   stopAutoQueuePolling,
   loadAutoTransferQueue,
   retryAutoTransferTask,
+  changeBilingualFollowup,
   clearAutoTransferHistory,
 } = useAutoTransferQueue({
   pluginApi,
@@ -178,6 +179,15 @@ const {
   error,
   message,
 })
+
+async function enqueueBilingualFollowup(targetId) {
+  if (await changeBilingualFollowup({ targetId })) {
+    closeOnlineDialog()
+    autoQueueDialog.value = true
+  } else {
+    onlineError.value = error.value
+  }
+}
 
 const {
   rootTab,
@@ -1113,6 +1123,7 @@ defineExpose({
       @load-auto-transfer-queue="loadAutoTransferQueue"
       @retry-auto-transfer-task="retryAutoTransferTask"
       @force-auto-transfer-task="task => retryAutoTransferTask(task, { forceLowConfidence: true })"
+      @cancel-bilingual-followup="task => changeBilingualFollowup({ taskId: task.id })"
       @clear-auto-transfer-history="clearAutoTransferHistory"
     />
 
@@ -1188,8 +1199,10 @@ defineExpose({
       :online-result-key="onlineResultKey"
       :online-result-meta="onlineResultMeta"
       :is-online-result-downloadable="isOnlineResultDownloadable"
+      :bilingual-followup-loading="autoQueueMutating"
       @update:model-value="updateOnlineDialog"
       @download-online-preview="downloadOnlinePreview"
+      @enqueue-bilingual-followup="enqueueBilingualFollowup"
       @request-online-ai-translate="requestOnlineAiTranslate"
       @stop-online-download="stopOnlineDownload"
       @close-online-dialog="closeOnlineDialog"
