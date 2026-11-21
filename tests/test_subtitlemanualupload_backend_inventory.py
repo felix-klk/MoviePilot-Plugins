@@ -132,6 +132,7 @@ def test_backend_inventory_cli_outputs_valid_json_for_big_modules():
                 "subtitle_formats.py",
                 "subtitle_history.py",
                 "subtitle_language.py",
+                "subtitle_validation.py",
                 "subtitle_writer.py",
                 "tongwen.py",
             ]

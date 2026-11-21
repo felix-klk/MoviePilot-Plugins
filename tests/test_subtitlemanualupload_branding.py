@@ -6,7 +6,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_DIR = ROOT / "plugins.v2" / "subtitlemanualupload"
 BRAND_NAME = "海拉鲁字幕大师"
-VERSION = "0.1.99"
 ICON_URL = (
     "https://raw.githubusercontent.com/ifsherlock/MoviePilot-Plugins/"
     "main/icons/hyrule-subtitle-master.png"
@@ -31,21 +30,25 @@ def _plugin_constants() -> dict[str, str]:
 
 
 def test_release_branding_stays_in_sync():
+    market = json.loads((ROOT / "package.v2.json").read_text(encoding="utf-8"))
+    version = market["SubtitleManualUpload"]["version"]
+    assert version
+
     for package_name in ("package.json", "package.v2.json"):
         package = json.loads((ROOT / package_name).read_text(encoding="utf-8"))
         metadata = package["SubtitleManualUpload"]
         assert metadata["name"] == BRAND_NAME
-        assert metadata["version"] == VERSION
+        assert metadata["version"] == version
         assert metadata["icon"] == ICON_URL
         assert "ChineseSubFinder" in metadata["description"]
-        assert f"v{VERSION}" in metadata["history"]
+        assert f"v{version}" in metadata["history"]
 
     plugin_package = json.loads((PLUGIN_DIR / "package.json").read_text(encoding="utf-8"))
-    assert plugin_package["version"] == VERSION
+    assert plugin_package["version"] == version
 
     constants = _plugin_constants()
     assert constants["plugin_name"] == BRAND_NAME
-    assert constants["plugin_version"] == VERSION
+    assert constants["plugin_version"] == version
     assert constants["plugin_icon"] == ICON_URL
     assert "ChineseSubFinder" in constants["plugin_desc"]
 

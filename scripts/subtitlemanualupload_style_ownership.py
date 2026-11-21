@@ -40,6 +40,7 @@ FRAGMENT_RANGES = [
 ]
 
 COMPONENT_OWNERS = {
+    "plugins.v2/subtitlemanualupload/src/components/Config.vue": ("Config", "stay-in-component"),
     "plugins.v2/subtitlemanualupload/src/components/MediaSearchPanel.vue": ("MediaSearchPanel", "move-in-3.2"),
     "plugins.v2/subtitlemanualupload/src/components/MediaGrid.vue": ("MediaGrid", "move-in-3.2"),
     "plugins.v2/subtitlemanualupload/src/components/TargetDetailPanel.vue": ("TargetDetailPanel", "move-in-3.2"),

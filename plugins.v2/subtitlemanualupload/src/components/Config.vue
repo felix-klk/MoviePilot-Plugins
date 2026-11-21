@@ -1063,10 +1063,6 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-.config-switch-line {
-  min-height: 48px;
-}
-
 .dialog-title {
   display: flex;
   align-items: center;

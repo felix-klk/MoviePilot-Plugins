@@ -1,5 +1,5 @@
 import { importShared } from './__federation_fn_import-JrT3xvdd.js';
-import Config, { _ as _export_sfc } from './__federation_expose_Config-DUbv9whx.js';
+import Config, { d as defaultOnlineProviderIds, o as onlineResultLanguageFilterCategory, a as onlineLanguageItems, b as onlineProviderItems, c as onlineResultKey, i as isOnlineResultDownloadable, e as isForeignOnlineResult, p as providerName, f as providerPriority, g as onlineResultLanguagePriority, h as onlineResultIdentityPriority, _ as _export_sfc, j as onlineResultMeta, k as providerProgressText, l as providerProgressColor } from './__federation_expose_Config-5dz7OJos.js';
 
 function unwrapResponse(response) {
   if (response && Object.prototype.hasOwnProperty.call(response, 'data') && response.success !== undefined) {
@@ -1462,117 +1462,6 @@ function useMediaSearch({
   }
 }
 
-const onlineProviderItems = [
-  { title: 'SubHD', value: 'subhd' },
-  { title: 'Zimuku', value: 'zimuku' },
-  { title: '射手网(伪)', value: 'assrt' },
-  { title: 'OpenSubtitles', value: 'opensubtitles' },
-];
-
-function onlineResultKey(item) {
-  return `${item?.provider || 'unknown'}:${item?.result_id || item?.page_url || item?.title || ''}`
-}
-
-function providerName(providerId) {
-  const known = onlineProviderItems.find(item => item.value === providerId);
-  return known?.title || providerId || '未知来源'
-}
-
-function providerPriority(providerId) {
-  if (providerId === 'subhd') return 35
-  if (providerId === 'assrt') return 30
-  if (providerId === 'zimuku') return 25
-  if (providerId === 'opensubtitles') return 20
-  return 0
-}
-
-function onlineResultMeta(item) {
-  const parts = [];
-  if (item.language) parts.push(item.language);
-  if (item.format) parts.push(item.format);
-  if (item.season || item.episode) {
-    parts.push(`S${String(item.season || 0).padStart(2, '0')}E${String(item.episode || 0).padStart(2, '0')}`);
-  }
-  if (item.score) parts.push(`匹配 ${item.score}`);
-  return parts.join(' · ') || '等待下载后自动匹配'
-}
-
-function isOnlineResultDownloadable(item) {
-  return item?.downloadable !== false
-}
-
-function onlineResultLanguageCategory(item) {
-  const category = String(item?.language_category || '').toLowerCase();
-  if (['chinese', 'english', 'japanese', 'korean', 'other'].includes(category)) return category
-  const text = `${item?.language || ''} ${item?.title || ''} ${item?.note || ''}`.toLowerCase();
-  if (
-    text.includes('中文')
-    || text.includes('简体')
-    || text.includes('繁体')
-    || text.includes('双语')
-    || text.includes('chinese')
-    || /(^|[\s._()\[\]-])(zh|ze|chi|chs|cht|zho)(?=$|[\s._()\[\]-])/.test(text)
-  ) return 'chinese'
-  if (
-    text.includes('英文')
-    || text.includes('english')
-    || /(^|[\s._()\[\]-])(en|eng)(?=$|[\s._()\[\]-])/.test(text)
-  ) return 'english'
-  if (
-    text.includes('日文')
-    || text.includes('日语')
-    || text.includes('japanese')
-    || /(^|[\s._()\[\]-])(ja|jpn)(?=$|[\s._()\[\]-])/.test(text)
-  ) return 'japanese'
-  if (
-    text.includes('korean')
-    || /(^|[\s._()\[\]-])(ko|kor)(?=$|[\s._()\[\]-])/.test(text)
-  ) return 'korean'
-  return 'other'
-}
-
-function onlineResultLanguageFilterCategory(item) {
-  const category = onlineResultLanguageCategory(item);
-  return category === 'korean' ? 'other' : category
-}
-
-function onlineResultLanguagePriority(item) {
-  const category = onlineResultLanguageCategory(item);
-  if (category === 'chinese') return 40
-  if (category === 'english') return 30
-  if (category === 'japanese' || category === 'korean') return 20
-  return 10
-}
-
-function onlineResultIdentityPriority(item) {
-  const status = String(item?.identity_status || '').toLowerCase();
-  if (status === 'strong') return 30
-  if (status === 'weak') return 10
-  return 0
-}
-
-function isForeignOnlineResult(item) {
-  return onlineResultLanguageCategory(item) !== 'chinese'
-}
-
-function providerProgressText(state) {
-  if (state === 'searching') return '搜索中'
-  if (state === 'done') return '已完成'
-  if (state === 'timeout') return '超时'
-  if (state === 'cancelled') return '已停止'
-  if (state === 'error') return '失败'
-  return '等待'
-}
-
-function providerProgressColor(state) {
-  if (state === 'searching') return 'info'
-  if (state === 'done') return 'success'
-  if (state === 'timeout') return 'warning'
-  if (state === 'cancelled') return 'default'
-  if (state === 'error') return 'warning'
-  return 'default'
-}
-
 const {computed: computed$a,nextTick,ref: ref$c} = await importShared('vue');
 
 const ONLINE_PROVIDER_TIMEOUT_MS = 25000;
@@ -1616,7 +1505,7 @@ function useOnlineSubtitles({
   const onlineKeyword = ref$c('');
   const onlineTargets = ref$c([]);
   const onlineStatus = ref$c({ providers: [], capabilities: {} });
-  const onlineSelectedProviders = ref$c(['subhd', 'zimuku']);
+  const onlineSelectedProviders = ref$c([...defaultOnlineProviderIds]);
   const onlineResults = ref$c([]);
   const onlineLanguageFilter = ref$c('all');
   const onlineProviderFilter = ref$c('all');
@@ -1629,38 +1518,30 @@ function useOnlineSubtitles({
   let onlineDownloadSeq = 0;
 
   const hasOnlineResults = computed$a(() => onlineResults.value.length > 0);
-  const filteredOnlineResults = computed$a(() => {
-    return onlineResults.value.filter(item => {
-      const languageMatched = onlineLanguageFilter.value === 'all' || onlineResultLanguageFilterCategory(item) === onlineLanguageFilter.value;
-      const providerMatched = onlineProviderFilter.value === 'all' || item.provider === onlineProviderFilter.value;
-      return languageMatched && providerMatched
-    })
-  });
+  const matchesLanguage = item => onlineLanguageFilter.value === 'all' || onlineResultLanguageFilterCategory(item) === onlineLanguageFilter.value;
+  const matchesProvider = item => onlineProviderFilter.value === 'all' || item.provider === onlineProviderFilter.value;
+  const filteredOnlineResults = computed$a(() => onlineResults.value.filter(item => matchesLanguage(item) && matchesProvider(item)));
   const onlineLanguageFilterItems = computed$a(() => {
-    const languageItems = [
-      { title: '中文', value: 'chinese' },
-      { title: '英文', value: 'english' },
-      { title: '日文', value: 'japanese' },
-      { title: '其他', value: 'other' },
-    ];
-    const counts = onlineResults.value.reduce((acc, item) => {
+    const results = onlineResults.value.filter(matchesProvider);
+    const counts = results.reduce((acc, item) => {
       const category = onlineResultLanguageFilterCategory(item);
       acc[category] = (acc[category] || 0) + 1;
       return acc
     }, {});
     return [
-      { title: `全部 ${onlineResults.value.length}`, value: 'all' },
-      ...languageItems.map(item => ({ title: `${item.title} ${counts[item.value] || 0}`, value: item.value })),
+      { title: `全部 ${results.length}`, value: 'all' },
+      ...onlineLanguageItems.map(item => ({ title: `${item.title} ${counts[item.value] || 0}`, value: item.value })),
     ]
   });
   const onlineProviderFilterItems = computed$a(() => {
-    const counts = onlineResults.value.reduce((acc, item) => {
+    const results = onlineResults.value.filter(matchesLanguage);
+    const counts = results.reduce((acc, item) => {
       const provider = item.provider || 'unknown';
       acc[provider] = (acc[provider] || 0) + 1;
       return acc
     }, {});
     return [
-      { title: `全部 ${onlineResults.value.length}`, value: 'all' },
+      { title: `全部 ${results.length}`, value: 'all' },
       ...onlineProviderItems.map(item => ({ title: `${item.title} ${counts[item.value] || 0}`, value: item.value })),
     ]
   });
@@ -1702,12 +1583,9 @@ function useOnlineSubtitles({
     return selectedSeason.value === 'all' ? '搜索全部季字幕包' : '搜索本季字幕包'
   });
 
-  function ensureConfiguredApiProvidersSelected() {
-    const configured = [...(onlineStatus.value?.enabled_providers || [])]
+  function syncConfiguredProviders() {
+    const configured = (onlineStatus.value?.enabled_providers || [])
       .filter(provider => onlineProviderItems.some(item => item.value === provider));
-    if (onlineStatus.value?.assrt_api_configured) configured.push('assrt');
-    if (onlineStatus.value?.opensubtitles_api_configured) configured.push('opensubtitles');
-    if (!configured.length) return
     onlineSelectedProviders.value = Array.from(new Set(configured));
   }
 
@@ -1715,11 +1593,7 @@ function useOnlineSubtitles({
     try {
       const response = await pluginApi.value.onlineStatus();
       onlineStatus.value = unwrapResponse(response) || onlineStatus.value;
-      const enabled = onlineStatus.value.enabled_providers || [];
-      if (enabled.length) {
-        onlineSelectedProviders.value = enabled;
-      }
-      ensureConfiguredApiProvidersSelected();
+      syncConfiguredProviders();
     } catch (err) {
       onlineError.value = errorMessage(err, '加载在线字幕源状态失败');
     }
@@ -2076,7 +1950,7 @@ function useOnlineSubtitles({
     onlineProviderProgressItems,
     onlineAiConfirmText,
     onlineBatchLabel,
-    ensureConfiguredApiProvidersSelected,
+    syncConfiguredProviders,
     loadOnlineStatus,
     openOnlineDialog,
     openBatchOnlineSearch,
@@ -3264,7 +3138,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const AiTaskDialog = /*#__PURE__*/_export_sfc(_sfc_main$e, [['__scopeId',"data-v-1794d529"]]);
+const AiTaskDialog = /*#__PURE__*/_export_sfc(_sfc_main$e, [['__scopeId',"data-v-ce56eb3a"]]);
 
 const {createElementVNode:_createElementVNode$c,toDisplayString:_toDisplayString$a,createTextVNode:_createTextVNode$a,resolveComponent:_resolveComponent$d,withCtx:_withCtx$b,openBlock:_openBlock$d,createBlock:_createBlock$d,createCommentVNode:_createCommentVNode$d,createVNode:_createVNode$c,renderList:_renderList$8,Fragment:_Fragment$a,createElementBlock:_createElementBlock$d,mergeProps:_mergeProps$5,normalizeClass:_normalizeClass$9} = await importShared('vue');
 
@@ -3458,7 +3332,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const AutoTransferQueueDialog = /*#__PURE__*/_export_sfc(_sfc_main$d, [['__scopeId',"data-v-919aa78a"]]);
+const AutoTransferQueueDialog = /*#__PURE__*/_export_sfc(_sfc_main$d, [['__scopeId',"data-v-7ce45537"]]);
 
 const {renderList:_renderList$7,Fragment:_Fragment$9,openBlock:_openBlock$c,createElementBlock:_createElementBlock$c,createCommentVNode:_createCommentVNode$c,toDisplayString:_toDisplayString$9,createElementVNode:_createElementVNode$b,resolveComponent:_resolveComponent$c,createVNode:_createVNode$b,createTextVNode:_createTextVNode$9,withCtx:_withCtx$a,createBlock:_createBlock$c} = await importShared('vue');
 
@@ -3571,7 +3445,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const MediaGrid = /*#__PURE__*/_export_sfc(_sfc_main$c, [['__scopeId',"data-v-e622bd7b"]]);
+const MediaGrid = /*#__PURE__*/_export_sfc(_sfc_main$c, [['__scopeId',"data-v-1606aa16"]]);
 
 const {renderList:_renderList$6,Fragment:_Fragment$8,openBlock:_openBlock$b,createElementBlock:_createElementBlock$b,createCommentVNode:_createCommentVNode$b,toDisplayString:_toDisplayString$8,createElementVNode:_createElementVNode$a,resolveComponent:_resolveComponent$b,createVNode:_createVNode$a,createTextVNode:_createTextVNode$8,withModifiers:_withModifiers$2,withCtx:_withCtx$9,normalizeClass:_normalizeClass$8,createBlock:_createBlock$b} = await importShared('vue');
 
@@ -3603,7 +3477,7 @@ const _hoisted_18$3 = ["onClick"];
 const _hoisted_19$3 = { key: 0 };
 const _hoisted_20$3 = { key: 1 };
 const _hoisted_21$3 = ["aria-label"];
-const _hoisted_22$1 = { key: 3 };
+const _hoisted_22$2 = { key: 3 };
 const _hoisted_23$1 = { class: "history-episode-row" };
 const _hoisted_24$1 = ["onClick"];
 const _hoisted_25$1 = { class: "episode-title" };
@@ -3854,7 +3728,7 @@ return (_ctx, _cache) => {
                                       }, _toDisplayString$8(season.subtitleCount), 9, _hoisted_21$3))
                                     : _createCommentVNode$b("", true),
                                   (__props.historySeasonSelectedCount(item, season))
-                                    ? (_openBlock$b(), _createElementBlock$b("em", _hoisted_22$1, "已选 " + _toDisplayString$8(__props.historySeasonSelectedCount(item, season)), 1))
+                                    ? (_openBlock$b(), _createElementBlock$b("em", _hoisted_22$2, "已选 " + _toDisplayString$8(__props.historySeasonSelectedCount(item, season)), 1))
                                     : _createCommentVNode$b("", true)
                                 ], 8, _hoisted_18$3)
                               ]))
@@ -4007,9 +3881,9 @@ return (_ctx, _cache) => {
 }
 
 };
-const MatchHistoryPanel = /*#__PURE__*/_export_sfc(_sfc_main$b, [['__scopeId',"data-v-7c0ba8cd"]]);
+const MatchHistoryPanel = /*#__PURE__*/_export_sfc(_sfc_main$b, [['__scopeId',"data-v-0be17e28"]]);
 
-const {toDisplayString:_toDisplayString$7,createElementVNode:_createElementVNode$9,openBlock:_openBlock$a,createElementBlock:_createElementBlock$a,createCommentVNode:_createCommentVNode$a,createTextVNode:_createTextVNode$7,resolveComponent:_resolveComponent$a,withCtx:_withCtx$8,createBlock:_createBlock$a,createVNode:_createVNode$9,withKeys:_withKeys$2} = await importShared('vue');
+const {toDisplayString:_toDisplayString$7,createElementVNode:_createElementVNode$9,openBlock:_openBlock$a,createElementBlock:_createElementBlock$a,createCommentVNode:_createCommentVNode$a,createTextVNode:_createTextVNode$7,resolveComponent:_resolveComponent$a,withCtx:_withCtx$8,createVNode:_createVNode$9,withKeys:_withKeys$2,createBlock:_createBlock$a} = await importShared('vue');
 
 
 const _hoisted_1$a = { class: "search-head" };
@@ -4028,7 +3902,6 @@ const _sfc_main$a = {
   rootTab: { type: String, required: true },
   matchHistorySummary: { type: String, required: true },
   indexSummary: { type: String, required: true },
-  autoQueueVisible: { type: Boolean, default: false },
   autoQueueSummaryText: { type: String, default: '' },
   refreshing: { type: Boolean, default: false },
   matchHistoryLoading: { type: Boolean, default: false },
@@ -4088,19 +3961,16 @@ return (_ctx, _cache) => {
               _createElementVNode$9("p", null, _toDisplayString$7(__props.rootTab === 'history' ? __props.matchHistorySummary : `仅展示 MoviePilot 已整理到本地库的视频资源。${__props.indexSummary}`), 1)
             ]),
             _createElementVNode$9("div", _hoisted_4$7, [
-              (__props.autoQueueVisible)
-                ? (_openBlock$a(), _createBlock$a(_component_VBtn, {
-                    key: 0,
-                    variant: "text",
-                    "prepend-icon": "mdi-tray-full",
-                    onClick: _cache[0] || (_cache[0] = $event => (_ctx.$emit('open-auto-queue')))
-                  }, {
-                    default: _withCtx$8(() => [
-                      _createTextVNode$7(" 自动入库队列 · " + _toDisplayString$7(__props.autoQueueSummaryText), 1)
-                    ]),
-                    _: 1
-                  }))
-                : _createCommentVNode$a("", true),
+              _createVNode$9(_component_VBtn, {
+                variant: "text",
+                "prepend-icon": "mdi-tray-full",
+                onClick: _cache[0] || (_cache[0] = $event => (_ctx.$emit('open-auto-queue')))
+              }, {
+                default: _withCtx$8(() => [
+                  _createTextVNode$7(" 自动入库队列 · " + _toDisplayString$7(__props.autoQueueSummaryText), 1)
+                ]),
+                _: 1
+              }),
               _createVNode$9(_component_VBtn, {
                 variant: "tonal",
                 color: "primary",
@@ -4156,9 +4026,9 @@ return (_ctx, _cache) => {
 }
 
 };
-const MediaSearchPanel = /*#__PURE__*/_export_sfc(_sfc_main$a, [['__scopeId',"data-v-929e8c55"]]);
+const MediaSearchPanel = /*#__PURE__*/_export_sfc(_sfc_main$a, [['__scopeId',"data-v-617be801"]]);
 
-const {resolveComponent:_resolveComponent$9,openBlock:_openBlock$9,createBlock:_createBlock$9,createCommentVNode:_createCommentVNode$9,toDisplayString:_toDisplayString$6,createElementVNode:_createElementVNode$8,createTextVNode:_createTextVNode$6,withCtx:_withCtx$7,createVNode:_createVNode$8,normalizeClass:_normalizeClass$7,withKeys:_withKeys$1,renderList:_renderList$5,Fragment:_Fragment$7,createElementBlock:_createElementBlock$9} = await importShared('vue');
+const {resolveComponent:_resolveComponent$9,openBlock:_openBlock$9,createBlock:_createBlock$9,createCommentVNode:_createCommentVNode$9,toDisplayString:_toDisplayString$6,createElementVNode:_createElementVNode$8,createTextVNode:_createTextVNode$6,withCtx:_withCtx$7,createVNode:_createVNode$8,normalizeClass:_normalizeClass$7,withKeys:_withKeys$1,createElementBlock:_createElementBlock$9,renderList:_renderList$5,Fragment:_Fragment$7} = await importShared('vue');
 
 
 const _hoisted_1$9 = { class: "online-dialog-heading" };
@@ -4168,38 +4038,42 @@ const _hoisted_4$6 = { class: "online-layout" };
 const _hoisted_5$5 = { class: "online-results-panel" };
 const _hoisted_6$5 = { class: "online-panel-head" };
 const _hoisted_7$5 = {
-  key: 2,
-  class: "online-provider-progress"
+  key: 0,
+  class: "online-filter-hint"
 };
 const _hoisted_8$4 = {
   key: 3,
-  class: "online-loading"
+  class: "online-provider-progress"
 };
 const _hoisted_9$4 = {
   key: 4,
+  class: "online-loading"
+};
+const _hoisted_10$4 = {
+  key: 5,
   class: "online-result-list"
 };
-const _hoisted_10$4 = { class: "online-result-main" };
-const _hoisted_11$4 = { class: "online-result-title" };
-const _hoisted_12$3 = { class: "online-result-meta" };
-const _hoisted_13$3 = {
+const _hoisted_11$4 = { class: "online-result-main" };
+const _hoisted_12$3 = { class: "online-result-title" };
+const _hoisted_13$3 = { class: "online-result-meta" };
+const _hoisted_14$3 = {
   key: 0,
   class: "online-manual-badge"
 };
-const _hoisted_14$3 = { key: 0 };
-const _hoisted_15$3 = {
+const _hoisted_15$3 = { key: 0 };
+const _hoisted_16$2 = {
   key: 1,
   class: "online-match-detail"
 };
-const _hoisted_16$2 = ["href"];
-const _hoisted_17$2 = {
-  key: 5,
+const _hoisted_17$2 = ["href"];
+const _hoisted_18$2 = {
+  key: 6,
   class: "empty-state"
 };
-const _hoisted_18$2 = { class: "manual-links-panel" };
-const _hoisted_19$2 = { class: "manual-provider-head" };
-const _hoisted_20$2 = { class: "manual-keywords" };
-const _hoisted_21$2 = ["href"];
+const _hoisted_19$2 = { class: "manual-links-panel" };
+const _hoisted_20$2 = { class: "manual-provider-head" };
+const _hoisted_21$2 = { class: "manual-keywords" };
+const _hoisted_22$1 = ["href"];
 
 
 const _sfc_main$9 = {
@@ -4461,10 +4335,14 @@ return (_ctx, _cache) => {
                       _createElementVNode$8("span", null, _toDisplayString$6(__props.hasOnlineResults ? `${__props.filteredOnlineResults.length}/${__props.onlineResults.length} 条结果` : '暂无结果'), 1)
                     ]),
                     (__props.hasOnlineResults)
+                      ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_7$5, "语言、来源各选一项，同时满足；中文仅含单语，双语单独分类。"))
+                      : _createCommentVNode$9("", true),
+                    (__props.hasOnlineResults)
                       ? (_openBlock$9(), _createBlock$9(_component_VChipGroup, {
-                          key: 0,
+                          key: 1,
                           "model-value": __props.onlineLanguageFilter,
                           class: "online-provider-filter",
+                          column: "",
                           mandatory: "",
                           "selected-class": "online-provider-filter-active",
                           "onUpdate:modelValue": _cache[11] || (_cache[11] = $event => (_ctx.$emit('update:onlineLanguageFilter', $event)))
@@ -4489,9 +4367,10 @@ return (_ctx, _cache) => {
                       : _createCommentVNode$9("", true),
                     (__props.hasOnlineResults)
                       ? (_openBlock$9(), _createBlock$9(_component_VChipGroup, {
-                          key: 1,
+                          key: 2,
                           "model-value": __props.onlineProviderFilter,
                           class: "online-provider-filter",
+                          column: "",
                           mandatory: "",
                           "selected-class": "online-provider-filter-active",
                           "onUpdate:modelValue": _cache[12] || (_cache[12] = $event => (_ctx.$emit('update:onlineProviderFilter', $event)))
@@ -4515,7 +4394,7 @@ return (_ctx, _cache) => {
                         }, 8, ["model-value"]))
                       : _createCommentVNode$9("", true),
                     (__props.onlineProviderProgressItems.length)
-                      ? (_openBlock$9(), _createElementBlock$9("div", _hoisted_7$5, [
+                      ? (_openBlock$9(), _createElementBlock$9("div", _hoisted_8$4, [
                           (_openBlock$9(true), _createElementBlock$9(_Fragment$7, null, _renderList$5(__props.onlineProviderProgressItems, (item) => {
                             return (_openBlock$9(), _createBlock$9(_component_VChip, {
                               key: item.provider,
@@ -4532,10 +4411,10 @@ return (_ctx, _cache) => {
                         ]))
                       : _createCommentVNode$9("", true),
                     (__props.onlineSearching && !__props.filteredOnlineResults.length)
-                      ? (_openBlock$9(), _createElementBlock$9("div", _hoisted_8$4, _toDisplayString$6(__props.mobile ? '正在搜索字幕' : '正在从 API 搜索字幕，先返回的结果会先显示...'), 1))
+                      ? (_openBlock$9(), _createElementBlock$9("div", _hoisted_9$4, _toDisplayString$6(__props.mobile ? '正在搜索字幕' : '正在从 API 搜索字幕，先返回的结果会先显示...'), 1))
                       : _createCommentVNode$9("", true),
                     (__props.filteredOnlineResults.length)
-                      ? (_openBlock$9(), _createElementBlock$9("div", _hoisted_9$4, [
+                      ? (_openBlock$9(), _createElementBlock$9("div", _hoisted_10$4, [
                           (_openBlock$9(true), _createElementBlock$9(_Fragment$7, null, _renderList$5(__props.filteredOnlineResults, (item) => {
                             return (_openBlock$9(), _createElementBlock$9("div", {
                               key: __props.onlineResultKey(item),
@@ -4551,20 +4430,20 @@ return (_ctx, _cache) => {
                                 disabled: !__props.isOnlineResultDownloadable(item),
                                 "onUpdate:modelValue": value => _ctx.$emit('toggle-online-result', item, value)
                               }, null, 8, ["model-value", "disabled", "onUpdate:modelValue"]),
-                              _createElementVNode$8("div", _hoisted_10$4, [
-                                _createElementVNode$8("div", _hoisted_11$4, _toDisplayString$6(item.title), 1),
-                                _createElementVNode$8("div", _hoisted_12$3, [
+                              _createElementVNode$8("div", _hoisted_11$4, [
+                                _createElementVNode$8("div", _hoisted_12$3, _toDisplayString$6(item.title), 1),
+                                _createElementVNode$8("div", _hoisted_13$3, [
                                   _createElementVNode$8("span", null, _toDisplayString$6(__props.providerName(item.provider)), 1),
                                   _createElementVNode$8("span", null, _toDisplayString$6(__props.onlineResultMeta(item)), 1),
                                   (!__props.isOnlineResultDownloadable(item))
-                                    ? (_openBlock$9(), _createElementBlock$9("span", _hoisted_13$3, " 需手动下载 "))
+                                    ? (_openBlock$9(), _createElementBlock$9("span", _hoisted_14$3, " 需手动下载 "))
                                     : _createCommentVNode$9("", true)
                                 ]),
                                 (item.note)
-                                  ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_14$3, _toDisplayString$6(item.note), 1))
+                                  ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_15$3, _toDisplayString$6(item.note), 1))
                                   : _createCommentVNode$9("", true),
                                 (item.match_detail)
-                                  ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_15$3, _toDisplayString$6(item.match_detail), 1))
+                                  ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_16$2, _toDisplayString$6(item.match_detail), 1))
                                   : _createCommentVNode$9("", true)
                               ]),
                               (item.page_url)
@@ -4574,16 +4453,16 @@ return (_ctx, _cache) => {
                                     href: item.page_url,
                                     target: "_blank",
                                     rel: "noopener noreferrer"
-                                  }, " 查看 ", 8, _hoisted_16$2))
+                                  }, " 查看 ", 8, _hoisted_17$2))
                                 : _createCommentVNode$9("", true)
                             ], 2))
                           }), 128))
                         ]))
                       : (!__props.onlineSearching)
-                        ? (_openBlock$9(), _createElementBlock$9("div", _hoisted_17$2, _toDisplayString$6(__props.hasOnlineResults ? '当前平台筛选下没有结果。' : (__props.mobile ? '搜索无结果，请手动搜索' : '没有可自动下载的字幕结果。可以换关键词重试，或使用右侧手动搜索。')), 1))
+                        ? (_openBlock$9(), _createElementBlock$9("div", _hoisted_18$2, _toDisplayString$6(__props.hasOnlineResults ? '当前平台筛选下没有结果。' : (__props.mobile ? '搜索无结果，请手动搜索' : '没有可自动下载的字幕结果。可以换关键词重试，或使用右侧手动搜索。')), 1))
                         : _createCommentVNode$9("", true)
                   ]),
-                  _createElementVNode$8("aside", _hoisted_18$2, [
+                  _createElementVNode$8("aside", _hoisted_19$2, [
                     _cache[24] || (_cache[24] = _createElementVNode$8("div", { class: "section-kicker" }, "手动搜索", -1)),
                     _cache[25] || (_cache[25] = _createElementVNode$8("h3", null, "跳转字幕站", -1)),
                     _cache[26] || (_cache[26] = _createElementVNode$8("p", null, "自动搜索失败或源站需要验证时，可打开链接下载字幕包后回到本页上传。", -1)),
@@ -4592,17 +4471,17 @@ return (_ctx, _cache) => {
                         key: provider.provider,
                         class: "manual-provider"
                       }, [
-                        _createElementVNode$8("div", _hoisted_19$2, [
+                        _createElementVNode$8("div", _hoisted_20$2, [
                           _createElementVNode$8("strong", null, _toDisplayString$6(provider.name), 1)
                         ]),
-                        _createElementVNode$8("div", _hoisted_20$2, [
+                        _createElementVNode$8("div", _hoisted_21$2, [
                           (_openBlock$9(true), _createElementBlock$9(_Fragment$7, null, _renderList$5(provider.links, (link) => {
                             return (_openBlock$9(), _createElementBlock$9("a", {
                               key: `${provider.provider}-${link.keyword}`,
                               href: link.url,
                               target: "_blank",
                               rel: "noopener noreferrer"
-                            }, _toDisplayString$6(link.keyword), 9, _hoisted_21$2))
+                            }, _toDisplayString$6(link.keyword), 9, _hoisted_22$1))
                           }), 128))
                         ])
                       ]))
@@ -4682,7 +4561,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const OnlineSubtitleDialog = /*#__PURE__*/_export_sfc(_sfc_main$9, [['__scopeId',"data-v-962be9c1"]]);
+const OnlineSubtitleDialog = /*#__PURE__*/_export_sfc(_sfc_main$9, [['__scopeId',"data-v-ba4f3f0d"]]);
 
 const {onBeforeUnmount: onBeforeUnmount$1,onMounted: onMounted$2,ref: ref$7} = await importShared('vue');
 
@@ -4952,7 +4831,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const AiStatusStrip = /*#__PURE__*/_export_sfc(_sfc_main$7, [['__scopeId',"data-v-0bff1e57"]]);
+const AiStatusStrip = /*#__PURE__*/_export_sfc(_sfc_main$7, [['__scopeId',"data-v-f2a6d5c4"]]);
 
 const {resolveComponent:_resolveComponent$6,createVNode:_createVNode$6,createElementVNode:_createElementVNode$6,openBlock:_openBlock$6,createElementBlock:_createElementBlock$6,createCommentVNode:_createCommentVNode$6,toDisplayString:_toDisplayString$4,createTextVNode:_createTextVNode$4,withCtx:_withCtx$5,renderList:_renderList$4,Fragment:_Fragment$6,normalizeClass:_normalizeClass$5,createBlock:_createBlock$6,mergeProps:_mergeProps$4,withModifiers:_withModifiers$1} = await importShared('vue');
 
@@ -5527,7 +5406,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const TargetDetailPanel = /*#__PURE__*/_export_sfc(_sfc_main$6, [['__scopeId',"data-v-981f54b6"]]);
+const TargetDetailPanel = /*#__PURE__*/_export_sfc(_sfc_main$6, [['__scopeId',"data-v-a864aee5"]]);
 
 const {toDisplayString:_toDisplayString$3,createElementVNode:_createElementVNode$5,resolveComponent:_resolveComponent$5,createVNode:_createVNode$5,withCtx:_withCtx$4,createTextVNode:_createTextVNode$3,openBlock:_openBlock$5,createBlock:_createBlock$5,createCommentVNode:_createCommentVNode$5,mergeProps:_mergeProps$3,normalizeClass:_normalizeClass$4,createElementBlock:_createElementBlock$5,renderList:_renderList$3,Fragment:_Fragment$5,withKeys:_withKeys} = await importShared('vue');
 
@@ -5900,7 +5779,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const UploadDialog = /*#__PURE__*/_export_sfc(_sfc_main$5, [['__scopeId',"data-v-77fe3646"]]);
+const UploadDialog = /*#__PURE__*/_export_sfc(_sfc_main$5, [['__scopeId',"data-v-30dce736"]]);
 
 const {resolveComponent:_resolveComponent$4,createVNode:_createVNode$4,toDisplayString:_toDisplayString$2,createElementVNode:_createElementVNode$4,openBlock:_openBlock$4,createElementBlock:_createElementBlock$4,createCommentVNode:_createCommentVNode$4,createTextVNode:_createTextVNode$2,withCtx:_withCtx$3,mergeProps:_mergeProps$2,createBlock:_createBlock$4,renderList:_renderList$2,Fragment:_Fragment$4,normalizeClass:_normalizeClass$3} = await importShared('vue');
 
@@ -6123,7 +6002,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const MobileTargetCard = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-edf4b304"]]);
+const MobileTargetCard = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-ae9547b4"]]);
 
 const {resolveComponent:_resolveComponent$3,createVNode:_createVNode$3,createElementVNode:_createElementVNode$3,openBlock:_openBlock$3,createElementBlock:_createElementBlock$3,createCommentVNode:_createCommentVNode$3,toDisplayString:_toDisplayString$1,renderList:_renderList$1,Fragment:_Fragment$3,normalizeClass:_normalizeClass$2,createTextVNode:_createTextVNode$1,withCtx:_withCtx$2,createBlock:_createBlock$3} = await importShared('vue');
 
@@ -6968,7 +6847,6 @@ const {
   autoQueueDialog,
   autoQueueMutating,
   autoQueueActionTaskId,
-  autoQueueSummary,
   autoQueueTasks,
   autoQueueSummaryText,
   applyAutoTransferSummary,
@@ -7753,7 +7631,6 @@ return (_ctx, _cache) => {
                   "root-tab": _unref(rootTab),
                   "match-history-summary": _unref(matchHistorySummary),
                   "index-summary": _unref(indexSummary),
-                  "auto-queue-visible": Boolean(_unref(autoQueueTasks).length || _unref(autoQueueSummary).total || _unref(autoQueueSummary).active),
                   "auto-queue-summary-text": _unref(autoQueueSummaryText),
                   refreshing: _unref(refreshing),
                   "match-history-loading": _unref(matchHistoryLoading) || _unref(matchHistoryRefreshing),
@@ -7761,7 +7638,7 @@ return (_ctx, _cache) => {
                   onOpenAutoQueue: _cache[6] || (_cache[6] = $event => (autoQueueDialog.value = true)),
                   onRefreshIndex: _unref(refreshIndex),
                   onSubmit: _unref(submitRootSearch)
-                }, null, 8, ["search-keyword", "media-type", "root-tab", "match-history-summary", "index-summary", "auto-queue-visible", "auto-queue-summary-text", "refreshing", "match-history-loading", "searching", "onRefreshIndex", "onSubmit"]),
+                }, null, 8, ["search-keyword", "media-type", "root-tab", "match-history-summary", "index-summary", "auto-queue-summary-text", "refreshing", "match-history-loading", "searching", "onRefreshIndex", "onSubmit"]),
                 _createVNode(MediaGrid, {
                   "root-tab": _unref(rootTab),
                   medias: _unref(medias),
@@ -8058,6 +7935,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-89b8eefa"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-4e24d143"]]);
 
 export { AppPage as default };
