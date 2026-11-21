@@ -4095,6 +4095,103 @@ def test_v3_directory_scan_checks_each_version_and_rechecks_after_mount_recovers
     assert "已有符合语言" in restored._auto_transfer_tasks[task_id]["message"]
 
 
+def test_v3_hdr10_plus_sidecar_skips_online_search_for_its_video_version(tmp_path, monkeypatch):
+    module, _, _ = load_plugin_module("plugins.v3")
+    plugin = make_plugin(module)
+    plugin._auto_subtitle_language_priority = ["chi&eng"]
+    plugin._auto_skip_chinese_media_on_transfer = False
+    four_k = make_auto_entry(tmp_path, filename="塔尔萨之王 - S04E03 - 2160p - WEB-DL HDR10+.mkv")
+    hd = make_auto_entry(tmp_path, filename="塔尔萨之王 - S04E03 - 1080p - WEB-DL.mkv")
+    Path(four_k["path"]).with_suffix(".中英双语.zh-CN.ass").write_text(
+        "[Events]\nDialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,你好 Hello",
+        encoding="utf-8",
+    )
+    Path(hd["path"]).with_suffix(".zh-CN.srt").write_text("你好", encoding="utf-8")
+    inventory = plugin.services.subtitle_inventory()
+    monkeypatch.setattr(inventory, "embedded_subtitle_tracks_for_target", lambda entry: [])
+    override_services(plugin, subtitle_inventory=inventory)
+    searched = []
+
+    def search(entry, target, **kwargs):
+        searched.append(entry["id"])
+        return {"status": "skipped", "needs_online_retry": True}
+
+    service = auto_transfer_service_with(plugin, auto_search_write_subtitle=search)
+    assert service.auto_process_transfer_entry(four_k)["reason"] == "目标已有符合语言要求的字幕"
+    assert service.auto_process_transfer_entry(hd)["needs_online_retry"]
+    assert searched == [hd["id"]]
+    assert plugin._detect_language_profile("Tulsa.HDR10+.中英双语.zh-CN.ass", b"")["suffix"] == "chi&eng"
+    assert plugin._detect_language_profile("Tulsa.chi&vie.ass", b"")["suffix"] == "chi&vie"
+
+
+def test_v3_season_write_rechecks_late_sidecar_and_writes_other_targets(tmp_path, monkeypatch):
+    module, _, _ = load_plugin_module("plugins.v3")
+    plugin = make_plugin(module)
+    plugin._auto_subtitle_language_priority = ["chi&eng"]
+    plugin._traditional_to_simplified = False
+    entries = [make_auto_entry(tmp_path, filename=f"Show.S01E{episode:02d}.strm", id=f"e{episode}",
+                              media_type="tv", title="Show", season=1, episode=episode)
+               for episode in (1, 2, 3)]
+    first, second, blocked = [
+        Path(entry["path"]).with_suffix(".中英双语.zh-CN.srt") for entry in entries
+    ]
+    blocked.mkdir()
+    session = tmp_path / "download"
+    session.mkdir()
+    subtitles = "1\n00:00:01,000 --> 00:00:02,000\n字幕\nA line of English.\n"
+    existing = subtitles.replace("字幕", "已有字幕")
+    uploads = []
+    for entry in entries:
+        source = session / f'{entry["basename"]}.chi&eng.srt'
+        source.write_text(subtitles, encoding="utf-8")
+        uploads.append({"upload_id": entry["id"], "source_name": source.name, "stored_path": str(source), "ext": ".srt"})
+
+    writer_module = plugin_submodule(module, "matching.subtitle_writer")
+    normalize = writer_module.normalize_subtitle_encoding
+
+    def copy_existing_during_preparation(source, encoded):
+        if not first.exists():
+            first.write_text(existing, encoding="utf-8")
+        return normalize(source, encoded)
+
+    monkeypatch.setattr(writer_module, "normalize_subtitle_encoding", copy_existing_during_preparation)
+    service = auto_transfer_service_with(plugin)
+    result = service.auto_write_prepared_uploads_for_entries(
+        target_entries=entries, prepared_uploads=uploads, session_dir=session,
+    )
+
+    assert result["written_by_target"]["e2"]["output_path"] == str(second)
+    assert result["skipped_by_target"] == {"e1": "目标已有符合语言要求的字幕"}
+    assert "请在写入预览中确认" in result["conflicts_by_target"]["e3"]
+    assert result["missing_target_ids"] == ["e3"]
+    assert first.read_text(encoding="utf-8") == existing
+    assert second.is_file()
+    assert blocked.is_dir()
+
+
+def test_v3_season_write_conflict_stops_followup_after_single_search_is_exhausted(tmp_path):
+    module, _, _ = load_plugin_module("plugins.v3")
+    plugin = make_plugin(module)
+    plugin._auto_skip_chinese_media_on_transfer = False
+    plugin._auto_subtitle_language_priority = ["chi&eng"]
+    entry = make_auto_entry(tmp_path, filename="Show.S01E01.strm", media_type="tv", season=1, episode=1)
+    conflict = "字幕写入冲突：Show.S01E01.中英双语.zh-CN.ass，请在写入预览中确认"
+    searched = []
+    service = auto_transfer_service_with(
+        plugin,
+        auto_write_from_season_cache=lambda entries: {},
+        auto_search_write_season_package=lambda entries, task_ids: {"conflicts_by_target": {entry["id"]: conflict}},
+        auto_search_write_subtitle=lambda entry, target, **kwargs: (
+            searched.append(entry["id"]) or {"status": "skipped", "needs_online_retry": True}
+        ),
+    )
+    result = service.auto_process_transfer_group([entry])[entry["id"]]
+    assert searched == [entry["id"]]
+    assert result["status"] == "skipped"
+    assert result["reason"] == conflict
+    assert not result.get("needs_online_retry")
+
+
 def test_v3_bilingual_followup_survives_restart_and_stops_after_matching(tmp_path, durable_auto_transfer_queue):
     new_queue, clock, state_path, _ = durable_auto_transfer_queue
     plugin, service, _ = new_queue()

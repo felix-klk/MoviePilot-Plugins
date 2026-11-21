@@ -111,7 +111,7 @@ class SubtitleInventory:
                     continue
                 subtitles = []
                 for sub_file in matched_files:
-                    metadata = self._subtitle_file_metadata_cached(media_dir, sub_file)
+                    metadata = self._subtitle_file_metadata_cached(media_dir, sub_file, video_path.stem)
                     if metadata:
                         subtitles.append(dict(metadata))
                 subtitles.sort(key=lambda item: item.get("name", ""))
@@ -198,7 +198,7 @@ class SubtitleInventory:
     def _target_key(self, target_entry: Dict[str, Any]) -> str:
         return self._normalize_text(target_entry.get("id") or target_entry.get("path"))
 
-    def _subtitle_file_metadata(self, sub_file: Path) -> Optional[Dict[str, Any]]:
+    def _subtitle_file_metadata(self, sub_file: Path, video_stem: str) -> Optional[Dict[str, Any]]:
         try:
             raw_bytes = sub_file.read_bytes()
         except Exception:
@@ -207,7 +207,9 @@ class SubtitleInventory:
             stat = sub_file.stat()
         except Exception:
             return None
-        language_profile = self._detect_language_profile(sub_file.name, raw_bytes)
+        # Ownership was already matched. Keep the extension for content-based detection.
+        suffix_name = "subtitle" + sub_file.name[len(video_stem):]
+        language_profile = self._detect_language_profile(suffix_name, raw_bytes)
         backup_path = self._subtitle_backup_path(sub_file)
         backup_available = backup_path.exists()
         return {
@@ -225,12 +227,12 @@ class SubtitleInventory:
             "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
         }
 
-    def _subtitle_file_metadata_cached(self, media_dir: Path, sub_file: Path) -> Optional[Dict[str, Any]]:
+    def _subtitle_file_metadata_cached(self, media_dir: Path, sub_file: Path, video_stem: str) -> Optional[Dict[str, Any]]:
         cache = self._subtitle_directory_cache.get(str(media_dir))
         if not isinstance(cache, dict):
-            return self._subtitle_file_metadata(sub_file)
+            return self._subtitle_file_metadata(sub_file, video_stem)
         metadata = cache.setdefault("metadata", {})
-        key = str(sub_file)
+        key = (str(sub_file), video_stem)
         cached_value = metadata.get(key)
         try:
             stat = sub_file.stat()
@@ -242,7 +244,7 @@ class SubtitleInventory:
         except OSError:
             unchanged = False
         if not unchanged:
-            metadata[key] = self._subtitle_file_metadata(sub_file)
+            metadata[key] = self._subtitle_file_metadata(sub_file, video_stem)
         value = metadata.get(key)
         if not isinstance(value, dict):
             return None

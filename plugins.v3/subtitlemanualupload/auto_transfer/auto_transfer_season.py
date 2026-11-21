@@ -203,6 +203,8 @@ class AutoTransferSeasonCache:
 
         last_reason = ""
         best_partial_result: Optional[Dict[str, Any]] = None
+        skipped_by_target: Dict[str, str] = {}
+        conflicts_by_target: Dict[str, str] = {}
         for selected in auto_download_attempts(
             candidates, AUTO_SEASON_ATTEMPT_LIMIT, logger=self._logger,
         ):
@@ -242,8 +244,10 @@ class AutoTransferSeasonCache:
                         session_dir=session_dir,
                         selected_result=selected,
                     )
+                    skipped_by_target.update(write_result.get("skipped_by_target") or {})
+                    conflicts_by_target.update(write_result.get("conflicts_by_target") or {})
                     last_reason = write_result.get("reason") or "整季包未匹配全部目标"
-                    if write_result.get("status") == "written":
+                    if write_result.get("status") == "written" or write_result.get("skipped_by_target"):
                         write_result["candidate_count"] = len(candidates)
                         write_result["search_results"] = len(search_result.get("results") or [])
                         write_result["season_package"] = True
@@ -267,6 +271,7 @@ class AutoTransferSeasonCache:
                 )
             finally:
                 shutil.rmtree(session_dir, ignore_errors=True)
+        target_outcomes = {"skipped_by_target": skipped_by_target, "conflicts_by_target": conflicts_by_target}
         if best_partial_result:
             self._logger.warning(
                 "[SubtitleManualUpload] 未找到完整覆盖整季字幕包，使用最佳部分覆盖结果 result=%s completed=%s missing=%s",
@@ -274,8 +279,9 @@ class AutoTransferSeasonCache:
                 best_partial_result.get("completed_count"),
                 len(best_partial_result.get("missing_target_ids") or []),
             )
-            return best_partial_result
+            return {**best_partial_result, **target_outcomes}
         return {
+            **target_outcomes,
             "status": "skipped",
             "reason": last_reason or ("未找到符合语言要求的字幕" if required is not None else "整季包未能写入任何字幕"),
             "written_by_target": {},
@@ -326,6 +332,7 @@ class AutoTransferSeasonCache:
                 raise
             self._logger.warning("[SubtitleManualUpload] 整季字幕缓存未能使用，继续在线匹配: %s", exc)
             cache_result = {}
+        write_conflicts = dict(cache_result.get("conflicts_by_target") or {})
         remaining_entries = self._collect_remaining_after_season_result(
             entries=pending_entries,
             results=results,
@@ -336,6 +343,7 @@ class AutoTransferSeasonCache:
 
         if remaining_entries:
             season_result = self._collaborators.search_write_package(remaining_entries, task_ids=task_ids)
+            write_conflicts.update(season_result.get("conflicts_by_target") or {})
             remaining_entries = self._collect_remaining_after_season_result(
                 entries=remaining_entries,
                 results=results,
@@ -346,10 +354,13 @@ class AutoTransferSeasonCache:
 
         for entry in remaining_entries:
             key = self._collaborators.task_result_key(entry)
+            conflict = write_conflicts.get(owner._normalize_text(entry.get("id")))
+            options = {"prior_write_conflict": conflict} if conflict else {}
             results[key] = self._collaborators.process_entry(
                 entry,
                 queue_rate_limited=True,
                 task_ids=task_ids,
+                **options,
             )
         return results
 
@@ -365,6 +376,7 @@ class AutoTransferSeasonCache:
         owner = self._owner
         written_by_target = season_result.get("written_by_target") or {}
         ai_by_target = season_result.get("ai_by_target") or {}
+        skipped_by_target = season_result.get("skipped_by_target") or {}
         remaining_entries: List[Dict[str, Any]] = []
         for entry in entries:
             key = self._collaborators.task_result_key(entry)
@@ -393,6 +405,8 @@ class AutoTransferSeasonCache:
                     "fixed_subtitles": [ai_by_target[target_id]],
                     "ai": season_result.get("ai_translate"),
                 }
+            elif target_id in skipped_by_target:
+                results[key] = {**common, "status": "skipped", "reason": skipped_by_target[target_id]}
             else:
                 remaining_entries.append(entry)
         return remaining_entries

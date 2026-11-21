@@ -3,7 +3,7 @@
     "name": "海拉鲁字幕大师(NEO自用版)",
     "description": "支持字幕搜索、上传、匹配、改名、智能调轴与自动入库的字幕管理插件。",
     "labels": "字幕,ChineseSubFinder,媒体库,整理",
-    "version": "1.2.40",
+    "version": "1.2.41",
     "icon": "https://raw.githubusercontent.com/ifsherlock/MoviePilot-Plugins/main/icons/hyrule-subtitle-master.png",
     "author": "ifsherlock",
     "author_url": "https://github.com/ifsherlock",
@@ -11,6 +11,7 @@
     "system_version": ">=3.0.0",
     "release": false,
     "history": {
+      "v1.2.41": "修复 HDR10+ 等片源标签干扰外挂字幕语言识别。自动入库遇到字幕写入冲突会重新检查已有字幕，按视频处理，无法自动解决时提示在写入预览确认。",
       "v1.2.40": "指定本地整理目录可监控 STRM 和常见视频格式，支持视频写入稳定、对应外挂移除时补搜，或手动检查存量。沿用持久化队列按视频路径去重，目录恢复后重新检查。自动预判和任务统一使用现行字幕排序。",
       "v1.2.39": "Emby 服务器支持多选，并在保存后重新打开时回显。兼容已保存的媒体库配置，单台离线时其他服务器仍可读取。自动入库队列将 written 显示为「已完成」。",
       "v1.2.38": "剧集详情新增「补搜选中」，可将勾选的视频批量加入双语字幕补搜。每个视频版本独立处理，已有合格字幕时跳过，已在队列的任务保留原补搜时间。提交回执显示未加入的原因。",

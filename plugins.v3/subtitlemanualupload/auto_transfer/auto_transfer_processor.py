@@ -103,6 +103,8 @@ class AutoTransferProcessor:
             }
 
         last_reason = ""
+        write_conflict = ""
+        target_id = owner._normalize_text(entry.get("id"))
         for selected in auto_download_attempts(
             candidates, AUTO_DOWNLOAD_ATTEMPT_LIMIT, logger=self._logger,
         ):
@@ -200,7 +202,16 @@ class AutoTransferProcessor:
                         "candidate_count": len(candidates),
                         "search_results": len(search_result.get("results") or []),
                     }
-                last_reason = write_result.get("reason") or "下载包字幕未按偏好匹配"
+                already_satisfied = (write_result.get("skipped_by_target") or {}).get(target_id)
+                if already_satisfied:
+                    return {
+                        "status": "skipped", "reason": already_satisfied, "target": target.get("label"),
+                        "existing_subtitle": True,
+                    }
+                conflict = (write_result.get("conflicts_by_target") or {}).get(target_id)
+                if conflict:
+                    write_conflict = conflict
+                last_reason = conflict or write_result.get("reason") or "下载包字幕未按偏好匹配"
                 self._logger.info(
                     "[SubtitleManualUpload] 自动字幕候选未入库 provider=%s id=%s reason=%s",
                     selected.get("provider"), selected.get("result_id"), last_reason,
@@ -219,8 +230,9 @@ class AutoTransferProcessor:
 
         return {
             "status": "skipped",
-            "needs_online_retry": True,
-            "reason": last_reason or ("未找到符合语言要求的字幕" if required is not None else "高置信结果未解析到可用字幕文件"),
+            "needs_online_retry": not write_conflict,
+            "write_conflict": bool(write_conflict),
+            "reason": write_conflict or last_reason or ("未找到符合语言要求的字幕" if required is not None else "高置信结果未解析到可用字幕文件"),
             "target": target.get("label"),
             "candidate_count": len(candidates),
             "search_results": len(search_result.get("results") or []),
@@ -307,6 +319,7 @@ class AutoTransferProcessor:
         *,
         queue_rate_limited: bool = False,
         task_ids: Optional[List[str]] = None,
+        prior_write_conflict: str = "",
     ) -> Dict[str, Any]:
         owner = self._owner
         required = required_auto_languages(
@@ -334,7 +347,10 @@ class AutoTransferProcessor:
             queue_rate_limited=queue_rate_limited,
             task_ids=task_ids,
         )
-        if required is not None or strategy == "online_source_only" or search_result.get("status") == "written":
+        if prior_write_conflict and search_result.get("needs_online_retry"):
+            return {**base, "status": "skipped", "reason": prior_write_conflict, "write_conflict": True}
+        if (required is not None or strategy == "online_source_only" or search_result.get("status") == "written"
+                or search_result.get("existing_subtitle") or search_result.get("write_conflict")):
             return {**base, **search_result}
 
         ai_result = self._collaborators.submit_ai_for_entry(entry, target, "搜索无单一高置信结果后兜底")

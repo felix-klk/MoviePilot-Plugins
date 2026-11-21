@@ -6,7 +6,13 @@ import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..config.config_schema import normalize_auto_multi_subtitle_mode, safe_int
-from ..matching.subtitle_language import auto_subtitle_sort_key, is_chinese_language_suffix, language_matches_preferences, required_auto_languages
+from ..matching.subtitle_language import (
+    auto_subtitle_sort_key,
+    is_chinese_language_suffix,
+    language_matches_preferences,
+    required_auto_languages,
+    target_satisfies_auto_subtitle_policy,
+)
 from ..matching.subtitle_formats import is_bitmap_subtitle
 from ..catalog.target_resolver import (
     auto_fill_missing_targets as fill_missing_target_ids,
@@ -147,7 +153,6 @@ class AutoTransferWriteStrategy:
             for item in self._collaborators.select_subtitle_items(prepared_uploads, targets)
             if owner._normalize_text(item.get("target_id")) in target_entry_map
         ]
-        used_targets = {owner._normalize_text(item.get("target_id")) for item in chosen_items}
         if not chosen_items:
             return {
                 "status": "skipped",
@@ -156,11 +161,6 @@ class AutoTransferWriteStrategy:
                 "prepared_count": len(prepared_uploads),
             }
 
-        missing_target_ids = [
-            target_id
-            for target_id in target_entry_map
-            if target_id not in used_targets
-        ]
         direct_items = []
         foreign_items = []
         for item in chosen_items:
@@ -171,6 +171,7 @@ class AutoTransferWriteStrategy:
                 foreign_items.append(item)
 
         written: List[Dict[str, Any]] = []
+        write_conflicts: Dict[str, str] = {}
         simplified_count = 0
         operations: List[Dict[str, Any]] = []
         if direct_items:
@@ -180,10 +181,31 @@ class AutoTransferWriteStrategy:
                 operations=operations,
                 fix_timeline=True,
                 force_low_confidence=force_low_confidence,
+                write_conflicts=write_conflicts,
             )
+
+        skipped_by_target: Dict[str, str] = {}
+        conflicts_by_target: Dict[str, str] = {}
+        if write_conflicts:
+            inventory = owner.services.subtitle_inventory()
+            for directory in {Path(target_entry_map[target_id]["path"]).parent for target_id in write_conflicts}:
+                inventory.invalidate_directory(directory)
+            required = required_auto_languages(
+                getattr(owner, "_auto_subtitle_language_priority", None),
+                strict=bool(getattr(owner, "_auto_subtitle_language_strict", False)),
+            )
+            for target_id, name in write_conflicts.items():
+                target = self._collaborators.target_from_entry(target_entry_map[target_id])
+                if target_satisfies_auto_subtitle_policy(target, required):
+                    skipped_by_target[target_id] = "目标已有符合语言要求的字幕"
+                else:
+                    conflicts_by_target[target_id] = f"字幕写入冲突：{name}，请在写入预览中确认"
 
         ai_submit_result: Optional[Dict[str, Any]] = None
         fixed_subtitles: List[Dict[str, Any]] = []
+        foreign_items = [
+            item for item in foreign_items if owner._normalize_text(item.get("target_id")) not in write_conflicts
+        ]
         if foreign_items:
             foreign_target_ids = {owner._normalize_text(item.get("target_id")) for item in foreign_items}
             foreign_entries = [entry for target_id, entry in target_entry_map.items() if target_id in foreign_target_ids]
@@ -204,7 +226,11 @@ class AutoTransferWriteStrategy:
             )
 
         written_by_target: Dict[str, Dict[str, Any]] = {}
-        for operation, written_item in zip(operations, written):
+        written_operations = [
+            operation for operation in operations
+            if owner._normalize_text(operation["target_entry"].get("id")) not in write_conflicts
+        ]
+        for operation, written_item in zip(written_operations, written):
             target_id = owner._normalize_text(operation["target_entry"].get("id"))
             written_by_target[target_id] = written_item
         ai_by_target: Dict[str, Dict[str, Any]] = {}
@@ -225,21 +251,25 @@ class AutoTransferWriteStrategy:
                 if target_id and target_id in added_target_ids:
                     ai_by_target[target_id] = fixed_item
 
-        total_completed = len(written_by_target) + len(ai_by_target)
-        coverage_complete = not missing_target_ids and total_completed >= len(target_entry_map)
+        covered_targets = written_by_target.keys() | ai_by_target.keys() | skipped_by_target.keys()
+        total_completed = len(covered_targets)
+        missing_target_ids = [target_id for target_id in target_entry_map if target_id not in covered_targets]
+        coverage_complete = not missing_target_ids
         ai_failed_count = len((ai_submit_result or {}).get("failed") or [])
         ai_skipped_count = len((ai_submit_result or {}).get("skipped") or [])
         reason = "" if coverage_complete else f"整季包覆盖 {total_completed}/{len(target_entry_map)} 集"
         if not ai_by_target and (ai_failed_count or ai_skipped_count):
             reason = f"AI 字幕任务未新增，跳过 {ai_skipped_count} 个，失败 {ai_failed_count} 个"
         return {
-            "status": "written" if total_completed else "skipped",
+            "status": "written" if written_by_target or ai_by_target else "skipped",
             "reason": reason,
             "result": (selected_result or {}).get("title"),
             "provider": (selected_result or {}).get("provider"),
             "written": written,
             "written_by_target": written_by_target,
             "ai_by_target": ai_by_target,
+            "skipped_by_target": skipped_by_target,
+            "conflicts_by_target": conflicts_by_target,
             "ai_translate": ai_submit_result,
             "fixed_subtitles": fixed_subtitles,
             "written_count": len(written),

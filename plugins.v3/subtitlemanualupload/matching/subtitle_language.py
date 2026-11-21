@@ -145,6 +145,7 @@ def language_suffix_from_filename(file_name: str, subtitle_exts: Iterable[str]) 
         for token in re.split(r"[\s.\[\](){}]+", stem.lower())
     ]
     aliases = {
+        **{key: key for key in LANGUAGE_LABELS},
         **LANGUAGE_SUFFIX_ALIASES,
         "chi": "chi",
         "eng": "eng",
@@ -158,7 +159,14 @@ def language_suffix_from_filename(file_name: str, subtitle_exts: Iterable[str]) 
     ignored_tail_tokens = {"forced", "sdh", "hi", "cc", "default", "full", "signs", "songs", "commentary"}
     found: List[str] = []
     for token in reversed([item for item in tokens if item]):
-        normalized = normalize_language_suffix(token) if any(sep in token for sep in ("&", "+", "/", ",")) else aliases.get(token, "")
+        parts = re.split(r"[&+/,]", token)
+        if len(parts) > 1 and all(
+            part in aliases or re.fullmatch(r"[a-z]{2,3}(?:-[a-z]{2})?", part)
+            for part in parts
+        ):
+            normalized = normalize_language_suffix(token)
+        else:
+            normalized = aliases.get(token, "")
         if normalized and normalized != "und":
             found.append(normalized)
             continue

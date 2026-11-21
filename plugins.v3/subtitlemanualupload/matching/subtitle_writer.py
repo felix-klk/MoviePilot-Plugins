@@ -332,16 +332,23 @@ class SubtitleWriter:
             self._logger.warning("[SubtitleManualUpload] 通知 Emby 扫描外挂字幕失败，不影响字幕写入: %s", exc)
 
     def _confirm_write_conflicts(
-        self, operations: List[Dict[str, Any]], choices: Optional[Dict[str, Dict[str, str]]]
+        self, operations: List[Dict[str, Any]], choices: Optional[Dict[str, Dict[str, str]]],
+        write_conflicts: Optional[Dict[str, str]] = None,
     ) -> List[Dict[str, Any]]:
         directories: Dict[Path, List[Path]] = {}
         groups: Dict[str, Dict[str, Any]] = {}
         decisions = choices or {}
+        targets_by_group: Dict[str, set[str]] = {}
         for operation in operations:
             destination = operation["destination_path"]
             if str(operation["source_path"]) == str(destination):
                 continue
             group_id = _write_group_id(operation)
+            if write_conflicts is not None:
+                target_id = self._owner._normalize_text(operation["target_entry"].get("id"))
+                if target_id in write_conflicts:
+                    continue
+                targets_by_group.setdefault(group_id, set()).add(target_id)
             row = groups.setdefault(group_id, {
                 "id": group_id, "destinations": [], "same_names": [], "other_names": [], "state": [],
             })
@@ -354,6 +361,9 @@ class SubtitleWriter:
             if (destination.is_symlink() or (destination.exists() and (exact is None or not exact.is_file()))) and (
                 decisions.get(group_id, {}).get("action") != "skip"
             ):
+                if write_conflicts is not None:
+                    write_conflicts[target_id] = destination.name
+                    continue
                 raise self._http_exception(status_code=409, detail=f"目标路径被不同名文件或不可写条目占用：{destination.name}")
             if exact is not None and exact.is_file() and not exact.is_symlink():
                 stat = exact.stat()
@@ -388,6 +398,15 @@ class SubtitleWriter:
                 continue
             row["token"] = hashlib.sha256(repr(sorted(row.pop("state"))).encode("utf-8")).hexdigest()
             conflicts.append(row)
+        if write_conflicts is not None:
+            for row in conflicts:
+                existing_name = (row["same_names"] or row["other_names"])[0]
+                for target_id in targets_by_group[row["id"]]:
+                    write_conflicts.setdefault(target_id, existing_name)
+            return [
+                operation for operation in operations
+                if self._owner._normalize_text(operation["target_entry"].get("id")) not in write_conflicts
+            ]
         if conflicts and choices is None:
             existing_name = (conflicts[0]["same_names"] or conflicts[0]["other_names"])[0]
             raise self._http_exception(status_code=409, detail=f"已有字幕 {existing_name}，自动写入已跳过，请在写入预览中确认。")
@@ -410,9 +429,10 @@ class SubtitleWriter:
         allow_risky_offset: bool = False,
         force_low_confidence: bool = False,
         conflict_choices: Optional[Dict[str, Dict[str, str]]] = None,
+        write_conflicts: Optional[Dict[str, str]] = None,
     ) -> Tuple[List[Dict[str, Any]], int, int]:
         owner = self._owner
-        selected_operations = self._confirm_write_conflicts(operations, conflict_choices)
+        selected_operations = self._confirm_write_conflicts(operations, conflict_choices, write_conflicts)
         if not selected_operations:
             return [], 0, 0
         fixed_dir = session_dir / "timeline_fixed"
@@ -524,7 +544,7 @@ class SubtitleWriter:
         written_results = []
         # Another task may have written subtitles while these files were being processed.
         with _WRITE_LOCK:
-            self._confirm_write_conflicts(operations, conflict_choices)
+            selected_operations = self._confirm_write_conflicts(operations, conflict_choices, write_conflicts)
             for operation in selected_operations:
                 destination_path = operation["destination_path"]
                 temp_path = destination_path.with_name(f"{destination_path.name}.mp-uploading")

@@ -568,11 +568,13 @@ class AutoTransferService:
         *,
         queue_rate_limited: bool = False,
         task_ids: Optional[List[str]] = None,
+        prior_write_conflict: str = "",
     ) -> Dict[str, Any]:
         return self._processor.process_entry(
             entry,
             queue_rate_limited=queue_rate_limited,
             task_ids=task_ids,
+            prior_write_conflict=prior_write_conflict,
         )
 
 
