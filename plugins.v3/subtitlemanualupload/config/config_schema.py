@@ -45,6 +45,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "emby_refresh_after_subtitle_write": False,
     "auto_search_on_transfer": False,
     "auto_check_emby_subtitles": False,
+    "emby_library_servers": None,
     "emby_query_libraries": None,
     "emby_subtitle_path_mappings": "",
     "auto_skip_chinese_media_on_transfer": True,
@@ -259,6 +260,14 @@ def normalize_plugin_config(
     if language_strict and not language_priority:
         raise ValueError("仅接受所选语言时至少选择一种语言")
 
+    emby_libraries = normalize_emby_query_libraries(raw_config.get("emby_query_libraries"))
+    emby_servers = raw_config.get("emby_library_servers")
+    if not isinstance(emby_servers, list):
+        emby_servers = [library["server"] for library in emby_libraries or []]
+    emby_servers = list(dict.fromkeys(
+        name.strip() for name in emby_servers if isinstance(name, str) and name.strip()
+    ))
+
     return {
         "enabled": bool(raw_config.get("enabled")),
         "show_sidebar_nav": bool(raw_config.get("show_sidebar_nav", True)),
@@ -285,7 +294,8 @@ def normalize_plugin_config(
         "emby_refresh_after_subtitle_write": bool(raw_config.get("emby_refresh_after_subtitle_write", False)),
         "auto_search_on_transfer": bool(raw_config.get("auto_search_on_transfer", False)),
         "auto_check_emby_subtitles": bool(raw_config.get("auto_check_emby_subtitles", False)),
-        "emby_query_libraries": normalize_emby_query_libraries(raw_config.get("emby_query_libraries")),
+        "emby_library_servers": emby_servers,
+        "emby_query_libraries": emby_libraries,
         "emby_subtitle_path_mappings": normalize_text(raw_config.get("emby_subtitle_path_mappings")),
         "auto_skip_chinese_media_on_transfer": bool(raw_config.get("auto_skip_chinese_media_on_transfer", True)),
         "auto_transfer_subtitle_strategy": normalize_auto_transfer_subtitle_strategy(

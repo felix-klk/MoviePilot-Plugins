@@ -3,7 +3,7 @@
     "name": "海拉鲁字幕大师(NEO自用版)",
     "description": "支持字幕搜索、上传、匹配、改名、智能调轴与自动入库的字幕管理插件。",
     "labels": "字幕,ChineseSubFinder,媒体库,整理",
-    "version": "1.2.38",
+    "version": "1.2.39",
     "icon": "https://raw.githubusercontent.com/ifsherlock/MoviePilot-Plugins/main/icons/hyrule-subtitle-master.png",
     "author": "ifsherlock",
     "author_url": "https://github.com/ifsherlock",
@@ -11,6 +11,7 @@
     "system_version": ">=3.0.0",
     "release": false,
     "history": {
+      "v1.2.39": "Emby 服务器支持多选，并在保存后重新打开时回显。兼容已保存的媒体库配置，单台离线时其他服务器仍可读取。自动入库队列将 written 显示为「已完成」。",
       "v1.2.38": "剧集详情新增「补搜选中」，可将勾选的视频批量加入双语字幕补搜。每个视频版本独立处理，已有合格字幕时跳过，已在队列的任务保留原补搜时间。提交回执显示未加入的原因。",
       "v1.2.37": "新增 Emby 查询范围，可在原有设置中选择指定服务器的媒体库。未选服务器直接跳过，空选时仅检查本地字幕。所选 Emby 离线时等待重查，写入后扫描仅通知涉及的所选 Emby。",
       "v1.2.36": "自动入库队列持久化，历史保留 3 天。剧集缺所选双语字幕时持续补搜，支持立即补搜、取消和手动加入。整季缓存被拒绝后继续在线匹配，常规剧集跳过特别篇字幕。",

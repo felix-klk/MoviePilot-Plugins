@@ -542,6 +542,7 @@ const localConfig = ref({
   emby_refresh_after_subtitle_write: false,
   auto_search_on_transfer: false,
   auto_check_emby_subtitles: false,
+  emby_library_servers: [],
   emby_query_libraries: null,
   emby_subtitle_path_mappings: "",
   auto_skip_chinese_media_on_transfer: true,
@@ -584,7 +585,6 @@ const embyScopeItems = [
 const embyScopeEnabled = computed(() => localConfig.value.auto_check_emby_subtitles || localConfig.value.emby_refresh_after_subtitle_write);
 const embyCustomScope = computed(() => embyScopeEnabled.value && localConfig.value.emby_query_libraries !== null);
 const embyServers = ref([]);
-const embyServer = ref(null);
 const embyLibrariesLoading = ref(false);
 const embyServersLoaded = ref(false);
 const embyLibrariesError = ref('');
@@ -598,9 +598,9 @@ function embyLibraryKey(item) {
 const embyLibraryByKey = computed(() => new Map(
   [...(localConfig.value.emby_query_libraries || []), ...embyLoadedLibraries.value].map(item => [embyLibraryKey(item), item]),
 ));
-const embyLibraryItems = computed(() => [...embyLibraryByKey.value].map(([value, item]) => ({
-  value, title: `${item.server} · ${item.name}`,
-})));
+const embyLibraryItems = computed(() => [...embyLibraryByKey.value]
+  .sort(([, left], [, right]) => left.server.localeCompare(right.server))
+  .map(([value, item]) => ({ value, title: `${item.server} · ${item.name}` })));
 const embySelectedKeys = computed({
   get: () => (localConfig.value.emby_query_libraries || []).map(embyLibraryKey),
   set: keys => {
@@ -617,30 +617,43 @@ function setEmbyScope(mode) {
   }
 }
 
-async function readEmbyLibraries(server = '') {
+async function readEmbyLibraries(servers = []) {
   if (embyLibrariesLoading.value) return
   embyLibrariesLoading.value = true;
   embyLibrariesError.value = '';
   try {
     if (!props.api?.get) throw new Error('当前设置入口无法读取 MoviePilot 媒体服务器')
     const pluginApi = createSubtitleManualUploadApi(props.api, () => `plugin/${props.pluginId}`);
-    const response = await pluginApi.embyQueryLibraries(server);
-    if (response?.success === false) throw new Error(response.message || '读取 Emby 媒体库失败')
-    const result = unwrapResponse(response);
-    if (!server) {
+    const read = async server => {
+      const response = await pluginApi.embyQueryLibraries(server);
+      if (response?.success === false) throw new Error(response.message || '读取 Emby 媒体库失败')
+      return unwrapResponse(response)
+    };
+    if (!servers.length) {
+      const result = await read();
       if (!Array.isArray(result?.servers)) throw new Error('Emby 服务器列表响应无效')
       embyServers.value = result.servers;
       embyServersLoaded.value = true;
       return
     }
-    if (!Array.isArray(result?.libraries)) throw new Error('Emby 媒体库列表响应无效')
-    embyLoadedLibraries.value = [...embyLoadedLibraries.value.filter(item => item.server !== server), ...result.libraries];
-    if (localConfig.value.emby_query_libraries !== null) {
-      const refreshed = new Map(result.libraries.map(item => [embyLibraryKey(item), item]));
-      localConfig.value.emby_query_libraries = localConfig.value.emby_query_libraries.map(item =>
-        refreshed.get(embyLibraryKey(item)) || item,
-      );
-    }
+
+    const errors = [];
+    await Promise.all(servers.map(async server => {
+      try {
+        const result = await read(server);
+        if (!Array.isArray(result?.libraries)) throw new Error('Emby 媒体库列表响应无效')
+        embyLoadedLibraries.value = [...embyLoadedLibraries.value.filter(item => item.server !== server), ...result.libraries];
+        if (localConfig.value.emby_query_libraries !== null) {
+          const refreshed = new Map(result.libraries.map(item => [embyLibraryKey(item), item]));
+          localConfig.value.emby_query_libraries = localConfig.value.emby_query_libraries.map(item =>
+            refreshed.get(embyLibraryKey(item)) || item,
+          );
+        }
+      } catch (err) {
+        errors.push(`${server}：${errorMessage(err, '读取 Emby 媒体库失败')}`);
+      }
+    }));
+    embyLibrariesError.value = errors.join('；');
   } catch (err) {
     embyLibrariesError.value = errorMessage(err, '读取 Emby 媒体库失败');
   } finally {
@@ -826,6 +839,12 @@ function normalizeConfig(input) {
   const opensubtitlesPassword = String(input?.opensubtitles_password || '').trim();
   const providers = normalizeProviders(input?.online_providers);
   const autoStrategy = normalizeAutoStrategy(input?.auto_transfer_subtitle_strategy);
+  const embyLibraries = input?.emby_query_libraries == null
+    ? null
+    : (Array.isArray(input.emby_query_libraries) ? input.emby_query_libraries : []);
+  const embyServers = Array.isArray(input?.emby_library_servers)
+    ? input.emby_library_servers
+    : (embyLibraries || []).map(item => item?.server);
   return {
     enabled: Boolean(input?.enabled),
     show_sidebar_nav: input?.show_sidebar_nav !== false,
@@ -836,9 +855,8 @@ function normalizeConfig(input) {
     emby_refresh_after_subtitle_write: Boolean(input?.emby_refresh_after_subtitle_write),
     auto_search_on_transfer: Boolean(input?.auto_search_on_transfer),
     auto_check_emby_subtitles: Boolean(input?.auto_check_emby_subtitles),
-    emby_query_libraries: input?.emby_query_libraries == null
-      ? null
-      : (Array.isArray(input.emby_query_libraries) ? input.emby_query_libraries : []),
+    emby_library_servers: [...new Set(embyServers.filter(name => typeof name === 'string' && name))],
+    emby_query_libraries: embyLibraries,
     emby_subtitle_path_mappings: typeof input?.emby_subtitle_path_mappings === "string" ? input.emby_subtitle_path_mappings : "",
     auto_skip_chinese_media_on_transfer: input?.auto_skip_chinese_media_on_transfer !== false,
     auto_transfer_subtitle_strategy: autoStrategy,
@@ -1067,13 +1085,16 @@ return (_ctx, _cache) => {
                 (embyCustomScope.value)
                   ? (_openBlock(), _createElementBlock(_Fragment, { key: 2 }, [
                       _createVNode(_component_VSelect, {
-                        modelValue: embyServer.value,
-                        "onUpdate:modelValue": _cache[9] || (_cache[9] = $event => ((embyServer).value = $event)),
+                        modelValue: localConfig.value.emby_library_servers,
+                        "onUpdate:modelValue": _cache[9] || (_cache[9] = $event => ((localConfig.value.emby_library_servers) = $event)),
                         items: embyServers.value,
                         loading: embyLibrariesLoading.value && !embyServersLoaded.value,
                         label: "Emby 服务器",
                         variant: "outlined",
                         density: "comfortable",
+                        multiple: "",
+                        chips: "",
+                        "closable-chips": "",
                         "hide-details": ""
                       }, null, 8, ["modelValue", "items", "loading"]),
                       (!embyServersLoaded.value)
@@ -1090,10 +1111,10 @@ return (_ctx, _cache) => {
                           }, 8, ["loading"]))
                         : (_openBlock(), _createBlock(_component_VBtn, {
                             key: 1,
-                            disabled: !embyServer.value,
+                            disabled: !localConfig.value.emby_library_servers.length,
                             loading: embyLibrariesLoading.value,
                             variant: "tonal",
-                            onClick: _cache[11] || (_cache[11] = $event => (readEmbyLibraries(embyServer.value)))
+                            onClick: _cache[11] || (_cache[11] = $event => (readEmbyLibraries(localConfig.value.emby_library_servers)))
                           }, {
                             default: _withCtx(() => [...(_cache[48] || (_cache[48] = [
                               _createTextVNode("读取所选服务器的媒体库", -1)
@@ -1617,6 +1638,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-4b0162e0"]]);
+const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-04c3c1e1"]]);
 
 export { buildOutputName as A, rarDependencyModeLabel as B, _export_sfc as _, onlineLanguageItems as a, onlineProviderItems as b, onlineResultKey as c, defaultOnlineProviderIds as d, Config as default, isForeignOnlineResult as e, providerPriority as f, onlineResultLanguagePriority as g, onlineResultIdentityPriority as h, isOnlineResultDownloadable as i, errorMessage as j, createSubtitleManualUploadApi as k, formatBytes as l, compactTargetName as m, historyMediaStat as n, onlineResultLanguageFilterCategory as o, providerName as p, formatMediaType as q, mediaLabel as r, seasonLabel as s, timelineMetaItems as t, unwrapResponse as u, timelineResultText as v, mediaStat as w, onlineResultMeta as x, providerProgressText as y, providerProgressColor as z };

@@ -73,14 +73,25 @@ try {
 
   queue.autoQueueDialog.value = true
   await queue.loadAutoTransferQueue()
-  const app = createSSRApp(QueueDialog, { batchFollowupResult: queue.batchFollowupResult.value })
+  const app = createSSRApp(QueueDialog, {
+    batchFollowupResult: queue.batchFollowupResult.value,
+    autoQueueTasks: [
+      { id: 'written', status: 'completed', message: 'written', title: 'S04E04' },
+      { id: 'existing', status: 'skipped', message: '目标已有符合语言要求的字幕', title: 'S04E05' },
+    ],
+  })
   for (const [name, tag] of Object.entries({
     VDialog: 'section', VCard: 'section', VCardTitle: 'header', VCardText: 'div',
     VBtn: 'button', VDivider: 'hr', VAlert: 'div', VTooltip: 'span',
   })) {
-    app.component(name, { setup: (_, { slots }) => () => h(tag, null, slots.default?.()) })
+    app.component(name, {
+      setup: (_, { slots }) => () => h(tag, null, slots.default?.() || slots.activator?.({ props: {} })),
+    })
   }
   const html = await renderToString(app)
+  assert.match(html, /text="已完成"/)
+  assert.match(html, /auto-queue-message"[^>]*>已完成</)
+  assert.match(html, /auto-queue-message"[^>]*>目标已有符合语言要求的字幕</)
   assert.ok(html.includes(receipt))
   assert.match(html, /S04E03.*目标已锁定/)
   queue.autoQueueDialog.value = false

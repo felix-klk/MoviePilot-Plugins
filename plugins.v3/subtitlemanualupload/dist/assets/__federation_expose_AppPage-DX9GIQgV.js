@@ -1,5 +1,5 @@
 import { importShared } from './__federation_fn_import-JrT3xvdd.js';
-import Config, { d as defaultOnlineProviderIds, o as onlineResultLanguageFilterCategory, a as onlineLanguageItems, b as onlineProviderItems, c as onlineResultKey, i as isOnlineResultDownloadable, e as isForeignOnlineResult, p as providerName, f as providerPriority, g as onlineResultLanguagePriority, h as onlineResultIdentityPriority, _ as _export_sfc, u as unwrapResponse, j as errorMessage, k as createSubtitleManualUploadApi, s as seasonLabel, l as formatBytes, t as timelineMetaItems, m as compactTargetName, n as historyMediaStat, q as formatMediaType, r as mediaLabel, v as timelineResultText, w as mediaStat, x as onlineResultMeta, y as providerProgressText, z as providerProgressColor, A as buildOutputName, B as rarDependencyModeLabel } from './__federation_expose_Config-DGt1vO00.js';
+import Config, { d as defaultOnlineProviderIds, o as onlineResultLanguageFilterCategory, a as onlineLanguageItems, b as onlineProviderItems, c as onlineResultKey, i as isOnlineResultDownloadable, e as isForeignOnlineResult, p as providerName, f as providerPriority, g as onlineResultLanguagePriority, h as onlineResultIdentityPriority, _ as _export_sfc, u as unwrapResponse, j as errorMessage, k as createSubtitleManualUploadApi, s as seasonLabel, l as formatBytes, t as timelineMetaItems, m as compactTargetName, n as historyMediaStat, q as formatMediaType, r as mediaLabel, v as timelineResultText, w as mediaStat, x as onlineResultMeta, y as providerProgressText, z as providerProgressColor, A as buildOutputName, B as rarDependencyModeLabel } from './__federation_expose_Config-DiSyNBj3.js';
 
 const INSTALL_HINT = '请先安装并启用';
 
@@ -3133,6 +3133,11 @@ const followupReasons = {
   stopped: '自动入库服务已停止',
 };
 
+function queueTaskMessage(task) {
+  const message = task.message || task.status;
+  return message === 'written' || message === 'completed' ? '已完成' : message
+}
+
 
 
 return (_ctx, _cache) => {
@@ -3248,10 +3253,10 @@ return (_ctx, _cache) => {
                           _createVNode$c(_component_VTooltip, {
                             location: "top",
                             "max-width": "520",
-                            text: task.message || task.status
+                            text: queueTaskMessage(task)
                           }, {
                             activator: _withCtx$b(({ props: tooltipProps }) => [
-                              _createElementVNode$c("span", _mergeProps$5({ ref_for: true }, tooltipProps, { class: "auto-queue-message" }), _toDisplayString$a(task.message || task.status), 17)
+                              _createElementVNode$c("span", _mergeProps$5({ ref_for: true }, tooltipProps, { class: "auto-queue-message" }), _toDisplayString$a(queueTaskMessage(task)), 17)
                             ]),
                             _: 2
                           }, 1032, ["text"]),
@@ -3322,7 +3327,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const AutoTransferQueueDialog = /*#__PURE__*/_export_sfc(_sfc_main$d, [['__scopeId',"data-v-34e6110b"]]);
+const AutoTransferQueueDialog = /*#__PURE__*/_export_sfc(_sfc_main$d, [['__scopeId',"data-v-2e3bb826"]]);
 
 const {renderList:_renderList$7,Fragment:_Fragment$9,openBlock:_openBlock$c,createElementBlock:_createElementBlock$c,createCommentVNode:_createCommentVNode$c,toDisplayString:_toDisplayString$9,createElementVNode:_createElementVNode$b,resolveComponent:_resolveComponent$c,createVNode:_createVNode$b,createTextVNode:_createTextVNode$9,withCtx:_withCtx$a,createBlock:_createBlock$c} = await importShared('vue');
 

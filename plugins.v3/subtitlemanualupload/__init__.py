@@ -163,7 +163,7 @@ class SubtitleManualUpload(_PluginBase):
     plugin_name = "海拉鲁字幕大师(NEO自用版)"
     plugin_desc = "脱胎自 ChineseSubFinder，支持字幕搜索、上传、匹配、改名与智能调轴。"
     plugin_icon = "https://raw.githubusercontent.com/ifsherlock/MoviePilot-Plugins/main/icons/hyrule-subtitle-master.png"
-    plugin_version = "1.2.38"
+    plugin_version = "1.2.39"
     plugin_author = "ifsherlock"
     author_url = "https://github.com/ifsherlock"
     plugin_config_prefix = "subtitlemanualupload_"
@@ -208,6 +208,7 @@ class SubtitleManualUpload(_PluginBase):
     _traditional_to_simplified = False
     _auto_search_on_transfer = False
     _auto_check_emby_subtitles = False
+    _emby_library_servers: list[str] = []
     _emby_query_libraries = None
     _emby_subtitle_path_mappings = ""
     _auto_skip_chinese_media_on_transfer = True

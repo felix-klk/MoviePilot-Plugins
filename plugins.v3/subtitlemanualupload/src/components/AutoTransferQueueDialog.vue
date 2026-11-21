@@ -23,6 +23,11 @@ const followupReasons = {
   stopped: '自动入库服务已停止',
 }
 
+function queueTaskMessage(task) {
+  const message = task.message || task.status
+  return message === 'written' || message === 'completed' ? '已完成' : message
+}
+
 defineEmits([
   'update:modelValue',
   'load-auto-transfer-queue',
@@ -103,9 +108,9 @@ defineEmits([
           >
             <div class="auto-queue-copy">
               <strong :title="task.target_label || task.title || task.id">{{ task.target_label || task.title || task.id }}</strong>
-              <VTooltip location="top" max-width="520" :text="task.message || task.status">
+              <VTooltip location="top" max-width="520" :text="queueTaskMessage(task)">
                 <template #activator="{ props: tooltipProps }">
-                  <span v-bind="tooltipProps" class="auto-queue-message">{{ task.message || task.status }}</span>
+                  <span v-bind="tooltipProps" class="auto-queue-message">{{ queueTaskMessage(task) }}</span>
                 </template>
               </VTooltip>
               <small v-if="task.next_run_at">下次 {{ task.next_run_at }}</small>

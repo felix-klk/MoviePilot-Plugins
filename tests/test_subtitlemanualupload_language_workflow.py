@@ -278,6 +278,26 @@ def test_language_config_round_trip_and_empty_validation(sup_modules):
 
 
 @pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)
+def test_v3_emby_server_selection_round_trips(sup_modules):
+    schema = sup_modules.load("config.config_schema")
+    runtime = sup_modules.load("config.config_runtime")
+    legacy = {"emby_query_libraries": [
+        {"server": "Emby A", "id": "1"},
+        {"server": "Emby B", "id": "1"},
+        {"server": "Emby A", "id": "2"},
+    ]}
+    assert schema.normalize_plugin_config(legacy)["emby_library_servers"] == ["Emby A", "Emby B"]
+
+    for servers in (["Emby B", "Emby A"], []):
+        owner = types.SimpleNamespace()
+        config = schema.normalize_plugin_config({**legacy, "emby_library_servers": servers})
+        runtime.apply_runtime_config(owner, config)
+        reopened = schema.normalize_plugin_config(runtime.build_save_config_payload(owner))
+        assert reopened["emby_library_servers"] == servers
+        assert reopened["emby_query_libraries"] == config["emby_query_libraries"]
+
+
+@pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)
 def test_v3_legacy_ranking_switch_round_trips(sup_modules):
     schema = sup_modules.load("config.config_schema")
     runtime = sup_modules.load("config.config_runtime")
