@@ -1,0 +1,32 @@
+name: Correct CloudDrive release notes
+on:
+  push:
+    branches: ["codex/repair-clouddrive-release-notes"]
+
+permissions:
+  contents: write
+
+jobs:
+  correct-notes:
+    if: github.repository == 'felix-klk/MoviePilot-Plugins'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Sync the two published notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for edition in v2 v3; do
+            version="${edition}.0.0"
+            tag="CloudDriveControlAssistant_${version}"
+            notes=$(jq -er --arg version "$version" '.CloudDriveControlAssistant.history[$version] | select(type == "string" and length > 0 and (contains("\uFFFD") | not))' "package.${edition}.json")
+            current=$(gh release view "$tag" --json body --jq .body)
+            if [[ "$current" != "$notes" ]]; then
+              gh release edit "$tag" --notes "$notes"
+            fi
+            test "$(gh release view "$tag" --json body --jq .body)" = "$notes"
+          done
