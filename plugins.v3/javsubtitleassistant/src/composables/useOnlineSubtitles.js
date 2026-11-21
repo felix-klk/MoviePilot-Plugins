@@ -13,7 +13,7 @@ import {
   providerPriority,
 } from '../utils/onlineResult'
 
-const ONLINE_PROVIDER_TIMEOUT_MS = 25000
+const ONLINE_PROVIDER_TIMEOUT_MS = 85_000
 const ONLINE_DOWNLOAD_TIMEOUT_MS = 180000
 const DEFAULT_RESULT_FILTERS = { days: 'all', minimum: 'all', type: 'all', order: 'default' }
 const DAY_MS = 86_400_000
@@ -234,7 +234,8 @@ export function useOnlineSubtitles({
   }
 
   function openSingleOnlineSearch(target) {
-    openOnlineDialog([target], `搜索 ${compactTargetName(target)}`, 'episode')
+    const scope = (target.media_type || selectedMedia.value?.media_type) === 'tv' ? 'episode' : 'movie'
+    openOnlineDialog([target], `搜索 ${compactTargetName(target)}`, scope)
   }
 
   function onlinePayload() {
@@ -296,7 +297,7 @@ export function useOnlineSubtitles({
             providers: [provider],
           }),
           ONLINE_PROVIDER_TIMEOUT_MS,
-          `${providerName(provider)} 搜索超时，已保留其它字幕源结果。`,
+          `${providerName(provider)} 搜索超时，稍后可以重试。`,
         )
         if (searchSeq !== onlineSearchSeq) return
         const data = unwrapResponse(response) || {}

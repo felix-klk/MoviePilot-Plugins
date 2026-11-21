@@ -6,7 +6,6 @@ from typing import Any, Dict
 
 from fastapi import HTTPException, Request
 
-from ..config.config_schema import host_from_url
 from ..timeline.timeline_fixer import check_timeline_fixer_dependencies
 
 
@@ -53,13 +52,6 @@ class StatusApi:
                 },
                 "online_search": {
                     "enabled_providers": owner._online_provider_ids,
-                    "assrt_api_configured": bool(owner._assrt_api_key),
-                    "assrt_api_host": host_from_url(owner._assrt_api_url),
-                    "opensubtitles_api_configured": bool(owner._opensubtitles_api_key),
-                    "opensubtitles_api_host": host_from_url(owner._opensubtitles_api_url),
-                    "opensubtitles_download_configured": bool(
-                        owner._opensubtitles_username and owner._opensubtitles_password
-                    ),
                 },
                 "auto_transfer_queue": auto_transfer.auto_transfer_queue_summary(),
                 "ai_subtitle": autosub_bridge.autosub_status(),

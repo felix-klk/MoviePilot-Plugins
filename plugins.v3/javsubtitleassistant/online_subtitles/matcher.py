@@ -199,17 +199,15 @@ def rank_auto_download_candidates(
         release_rank = _release_compatibility(
             (*target_release, target_edition, target_range), (*release, edition, _release_dynamic_range(title)),
         )
-        bucket = auto_candidate_language_bucket(item)
+        bucket = online_result_language_bucket(item)
         reason = ""
-        if item.get("provider") == "subhd" and item.get("subhd_unassociated") is True:
-            reason = "SubHD 未关联"
-        elif item.get("downloadable") is False:
+        if item.get("downloadable") is False:
             reason = "仅支持手动下载"
         elif min_score is not None and _safe_int(item.get("score")) < min_score:
             reason = f"匹配分低于 {min_score}"
         elif item.get("identity_status") == "failed":
             reason = "媒体身份不匹配"
-        elif not legacy and _has_episode_conflict(item, targets):
+        elif not legacy and not any(target.get("jav_number") for target in targets) and _has_episode_conflict(item, targets):
             reason = "季集不匹配"
         elif edition and target_edition and edition != target_edition:
             reason = "片源剪辑版本冲突"

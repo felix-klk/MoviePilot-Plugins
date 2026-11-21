@@ -77,16 +77,6 @@ const bulkActionsOpen = ref(false)
         搜索
       </VBtn>
       <VBtn
-        v-if="detail.selectedMedia.media_type === 'tv'"
-        color="info"
-        variant="tonal"
-        :disabled="detail.batchFollowup.disabled"
-        :loading="detail.batchFollowup.loading"
-        @click="actions.enqueueSelectedBilingualFollowup()"
-      >
-        {{ detail.batchFollowup.label }}
-      </VBtn>
-      <VBtn
         color="primary"
         variant="tonal"
         :disabled="!detail.unlockedVisibleTargets.length"

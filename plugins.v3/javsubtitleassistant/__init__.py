@@ -66,28 +66,26 @@ from .online.online_subtitle import (
     check_online_rate_limit,
     extract_title_aliases,
 )
+from .online_subtitles.catalog import (
+    AVAILABLE_ONLINE_PROVIDER_IDS,
+    DEFAULT_ONLINE_PROVIDER_IDS,
+    DEFAULT_PROVIDER_ROOTS,
+    MANUAL_ONLINE_PROVIDER_IDS,
+)
 from .config.config_schema import (
     AUTO_MULTI_SUBTITLE_MODES,
     AUTO_TRANSFER_SUBTITLE_STRATEGIES,
     AUTO_TRANSFER_SUBTITLE_STRATEGY_ALIASES,
-    AVAILABLE_ONLINE_PROVIDER_IDS,
-    DEFAULT_ASSRT_API_URL,
     DEFAULT_ENGINE,
-    DEFAULT_ONLINE_PROVIDER_IDS,
-    DEFAULT_OPENSUBTITLES_API_URL,
-    DEFAULT_PROVIDER_ROOTS,
     DEFAULT_RAR_TOOL_PATH,
-    MANUAL_ONLINE_PROVIDER_IDS,
     RAR_DEPENDENCY_MODES,
     build_config_form,
-    host_from_url,
     normalize_auto_multi_subtitle_mode,
     normalize_auto_transfer_subtitle_strategy,
     normalize_online_site_urls,
     normalize_plugin_config,
     normalize_provider_ids,
     normalize_rar_dependency_mode,
-    normalize_root_url,
     normalize_timeline_max_offset,
     normalize_timeline_min_offset,
     normalize_timeline_vad_mode,
@@ -122,7 +120,6 @@ from .runtime.runtime_helpers import (
 )
 from .matching.subtitle_language import (
     DEFAULT_AUTO_FORMAT_PRIORITY,
-    DEFAULT_AUTO_LANGUAGE_PRIORITY,
     LANGUAGE_SUFFIX_ALIASES,
     auto_language_bucket,
     auto_subtitle_sort_key,
@@ -163,9 +160,9 @@ class JavSubtitleAssistant(_PluginBase):
     plugin_name = "JAV字幕助手"
     plugin_desc = "沿用海拉鲁的字幕匹配、队列和历史，扫描整理目录并按番号补中文字幕。"
     plugin_icon = ""
-    plugin_version = "1.2.0"
-    plugin_author = "ifsherlock"
-    author_url = "https://github.com/ifsherlock"
+    plugin_version = "1.2.1"
+    plugin_author = "felix-klk"
+    author_url = "https://github.com/felix-klk"
     plugin_config_prefix = "javsubtitleassistant_"
     plugin_order = 48
     auth_level = 1
@@ -195,15 +192,7 @@ class JavSubtitleAssistant(_PluginBase):
     _embedded_subtitle_probe_cache_max_size = 500
     _embedded_subtitle_text_codecs = {"subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text"}
     _embedded_subtitle_image_codecs = {"hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle", "xsub", "dvb_teletext", "eia_608"}
-    _subdl_api_key = ""
-    _subhd_bypass_url = ""
     _subtitlecat_include_translations = False
-    _assrt_api_key = ""
-    _assrt_api_url = DEFAULT_ASSRT_API_URL
-    _opensubtitles_api_key = ""
-    _opensubtitles_api_url = DEFAULT_OPENSUBTITLES_API_URL
-    _opensubtitles_username = ""
-    _opensubtitles_password = ""
     _ai_link_enabled = True
     _traditional_to_simplified = False
     _auto_search_on_transfer = False
@@ -211,8 +200,8 @@ class JavSubtitleAssistant(_PluginBase):
     _emby_library_servers: list[str] = []
     _emby_query_libraries = None
     _emby_subtitle_path_mappings = ""
-    _auto_skip_chinese_media_on_transfer = True
-    _auto_transfer_subtitle_strategy = "online_then_ai_source"
+    _auto_skip_chinese_media_on_transfer = False
+    _auto_transfer_subtitle_strategy = "online_source_only"
     _auto_search_min_score = 20
     _auto_subtitle_legacy_ranking = False
     _trust_transfer_history_paths = False
@@ -281,7 +270,7 @@ class JavSubtitleAssistant(_PluginBase):
     _rar_dependency_modes = set(RAR_DEPENDENCY_MODES)
     _auto_transfer_subtitle_strategies = set(AUTO_TRANSFER_SUBTITLE_STRATEGIES)
     _auto_multi_subtitle_modes = set(AUTO_MULTI_SUBTITLE_MODES)
-    _default_auto_language_priority = list(DEFAULT_AUTO_LANGUAGE_PRIORITY)
+    _default_auto_language_priority = ["chi", "cht"]
     _default_auto_format_priority = list(DEFAULT_AUTO_FORMAT_PRIORITY)
     _auto_transfer_subtitle_strategy_aliases = dict(AUTO_TRANSFER_SUBTITLE_STRATEGY_ALIASES)
     _chinese_media_language_codes = {"zh", "cn", "zho", "cmn", "yue"}
@@ -319,8 +308,6 @@ class JavSubtitleAssistant(_PluginBase):
             default_provider_ids=self._default_online_provider_ids,
         )
         apply_runtime_config(self, normalized_config)
-        if (config or {}).get("opensubtitles_username") and "@" in self._normalize_text((config or {}).get("opensubtitles_username")):
-            logger.warning("[JavSubtitleAssistant] OpenSubtitles 用户名疑似邮箱，已忽略下载认证用户名")
         sync_class_runtime_config(type(self), self)
         reset_runtime_state(self)
         self.services.local_media_catalog().restore_persisted_local_cache()

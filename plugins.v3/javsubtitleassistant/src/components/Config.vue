@@ -17,8 +17,6 @@ const props = defineProps({
 
 const emit = defineEmits(['save', 'close'])
 const configError = ref('')
-const draggingAutoLanguage = ref('')
-const dropTargetAutoLanguage = ref('')
 const manualStrmPathPlaceholder = `/vol2/1000/raid/2/links2
 /vol1/1000/media-strm`
 const localConfig = ref({
@@ -33,34 +31,15 @@ const localConfig = ref({
   emby_library_servers: [],
   emby_query_libraries: null,
   emby_subtitle_path_mappings: "",
-  auto_skip_chinese_media_on_transfer: true,
-  auto_transfer_subtitle_strategy: 'online_then_ai_source',
   trust_transfer_history_paths: false,
   manual_strm_enabled: true,
   manual_strm_paths: '',
   auto_search_on_manual_strm: true,
-  auto_multi_subtitle_mode: 'best',
-  auto_subtitle_legacy_ranking: false,
-  auto_subtitle_language_priority: ['chi&eng', 'chi&jp', 'chi&kr', 'other_bilingual', 'chi', 'cht', 'eng'],
-  auto_subtitle_language_strict: false,
-  auto_subtitle_format_priority: ['.ass', '.srt', '.ssa', '.vtt'],
-  auto_ass_to_srt_for_ai: true,
   timeline_max_offset_seconds: 120,
   timeline_min_offset_seconds: 0.2,
   timeline_vad_mode: 'webrtc',
   timeline_allow_risky_offset: false,
-  subhd_url: 'https://subhd.tv',
-  subdl_api_key: '',
-  subhd_bypass_url: '',
   subtitlecat_include_translations: true,
-  assrt_url: 'https://2.assrt.net',
-  assrt_api_key: '',
-  assrt_api_url: 'https://api.assrt.net',
-  opensubtitles_url: 'https://www.opensubtitles.com',
-  opensubtitles_api_key: '',
-  opensubtitles_api_url: 'https://api.opensubtitles.com/api/v1',
-  opensubtitles_username: '',
-  opensubtitles_password: '',
   ai_link_enabled: false,
   rar_dependency_mode: 'none',
   rar_tool_path: '/usr/bin/unar',
@@ -160,47 +139,6 @@ const rarDependencyModes = [
   { title: '使用宿主机映射文件', value: 'mapped_binary' },
 ]
 
-const autoStrategyItems = [
-  { title: '在线匹配优先，AI 来源兜底', value: 'online_then_ai_source' },
-  { title: '只用在线匹配来源', value: 'online_source_only' },
-  { title: '只用 AI 来源生成', value: 'ai_source_only' },
-]
-
-const autoMultiSubtitleModes = [
-  { title: '按偏好选择最佳', value: 'best' },
-  { title: '中文/双语全部入库', value: 'chinese_all' },
-  { title: '全部入库', value: 'all' },
-]
-
-const autoLanguageItems = [
-  { title: '中英双语', value: 'chi&eng' },
-  { title: '中日双语', value: 'chi&jp' },
-  { title: '中韩双语', value: 'chi&kr' },
-  { title: '其他中外双语', value: 'other_bilingual' },
-  { title: '简中', value: 'chi' },
-  { title: '繁中', value: 'cht' },
-  { title: '英文', value: 'eng' },
-  { title: '日文', value: 'jpn' },
-  { title: '韩文', value: 'kor' },
-]
-const defaultAutoLanguages = ['chi&eng', 'chi&jp', 'chi&kr', 'other_bilingual', 'chi', 'cht', 'eng']
-
-const autoFormatItems = [
-  { title: 'ASS', value: '.ass' },
-  { title: 'SRT', value: '.srt' },
-  { title: 'SSA', value: '.ssa' },
-  { title: 'VTT', value: '.vtt' },
-  { title: 'WebVTT', value: '.webvtt' },
-  { title: 'SBV', value: '.sbv' },
-  { title: 'SUB', value: '.sub' },
-  { title: 'SUP', value: '.sup' },
-  { title: 'VobSub (IDX)', value: '.idx' },
-  { title: 'SMI', value: '.smi' },
-  { title: 'SAMI', value: '.sami' },
-  { title: 'TTML', value: '.ttml' },
-  { title: 'DFXP', value: '.dfxp' },
-]
-
 const timelineVadItems = [
   { title: 'WebRTC VAD（推荐）', value: 'webrtc' },
   { title: 'RMS 能量阈值（降级）', value: 'rms' },
@@ -209,104 +147,14 @@ const timelineVadItems = [
 function normalizeProviders(value) {
   const allowed = onlineProviderItems.map(item => item.value)
   const providers = Array.isArray(value) ? value.filter(item => allowed.includes(item)) : []
-  return Array.isArray(value) ? Array.from(new Set(providers)) : [...defaultOnlineProviderIds]
+  return Array.isArray(value) && (!value.length || providers.length)
+    ? Array.from(new Set(providers))
+    : [...defaultOnlineProviderIds]
 }
-
-function normalizeRootUrl(value, fallback) {
-  const text = String(value || '').trim().replace(/\/+$/, '')
-  return /^https?:\/\//i.test(text) ? text : fallback
-}
-
 
 function normalizePositiveNumber(value, fallback) {
   const number = Number(value)
   return Number.isFinite(number) && number > 0 ? number : fallback
-}
-
-function normalizeAutoStrategy(value) {
-  const aliases = {
-    search_first: 'online_then_ai_source',
-    search_only: 'online_source_only',
-    ai_only: 'ai_source_only',
-    ai_first: 'ai_source_only',
-  }
-  const normalized = aliases[value] || value
-  return autoStrategyItems.some(item => item.value === normalized)
-    ? normalized
-    : 'online_then_ai_source'
-}
-
-function normalizeList(value, allowed, fallback) {
-  const raw = Array.isArray(value) ? value : String(value || '').split(/[\s,，/|]+/)
-  const result = []
-  raw.forEach(item => {
-    const normalized = String(item || '').trim().toLowerCase()
-    if (allowed.includes(normalized) && !result.includes(normalized)) {
-      result.push(normalized)
-    }
-  })
-  fallback.forEach(item => {
-    if (!result.includes(item)) result.push(item)
-  })
-  return result
-}
-
-function normalizeLanguages(value) {
-  if (value == null) return [...defaultAutoLanguages]
-  const allowed = autoLanguageItems.map(item => item.value)
-  const raw = Array.isArray(value) ? value : String(value).split(/[\s,，/|]+/)
-  const result = []
-  raw.forEach(item => {
-    const key = String(item || '').trim().toLowerCase()
-    const expanded = ['bilingual', '双语'].includes(key) ? defaultAutoLanguages.slice(0, 4) : [key === 'cht&eng' ? 'chi&eng' : key]
-    expanded.forEach(language => {
-      if (allowed.includes(language) && !result.includes(language)) result.push(language)
-    })
-  })
-  return result
-}
-
-function autoLanguageTitle(value) {
-  return autoLanguageItems.find(item => item.value === value)?.title || value
-}
-
-function setAutoLanguageRank(language, value) {
-  const priority = [...localConfig.value.auto_subtitle_language_priority]
-  const currentIndex = priority.indexOf(language)
-  const rank = Number(value)
-  if (!Number.isInteger(rank) || rank < 1 || rank > priority.length || currentIndex < 0) return
-
-  priority.splice(currentIndex, 1)
-  priority.splice(rank - 1, 0, language)
-  localConfig.value.auto_subtitle_language_priority = priority
-}
-
-function moveAutoLanguage(source, target) {
-  const priority = [...localConfig.value.auto_subtitle_language_priority]
-  const sourceIndex = priority.indexOf(source)
-  const targetIndex = priority.indexOf(target)
-  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return
-
-  const [language] = priority.splice(sourceIndex, 1)
-  priority.splice(targetIndex, 0, language)
-  localConfig.value.auto_subtitle_language_priority = priority
-}
-
-function startDraggingAutoLanguage(language, event) {
-  draggingAutoLanguage.value = language
-  event.dataTransfer.effectAllowed = 'move'
-  event.dataTransfer.setData('text/plain', language)
-}
-
-function finishDraggingAutoLanguage() {
-  draggingAutoLanguage.value = ''
-  dropTargetAutoLanguage.value = ''
-}
-
-function dropAutoLanguage(language, event) {
-  event.preventDefault()
-  moveAutoLanguage(draggingAutoLanguage.value || event.dataTransfer.getData('text/plain'), language)
-  finishDraggingAutoLanguage()
 }
 
 function normalizeMultilinePaths(value) {
@@ -321,12 +169,7 @@ function normalizeMultilinePaths(value) {
 }
 
 function normalizeConfig(input) {
-  const assrtApiKey = String(input?.assrt_api_key || '').trim()
-  const opensubtitlesApiKey = String(input?.opensubtitles_api_key || '').trim()
-  const opensubtitlesUsername = String(input?.opensubtitles_username || '').trim()
-  const opensubtitlesPassword = String(input?.opensubtitles_password || '').trim()
   const providers = normalizeProviders(input?.online_providers)
-  const autoStrategy = normalizeAutoStrategy(input?.auto_transfer_subtitle_strategy)
   const embyLibraries = input?.emby_query_libraries == null
     ? null
     : (Array.isArray(input.emby_query_libraries) ? input.emby_query_libraries : [])
@@ -346,41 +189,16 @@ function normalizeConfig(input) {
     emby_library_servers: [...new Set(embyServers.filter(name => typeof name === 'string' && name))],
     emby_query_libraries: embyLibraries,
     emby_subtitle_path_mappings: typeof input?.emby_subtitle_path_mappings === "string" ? input.emby_subtitle_path_mappings : "",
-    auto_skip_chinese_media_on_transfer: input?.auto_skip_chinese_media_on_transfer !== false,
-    auto_transfer_subtitle_strategy: autoStrategy,
     trust_transfer_history_paths: Boolean(input?.trust_transfer_history_paths),
     manual_strm_enabled: Boolean(input?.manual_strm_enabled),
     manual_strm_paths: normalizeMultilinePaths(input?.manual_strm_paths),
     auto_search_on_manual_strm: Boolean(input?.auto_search_on_manual_strm),
-    auto_multi_subtitle_mode: autoMultiSubtitleModes.some(item => item.value === input?.auto_multi_subtitle_mode)
-      ? input.auto_multi_subtitle_mode
-      : 'best',
-    auto_subtitle_language_priority: normalizeLanguages(input?.auto_subtitle_language_priority),
-    auto_subtitle_language_strict: Boolean(input?.auto_subtitle_language_strict),
-    auto_subtitle_legacy_ranking: Boolean(input?.auto_subtitle_legacy_ranking),
-    auto_subtitle_format_priority: normalizeList(
-      input?.auto_subtitle_format_priority,
-      autoFormatItems.map(item => item.value),
-      ['.ass', '.srt', '.ssa', '.vtt'],
-    ),
-    auto_ass_to_srt_for_ai: input?.auto_ass_to_srt_for_ai !== false,
     timeline_max_offset_seconds: Math.min(300, Math.max(1, Math.round(normalizePositiveNumber(input?.timeline_max_offset_seconds, 120)))),
     timeline_min_offset_seconds: normalizePositiveNumber(input?.timeline_min_offset_seconds, 0.2),
     timeline_vad_mode: timelineVadItems.some(item => item.value === input?.timeline_vad_mode) ? input.timeline_vad_mode : 'webrtc',
     timeline_allow_risky_offset: Boolean(input?.timeline_allow_risky_offset),
-    subhd_url: normalizeRootUrl(input?.subhd_url, 'https://subhd.tv'),
-    subdl_api_key: String(input?.subdl_api_key || '').trim(),
-    subhd_bypass_url: String(input?.subhd_bypass_url || '').trim().replace(/\/+$/, ''),
-    subtitlecat_include_translations: Boolean(input?.subtitlecat_include_translations),
-    assrt_url: normalizeRootUrl(input?.assrt_url, 'https://2.assrt.net'),
-    assrt_api_key: assrtApiKey,
-    assrt_api_url: normalizeRootUrl(input?.assrt_api_url, 'https://api.assrt.net'),
-    opensubtitles_url: normalizeRootUrl(input?.opensubtitles_url, 'https://www.opensubtitles.com'),
-    opensubtitles_api_key: opensubtitlesApiKey,
-    opensubtitles_api_url: normalizeRootUrl(input?.opensubtitles_api_url, 'https://api.opensubtitles.com/api/v1'),
-    opensubtitles_username: opensubtitlesUsername,
-    opensubtitles_password: opensubtitlesPassword,
-    ai_link_enabled: input?.ai_link_enabled !== false,
+    subtitlecat_include_translations: input?.subtitlecat_include_translations !== false,
+    ai_link_enabled: Boolean(input?.ai_link_enabled),
     rar_dependency_mode: ['none', 'container_install', 'mapped_binary'].includes(input?.rar_dependency_mode)
       ? input.rar_dependency_mode
       : 'none',
@@ -390,14 +208,6 @@ function normalizeConfig(input) {
 
 function saveConfig() {
   const normalized = normalizeConfig(localConfig.value)
-  if (normalized.auto_subtitle_language_strict && !normalized.auto_subtitle_language_priority.length) {
-    configError.value = '仅接受所选语言时，请至少选择一种语言。'
-    return
-  }
-  if (normalized.opensubtitles_username.includes('@')) {
-    configError.value = '请输入用户名而非邮箱！'
-    return
-  }
   configError.value = ''
   emit('save', normalized)
 }
@@ -414,7 +224,7 @@ onMounted(() => {
         <div class="text-subtitle-1 ms-3 config-toolbar-title" title="JAV字幕助手配置">JAV字幕助手配置</div>
         <VSpacer />
         <VBtn
-          href="https://github.com/ifsherlock/MoviePilot-Plugins/blob/main/docs/JavSubtitleAssistant%E5%8A%9F%E8%83%BD%E4%BD%BF%E7%94%A8%E6%95%99%E5%AD%A6.md"
+          href="https://github.com/felix-klk/MoviePilot-Plugins/tree/main/plugins.v3/javsubtitleassistant#使用"
           target="_blank"
           rel="noopener noreferrer"
           prepend-icon="mdi-book-open-page-variant"
@@ -558,12 +368,6 @@ onMounted(() => {
               />
             </template>
             <VSwitch
-              v-model="localConfig.auto_skip_chinese_media_on_transfer"
-              label="入库自动处理跳过中文资源"
-              color="success"
-              hide-details
-            />
-            <VSwitch
               v-model="localConfig.trust_transfer_history_paths"
               label="信任整理历史路径"
               color="warning"
@@ -595,108 +399,8 @@ onMounted(() => {
               v-model="localConfig.auto_search_on_manual_strm"
               label="本地视频新增或更新时自动补中文字幕"
               color="success"
-              hint="只处理新增或变更的 STRM，已处理且未变化的文件不会重复搜索。"
+              hint="已有中文字幕就跳过，否则尝试补一份。"
               persistent-hint
-            />
-            <VSelect
-              v-model="localConfig.auto_transfer_subtitle_strategy"
-              :items="autoStrategyItems"
-              label="入库后字幕处理策略"
-              variant="outlined"
-              density="comfortable"
-              hide-details
-            />
-            <VSelect
-              v-model="localConfig.auto_multi_subtitle_mode"
-              :items="autoMultiSubtitleModes"
-              label="自动多字幕处理"
-              variant="outlined"
-              density="comfortable"
-              hide-details
-            />
-            <VSwitch
-              v-model="localConfig.auto_subtitle_legacy_ranking"
-              label="使用 1.2.34 自动字幕排序"
-              hide-details
-            />
-            <VSelect
-              v-model="localConfig.auto_subtitle_language_priority"
-              :items="autoLanguageItems"
-              label="语言优先级"
-              variant="outlined"
-              density="comfortable"
-              multiple
-              chips
-              hint="选了双语，已有字幕须满足所选双语之一，否则补充搜索；多选按顺序优先，找不到时不回退单语或 AI。"
-              persistent-hint
-            />
-            <details v-if="localConfig.auto_subtitle_language_priority.length" class="language-priority-details">
-              <summary>
-                <span class="language-priority-summary">
-                  <span>调整语言顺序</span>
-                  <span class="language-priority-summary-hint">
-                    {{ localConfig.auto_subtitle_language_priority.length }} 项已选，序号 1 优先
-                  </span>
-                </span>
-                <v-icon icon="mdi-chevron-down" size="18" class="language-priority-chevron" aria-hidden="true" />
-              </summary>
-              <div class="language-priority-order">
-                <div
-                  v-for="(language, index) in localConfig.auto_subtitle_language_priority"
-                  :key="language"
-                  class="language-priority-row"
-                  :class="{ 'is-drop-target': dropTargetAutoLanguage === language, 'is-dragging': draggingAutoLanguage === language }"
-                  @dragover.prevent="dropTargetAutoLanguage = language"
-                  @drop="dropAutoLanguage(language, $event)"
-                >
-                  <button
-                    type="button"
-                    class="language-priority-drag-handle"
-                    :aria-label="'拖动' + autoLanguageTitle(language) + '调整顺序'"
-                    title="拖动调整顺序"
-                    draggable="true"
-                    @dragstart="startDraggingAutoLanguage(language, $event)"
-                    @dragend="finishDraggingAutoLanguage"
-                  >
-                    <v-icon icon="mdi-drag" size="18" aria-hidden="true" />
-                  </button>
-                  <span class="language-priority-name">{{ autoLanguageTitle(language) }}</span>
-                  <input
-                    :value="index + 1"
-                    :aria-label="`${autoLanguageTitle(language)}序号`"
-                    type="number"
-                    min="1"
-                    :max="localConfig.auto_subtitle_language_priority.length"
-                    step="1"
-                    class="language-priority-rank"
-                    @change="setAutoLanguageRank(language, $event.target.value)"
-                  >
-                </div>
-              </div>
-            </details>
-            <VSwitch
-              v-model="localConfig.auto_subtitle_language_strict"
-              label="仅接受所选语言"
-              color="info"
-              hint="未选择双语时，开启此项才限制为所选语言；无匹配不回退或提交 AI 翻译。双语要求始终生效。"
-              persistent-hint
-            />
-            <VSelect
-              v-model="localConfig.auto_subtitle_format_priority"
-              :items="autoFormatItems"
-              label="格式优先级"
-              variant="outlined"
-              density="comfortable"
-              multiple
-              chips
-              hint="默认：ASS、SRT、SSA、VTT"
-              persistent-hint
-            />
-            <VSwitch
-              v-model="localConfig.auto_ass_to_srt_for_ai"
-              label="英文 ASS 转临时 SRT 后提交 AI"
-              color="info"
-              hide-details
             />
           </div>
 
@@ -705,7 +409,7 @@ onMounted(() => {
           <div class="config-section">
             <div>
               <div class="config-section-title">在线字幕搜索</div>
-              <p>先选择启用的字幕源，再填写对应平台的设置。Subtitle Cat 请求至少间隔 3 秒，字幕下载串行且每份结束后等待至少 8 秒。</p>
+              <p>在线字幕源为 SubtitleCat。Subtitle Cat 请求至少间隔 3 秒，字幕下载串行且每份结束后等待至少 8 秒。</p>
             </div>
           </div>
 
@@ -733,35 +437,6 @@ onMounted(() => {
                 hide-details
               />
             </div>
-            <p class="provider-note online-source-help">填写密钥后，仍需在上方“启用字幕源”中勾选对应平台，并保存设置。</p>
-
-            <section class="provider-settings" aria-labelledby="provider-subhd-title">
-              <div class="provider-heading">
-                <h3 id="provider-subhd-title">SubHD</h3>
-                <p>无需 API Key</p>
-              </div>
-              <div class="provider-body">
-                <div class="config-grid">
-                  <VTextField
-                    v-model="localConfig.subhd_url"
-                    label="SubHD 站点地址"
-                    placeholder="https://subhd.tv"
-                    variant="outlined"
-                    density="comfortable"
-                    hide-details
-                  />
-                  <VTextField
-                    v-model="localConfig.subhd_bypass_url"
-                    label="SubHD CF 服务地址"
-                    placeholder="http://NAS地址:18089"
-                    hint="填写后 SubHD 通过此服务自身网络访问，不继承 MP 系统代理。Turnstile 下载验证需要服务支持 /turnstile；留空直接访问。"
-                    persistent-hint
-                    variant="outlined"
-                    density="comfortable"
-                  />
-                </div>
-              </div>
-            </section>
             <section class="provider-settings" aria-labelledby="provider-subtitlecat-title">
               <div class="provider-heading">
                 <h3 id="provider-subtitlecat-title">SubtitleCat</h3>
@@ -772,135 +447,11 @@ onMounted(() => {
                   <VSwitch
                     v-model="localConfig.subtitlecat_include_translations"
                     label="接受已有中文站点翻译"
-                    hint="默认只搜索原字幕；开启后另列站点翻译，不会发起在线翻译任务。"
+                    hint="开启后也匹配网站已有的中文字幕译文，不发起翻译任务。"
                     persistent-hint
                     color="primary"
                   />
                 </div>
-              </div>
-            </section>
-            <section class="provider-settings" aria-labelledby="provider-subdl-title">
-              <div class="provider-heading">
-                <h3 id="provider-subdl-title">SubDL</h3>
-                <p>需要 API Key</p>
-              </div>
-              <div class="provider-body">
-                <div class="config-grid">
-                  <VTextField
-                    v-model="localConfig.subdl_api_key"
-                    label="SubDL API Key"
-                    placeholder="粘贴从 SubDL 账户获取的密钥"
-                    type="password"
-                    autocomplete="new-password"
-                    variant="outlined"
-                    density="comfortable"
-                    hide-details
-                  />
-                </div>
-                <p class="provider-note">
-                  <a href="https://subdl.com/panel/api" target="_blank" rel="noopener noreferrer" class="provider-help-link">获取 API Key ↗</a>
-                  <span>注册或登录 SubDL 后，在 API 管理页获取密钥。</span>
-                </p>
-              </div>
-            </section>
-            <section class="provider-settings" aria-labelledby="provider-assrt-title">
-              <div class="provider-heading">
-                <h3 id="provider-assrt-title">射手网（伪） / ASSRT</h3>
-                <p>需要 API Key</p>
-              </div>
-              <div class="provider-body">
-                <div class="config-grid">
-                  <VTextField
-                    v-model="localConfig.assrt_api_key"
-                    label="射手网(伪) API Key"
-                    placeholder="未填写时默认不启用伪射手自动搜索"
-                    variant="outlined"
-                    density="comfortable"
-                    type="password"
-                    autocomplete="new-password"
-                    hide-details
-                  />
-                </div>
-                <div class="config-grid two-column">
-                  <VTextField
-                    v-model="localConfig.assrt_api_url"
-                    label="射手网(伪) API 地址"
-                    placeholder="https://api.assrt.net"
-                    variant="outlined"
-                    density="comfortable"
-                    hide-details
-                  />
-                  <VTextField
-                    v-model="localConfig.assrt_url"
-                    label="射手网(伪) 手动搜索地址"
-                    placeholder="https://2.assrt.net"
-                    variant="outlined"
-                    density="comfortable"
-                    hide-details
-                  />
-                </div>
-              </div>
-            </section>
-            <section class="provider-settings" aria-labelledby="provider-opensubtitles-title">
-              <div class="provider-heading">
-                <h3 id="provider-opensubtitles-title">OpenSubtitles</h3>
-                <p>搜索需要 API Key；下载需账号</p>
-              </div>
-              <div class="provider-body">
-                <div class="config-grid">
-                  <VTextField
-                    v-model="localConfig.opensubtitles_api_key"
-                    label="OpenSubtitles API Key"
-                    placeholder="用于搜索多语言字幕"
-                    variant="outlined"
-                    density="comfortable"
-                    type="password"
-                    autocomplete="new-password"
-                    hide-details
-                  />
-                </div>
-                <div class="config-grid two-column">
-                  <VTextField
-                    v-model="localConfig.opensubtitles_username"
-                    label="OpenSubtitles 用户名（可选）"
-                    placeholder="下载时用于后台登录换取 token"
-                    variant="outlined"
-                    density="comfortable"
-                    autocomplete="username"
-                    hide-details="auto"
-                    :error="localConfig.opensubtitles_username.includes('@')"
-                    :error-messages="localConfig.opensubtitles_username.includes('@') ? '请输入用户名而非邮箱！' : ''"
-                  />
-                  <VTextField
-                    v-model="localConfig.opensubtitles_password"
-                    label="OpenSubtitles 密码（可选）"
-                    placeholder="下载时用于后台登录换取 token"
-                    variant="outlined"
-                    density="comfortable"
-                    type="password"
-                    autocomplete="new-password"
-                    hide-details
-                  />
-                </div>
-                <div class="config-grid two-column">
-                  <VTextField
-                    v-model="localConfig.opensubtitles_api_url"
-                    label="OpenSubtitles API 地址"
-                    placeholder="https://api.opensubtitles.com/api/v1"
-                    variant="outlined"
-                    density="comfortable"
-                    hide-details
-                  />
-                  <VTextField
-                    v-model="localConfig.opensubtitles_url"
-                    label="OpenSubtitles 手动搜索地址"
-                    placeholder="https://www.opensubtitles.com"
-                    variant="outlined"
-                    density="comfortable"
-                    hide-details
-                  />
-                </div>
-                <p class="provider-note">下载时使用用户名和密码登录。下载后的英文字幕，可提交给 AI 字幕生成翻译。</p>
               </div>
             </section>
           </div>
@@ -1049,17 +600,12 @@ onMounted(() => {
   overflow-wrap: anywhere;
 }
 
-.provider-heading p,
-.provider-note {
+.provider-heading p {
   margin: 6px 0 0;
   color: var(--smu-text-muted);
   font-size: 13px;
   line-height: 1.6;
   overflow-wrap: anywhere;
-}
-
-.online-source-help {
-  margin: 0 0 24px;
 }
 
 .provider-body {
@@ -1073,26 +619,6 @@ onMounted(() => {
   align-items: start;
 }
 
-.provider-body .provider-note {
-  margin: -4px 0 0;
-}
-
-.provider-help-link {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
-  margin-right: 12px;
-  color: rgb(var(--v-theme-primary));
-  font-weight: 600;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
-.provider-help-link:focus-visible {
-  outline: 2px solid currentColor;
-  outline-offset: 3px;
-}
-
 @container (max-width: 720px) {
   .provider-settings {
     grid-template-columns: minmax(0, 1fr);
@@ -1102,140 +628,6 @@ onMounted(() => {
   .online-source-settings .config-grid.two-column {
     grid-template-columns: minmax(0, 1fr);
   }
-}
-
-.language-priority-details {
-  border: 1px solid var(--smu-border);
-  border-radius: 6px;
-}
-
-.language-priority-details > summary {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 18px;
-  align-items: center;
-  gap: 12px;
-  min-height: 44px;
-  padding: 8px 12px;
-  border-radius: inherit;
-  cursor: pointer;
-  list-style: none;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.language-priority-details > summary::-webkit-details-marker {
-  display: none;
-}
-
-.language-priority-details > summary:hover {
-  background: rgba(var(--v-theme-on-surface), 0.04);
-}
-
-.language-priority-details > summary:focus-visible {
-  outline: 2px solid currentColor;
-  outline-offset: 2px;
-}
-
-.language-priority-summary {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-}
-
-.language-priority-details[open] .language-priority-chevron {
-  transform: rotate(180deg);
-}
-
-.language-priority-summary-hint {
-  color: var(--smu-text-muted);
-  font-size: 12px;
-  font-weight: 400;
-}
-
-.language-priority-order {
-  display: grid;
-  gap: 8px;
-  padding: 0 12px 12px;
-}
-
-.language-priority-row {
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) 64px;
-  align-items: center;
-  gap: 12px;
-  min-height: 48px;
-}
-
-.language-priority-row.is-drop-target {
-  background: rgba(var(--v-theme-primary), 0.08);
-}
-
-.language-priority-row.is-dragging {
-  opacity: 0.48;
-}
-
-.language-priority-drag-handle {
-  display: grid;
-  width: 28px;
-  height: 36px;
-  place-items: center;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--smu-text-muted);
-  cursor: grab;
-  touch-action: none;
-}
-
-.language-priority-drag-handle:hover {
-  background: rgba(var(--v-theme-on-surface), 0.06);
-  color: var(--smu-text);
-}
-
-.language-priority-drag-handle:active {
-  cursor: grabbing;
-}
-
-.language-priority-drag-handle:focus-visible {
-  outline: 2px solid currentColor;
-  outline-offset: 1px;
-}
-
-.language-priority-name {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.language-priority-row > input.language-priority-rank {
-  box-sizing: border-box;
-  width: 64px;
-  height: 32px;
-  min-height: 0;
-  padding: 0 6px;
-  border: 1px solid var(--smu-border);
-  border-radius: 4px;
-  background: rgb(var(--v-theme-surface));
-  color: var(--smu-text);
-  font: inherit;
-  font-size: 14px;
-  text-align: center;
-}
-
-.language-priority-rank:focus-visible {
-  border-color: rgb(var(--v-theme-primary));
-  outline: 2px solid rgba(var(--v-theme-primary), 0.24);
-  outline-offset: 1px;
-}
-
-.language-priority-rank::-webkit-inner-spin-button,
-.language-priority-rank::-webkit-outer-spin-button {
-  margin: 0;
-  appearance: none;
-}
-
-.language-priority-rank {
-  appearance: textfield;
 }
 
 .config-grid.two-column {

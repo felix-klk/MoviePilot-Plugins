@@ -4,10 +4,6 @@ export const onlineProviderItems = providerCatalog.map(item => ({ title: item.na
 export const defaultOnlineProviderIds = providerCatalog.filter(item => item.default_enabled).map(item => item.id)
 
 export const onlineLanguageItems = [
-  { title: '中英', value: 'chi&eng' },
-  { title: '中日', value: 'chi&jp' },
-  { title: '中韩', value: 'chi&kr' },
-  { title: '其他双语', value: 'other_bilingual' },
   { title: '中文', value: 'chinese' },
   { title: '英文', value: 'english' },
   { title: '日文', value: 'japanese' },
@@ -50,12 +46,12 @@ export function onlineResultLanguageCategory(item) {
   const category = String(item?.language_category || '').toLowerCase()
   if (['chinese', 'english', 'japanese', 'korean', 'other'].includes(category)) return category
   const filter = onlineResultLanguageFilterCategory(item)
-  if (['chi&eng', 'chi&jp', 'chi&kr', 'other_bilingual'].includes(filter)) return 'chinese'
   return filter === 'und' ? 'other' : filter
 }
 
 export function onlineResultLanguageFilterCategory(item) {
   const bucket = item?.language_bucket || 'und'
+  if (['chi&eng', 'chi&jp', 'chi&kr', 'other_bilingual'].includes(bucket)) return 'chinese'
   const category = { chi: 'chinese', cht: 'chinese', eng: 'english', jpn: 'japanese', kor: 'korean' }[bucket] || bucket
   return onlineLanguageItems.some(item => item.value === category) ? category : 'und'
 }

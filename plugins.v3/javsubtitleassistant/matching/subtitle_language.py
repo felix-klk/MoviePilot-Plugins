@@ -378,24 +378,6 @@ def auto_target_has_chinese_subtitle(
     return target_has_chinese_subtitle(target, is_chinese_language_suffix_func=is_chinese_language_suffix_func)
 
 
-def target_satisfies_auto_subtitle_policy(
-    target: Dict[str, Any],
-    required: Optional[List[str]],
-    is_chinese_language_suffix_func: Callable[[Any], bool] = is_chinese_language_suffix,
-) -> bool:
-    subtitles = target.get("subtitles")
-    video_stem = normalize_text(target.get("basename"))
-    if subtitles and video_stem:
-        target = {**target, "subtitles": [
-            item for item in subtitles
-            if isinstance(item, dict)
-            and not subtitle_filename_has_forced_tag(item.get("name") or item.get("path"), video_stem)
-        ]}
-    if required is not None:
-        return target_has_preferred_subtitle(target, required)
-    return target_has_chinese_subtitle(target, is_chinese_language_suffix_func=is_chinese_language_suffix_func)
-
-
 def auto_language_bucket(suffix: Any) -> str:
     parts = [item for item in normalize_language_suffix(suffix).split("&") if item]
     if len(parts) == 2 and sum(item in {"chi", "cht"} for item in parts) == 1:

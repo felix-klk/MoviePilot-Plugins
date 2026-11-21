@@ -5,6 +5,8 @@ import time
 from dataclasses import replace
 from html.parser import HTMLParser
 from typing import Any
+
+from app.log import logger
 from urllib.error import HTTPError
 from urllib.parse import quote, unquote, urljoin, urlparse
 
@@ -137,30 +139,39 @@ class SubtitleCatProvider(BaseSubtitleProvider):
             raise ValueError("SubtitleCat 字幕表格结构变化，无法解析候选链接")
         results = []
         seen = set()
+        jav_targets = [target for target in targets if target.get("jav_number")]
         aliases = _title_aliases({}, targets) or [keyword]
         for href, title, description in parser.rows:
             page_url = self._safe_url(href, search_url, ".html")
             if page_url in seen or not title:
                 continue
             seen.add(page_url)
-            jav_targets = [target for target in targets if target.get("jav_number")]
             if jav_targets:
                 candidate_numbers = set(jav_numbers(title))
-                if not any(target["jav_number"] in candidate_numbers
-                           and release_part(str(target.get("basename") or "")) == release_part(title)
-                           for target in jav_targets):
+                number_targets = [target for target in jav_targets if target["jav_number"] in candidate_numbers]
+                if not number_targets:
                     continue
-                assessment = {"score": 100, "identity_status": "strong",
-                              "relevance_status": "matched", "match_detail": "番号与分段一致"}
+                candidate_part = release_part(title)
+                target_parts = {release_part(str(target.get("basename") or "")) for target in number_targets}
+                exact_part = candidate_part in target_parts
+                if not exact_part and (scope == "auto" or (candidate_part is not None and None not in target_parts)):
+                    continue
+                assessment = {
+                    "score": 100 if exact_part else 50,
+                    "identity_status": "strong" if exact_part else "weak",
+                    "relevance_status": "matched" if exact_part else "possible",
+                    "match_detail": "番号与分段一致" if exact_part else "番号一致，分段需手动确认",
+                }
             else:
                 if not any(_strong_title_matches(alias, title) for alias in aliases):
                     continue
                 assessment = _assess_result_match(title=title, keyword=keyword, targets=targets)
             if assessment["identity_status"] == "failed":
                 continue
-            season, episode = _episode_from_text(title) or (0, 0)
-            # Single SRT files cannot prove season packs or a requested episode from season alone.
-            is_tv = scope in {"episode", "season"} or any(target.get("media_type") == "tv" for target in targets)
+            season, episode = (0, 0) if jav_targets else _episode_from_text(title) or (0, 0)
+            is_tv = not jav_targets and (
+                scope in {"episode", "season"} or any(target.get("media_type") == "tv" for target in targets)
+            )
             if is_tv and not self._matches_episode(season, episode, targets):
                 continue
             original_language = re.search(r"\(\s*translated from\s+([^()]+)\)", description, re.I)
@@ -206,11 +217,19 @@ class SubtitleCatProvider(BaseSubtitleProvider):
     def _translations(self, originals, deadline):
         translated = []
         for original in originals:
-            links = self._detail(original.page_url, deadline)
+            try:
+                links = self._detail(original.page_url, deadline)
+            except ValueError as exc:
+                logger.warning("[JavSubtitleAssistant] 无法检查 SubtitleCat 已有译文：%s", exc)
+                break
             for code, language in (("zh-CN", "简体中文"), ("zh-TW", "繁体中文")):
                 if not links.links.get(code):
                     continue
-                self._translation_url(links.links[code], original.page_url, code)
+                try:
+                    self._translation_url(links.links[code], original.page_url, code)
+                except ValueError as exc:
+                    logger.warning("[JavSubtitleAssistant] 跳过 SubtitleCat 无效译文链接：%s", exc)
+                    continue
                 translated.append(replace(
                     original,
                     result_id=_stable_result_id(self.provider_id, original.page_url + "|" + code),

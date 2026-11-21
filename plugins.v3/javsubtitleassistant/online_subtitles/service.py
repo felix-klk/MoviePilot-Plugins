@@ -4,7 +4,7 @@ from .clients import *  # noqa: F401,F403
 from .language import *  # noqa: F401,F403
 from .matcher import *  # noqa: F401,F403
 from .models import *  # noqa: F401,F403
-from .providers import AssrtProvider, OpenSubtitlesProvider, SubHDProvider, SubtitleCatProvider, SubDLProvider
+from .providers import SubtitleCatProvider
 from .providers.base import BaseSubtitleProvider
 from .catalog import PROVIDER_SPECS, supports_search
 from .shared import *  # noqa: F401,F403
@@ -16,16 +16,8 @@ class OnlineSubtitleSearchService:
         *,
         engine: str = DEFAULT_ENGINE,
         use_proxy: bool = False,
-        subhd_bypass_url: str = "",
         provider_roots: Optional[Dict[str, str]] = None,
-        subdl_api_key: str = "",
         subtitlecat_include_translations: bool = False,
-        assrt_api_key: str = "",
-        assrt_api_url: str = DEFAULT_ASSRT_API_URL,
-        opensubtitles_api_key: str = "",
-        opensubtitles_api_url: str = DEFAULT_OPENSUBTITLES_API_URL,
-        opensubtitles_username: str = "",
-        opensubtitles_password: str = "",
     ):
         self.fetcher = OnlinePageClient(
             engine=engine,
@@ -33,26 +25,11 @@ class OnlineSubtitleSearchService:
             timeout=ONLINE_PAGE_TIMEOUT_SECONDS,
         )
         roots = normalize_provider_roots(provider_roots)
-        # The remote service has its own network namespace and egress. An MP
-        # proxy (especially localhost) is not necessarily reachable from there.
-        subhd_fetcher = OnlinePageClient(use_proxy=False, timeout=60, bypass_url=subhd_bypass_url) if subhd_bypass_url else self.fetcher
         self.providers: Dict[str, BaseSubtitleProvider] = {
-            "subhd": SubHDProvider(subhd_fetcher, root_url=roots["subhd"]),
-            "subtitlecat": SubtitleCatProvider(self.fetcher, root_url=roots["subtitlecat"], include_translations=subtitlecat_include_translations),
-            "subdl": SubDLProvider(self.fetcher, root_url=roots["subdl"], api_key=subdl_api_key),
-            "assrt": AssrtProvider(
+            "subtitlecat": SubtitleCatProvider(
                 self.fetcher,
-                root_url=roots["assrt"],
-                api_key=assrt_api_key,
-                api_url=assrt_api_url,
-            ),
-            "opensubtitles": OpenSubtitlesProvider(
-                self.fetcher,
-                root_url=roots["opensubtitles"],
-                api_key=opensubtitles_api_key,
-                api_url=opensubtitles_api_url,
-                username=opensubtitles_username,
-                password=opensubtitles_password,
+                root_url=roots["subtitlecat"],
+                include_translations=subtitlecat_include_translations,
             ),
         }
         self.manual_providers = self.providers
@@ -104,7 +81,6 @@ class OnlineSubtitleSearchService:
         providers: List[str],
         targets: List[Dict[str, Any]],
         scope: str,
-        manual_keyword: str = "",
     ) -> Dict[str, Any]:
         provider_ids = [item for item in providers if item in self.providers]
         if not provider_ids:
@@ -129,8 +105,7 @@ class OnlineSubtitleSearchService:
                 provider_errors: List[str] = []
                 found: List[OnlineSubtitleResult] = []
                 try:
-                    options = {"manual_keyword": manual_keyword} if provider_id == "subhd" and manual_keyword else {}
-                    found = provider.search_all(keywords, targets, scope, **options)
+                    found = provider.search_all(keywords, targets, scope)
                     results.extend(found)
                 except Exception as exc:
                     message = _compact_error_message(str(exc))

@@ -10,7 +10,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.sdk.logging import logger
 
-from ..config.config_schema import host_from_url, normalize_provider_ids
+from ..config.config_schema import normalize_provider_ids
 from ..online.online_subtitle import CaptchaRequiredError, build_search_keywords
 from ..online_subtitles.matcher import online_search_sort_key
 from ..online_subtitles.models import OnlineSubtitleResult
@@ -95,13 +95,6 @@ class OnlineApi:
         status["enabled_providers"] = owner._online_provider_ids
         status["online_engine"] = owner._online_engine
         status["provider_roots"] = owner._online_site_urls
-        status["assrt_api_configured"] = bool(owner._assrt_api_key)
-        status["assrt_api_host"] = host_from_url(owner._assrt_api_url)
-        status["opensubtitles_api_configured"] = bool(owner._opensubtitles_api_key)
-        status["opensubtitles_api_host"] = host_from_url(owner._opensubtitles_api_url)
-        status["opensubtitles_download_configured"] = bool(
-            owner._opensubtitles_username and owner._opensubtitles_password
-        )
         status["rate_limit_per_minute"] = owner._online_rate_limit_per_minute
         return owner._ok(status)
 
@@ -163,14 +156,12 @@ class OnlineApi:
         owner._check_online_rate_limit(providers)
         scope = owner._normalize_text(body.get("scope")) or "auto"
         service = services.online_subtitles()
-        manual_keyword = owner._normalize_text(body.get("keyword"))
         search_result = await run_in_threadpool(
             service.search,
             keywords=keywords,
             providers=providers,
             targets=targets,
             scope=scope,
-            **({"manual_keyword": manual_keyword} if manual_keyword and "subhd" in providers else {}),
         )
         manual_links = service.manual_links(keywords, providers=providers)
         logger.info(
@@ -218,14 +209,12 @@ class OnlineApi:
         owner._check_online_rate_limit(providers)
         scope = owner._normalize_text(body.get("scope")) or "auto"
         service = services.online_subtitles()
-        manual_keyword = owner._normalize_text(body.get("keyword"))
         search_result = await run_in_threadpool(
             service.search,
             keywords=keywords,
             providers=providers,
             targets=targets,
             scope=scope,
-            **({"manual_keyword": manual_keyword} if manual_keyword and providers[0] == "subhd" else {}),
         )
         logger.info(
             "[JavSubtitleAssistant] 在线字幕单源搜索完成 scope=%s provider=%s targets=%s results=%s",

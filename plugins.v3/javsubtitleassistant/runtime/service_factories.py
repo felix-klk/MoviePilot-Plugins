@@ -283,15 +283,7 @@ def online_service(owner) -> OnlineSubtitleSearchService:
         engine=owner._online_engine,
         use_proxy=owner._online_use_proxy,
         provider_roots=owner._online_site_urls,
-        subhd_bypass_url=owner._subhd_bypass_url,
-        subdl_api_key=owner._subdl_api_key,
         subtitlecat_include_translations=owner._subtitlecat_include_translations,
-        assrt_api_key=owner._assrt_api_key,
-        assrt_api_url=owner._assrt_api_url,
-        opensubtitles_api_key=owner._opensubtitles_api_key,
-        opensubtitles_api_url=owner._opensubtitles_api_url,
-        opensubtitles_username=owner._opensubtitles_username,
-        opensubtitles_password=owner._opensubtitles_password,
     )
 
 

@@ -4,23 +4,17 @@ import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ..online.online_subtitle import (
-    DEFAULT_ASSRT_API_URL,
     DEFAULT_ENGINE,
-    DEFAULT_OPENSUBTITLES_API_URL,
-    DEFAULT_PROVIDER_ROOTS,
     normalize_online_engine,
     normalize_provider_roots,
 )
 from ..matching.subtitle_language import (
     DEFAULT_AUTO_FORMAT_PRIORITY,
-    DEFAULT_AUTO_LANGUAGE_PRIORITY,
-    normalize_auto_format_priority,
-    normalize_auto_language_priority,
 )
 
 from ..online_subtitles.catalog import (
     DEFAULT_ONLINE_PROVIDER_IDS, AVAILABLE_ONLINE_PROVIDER_IDS,
-    MANUAL_ONLINE_PROVIDER_IDS, PROVIDER_CATALOG,
+    PROVIDER_CATALOG,
 )
 
 
@@ -56,8 +50,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "auto_search_on_manual_strm": True,
     "auto_multi_subtitle_mode": "best",
     "auto_subtitle_legacy_ranking": False,
-    "auto_subtitle_language_priority": list(DEFAULT_AUTO_LANGUAGE_PRIORITY),
-    "auto_subtitle_language_strict": False,
+    "auto_subtitle_language_priority": ["chi", "cht"],
+    "auto_subtitle_language_strict": True,
     "auto_subtitle_format_priority": list(DEFAULT_AUTO_FORMAT_PRIORITY),
     "auto_ass_to_srt_for_ai": True,
     "timeline_max_offset_seconds": 120,
@@ -67,18 +61,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "online_providers": ["subtitlecat"],
     "online_engine": DEFAULT_ENGINE,
     "online_use_proxy": False,
-    "subhd_url": DEFAULT_PROVIDER_ROOTS["subhd"],
     "subtitlecat_include_translations": True,
-    "subdl_api_key": "",
-    "subhd_bypass_url": "",
-    "assrt_url": DEFAULT_PROVIDER_ROOTS["assrt"],
-    "assrt_api_key": "",
-    "assrt_api_url": DEFAULT_ASSRT_API_URL,
-    "opensubtitles_url": DEFAULT_PROVIDER_ROOTS["opensubtitles"],
-    "opensubtitles_api_key": "",
-    "opensubtitles_api_url": DEFAULT_OPENSUBTITLES_API_URL,
-    "opensubtitles_username": "",
-    "opensubtitles_password": "",
     "ai_link_enabled": False,
 }
 
@@ -117,18 +100,6 @@ def safe_int(value: Any, default: int = 0) -> int:
         return int(value)
     except Exception:
         return default
-
-
-def normalize_root_url(value: Any, default: str) -> str:
-    url = normalize_text(value).rstrip("/")
-    if re.match(r"^https?://", url, flags=re.I):
-        return url
-    return default
-
-
-def host_from_url(value: Any) -> str:
-    match = re.match(r"^https?://([^/?#]+)", normalize_text(value), flags=re.I)
-    return match.group(1) if match else ""
 
 
 def normalize_timeline_max_offset(value: Any) -> int:
@@ -220,9 +191,7 @@ def build_default_config(
     default_online_provider_ids: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
     config = dict(DEFAULT_CONFIG)
-    config["auto_subtitle_language_priority"] = list(
-        default_auto_language_priority or DEFAULT_AUTO_LANGUAGE_PRIORITY
-    )
+    config["auto_subtitle_language_priority"] = list(DEFAULT_CONFIG["auto_subtitle_language_priority"])
     config["auto_subtitle_format_priority"] = list(default_auto_format_priority or DEFAULT_AUTO_FORMAT_PRIORITY)
     config["online_providers"] = list(default_online_provider_ids or DEFAULT_ONLINE_PROVIDER_IDS)
     return config
@@ -238,12 +207,6 @@ def normalize_plugin_config(
     default_provider_ids: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
     raw_config = config or {}
-    assrt_api_key = normalize_text(raw_config.get("assrt_api_key"))
-    opensubtitles_api_key = normalize_text(raw_config.get("opensubtitles_api_key"))
-    opensubtitles_username = normalize_text(raw_config.get("opensubtitles_username"))
-    if "@" in opensubtitles_username:
-        opensubtitles_username = ""
-
     available_provider_list = list(available_provider_ids or AVAILABLE_ONLINE_PROVIDER_IDS)
     default_provider_list = list(default_provider_ids or DEFAULT_ONLINE_PROVIDER_IDS)
     online_provider_ids = normalize_provider_ids(
@@ -251,15 +214,10 @@ def normalize_plugin_config(
         available_provider_ids=available_provider_list,
         default_provider_ids=default_provider_list,
     )
+    # A previous source selection migrates to SubtitleCat when every selected site was removed.
+    if not online_provider_ids and raw_config.get("online_providers"):
+        online_provider_ids = default_provider_list
     legacy_proxy_default = "online_proxy_migrated" not in raw_config and raw_config.get("online_use_proxy") is True
-    language_priority = normalize_auto_language_priority(
-        raw_config.get("auto_subtitle_language_priority"),
-        list(default_auto_language_priority or DEFAULT_AUTO_LANGUAGE_PRIORITY),
-    )
-    language_strict = bool(raw_config.get("auto_subtitle_language_strict", False))
-    if language_strict and not language_priority:
-        raise ValueError("仅接受所选语言时至少选择一种语言")
-
     emby_libraries = normalize_emby_query_libraries(raw_config.get("emby_query_libraries"))
     emby_servers = raw_config.get("emby_library_servers")
     if not isinstance(emby_servers, list):
@@ -277,18 +235,7 @@ def normalize_plugin_config(
         "online_engine": normalize_online_engine(raw_config.get("online_engine")),
         "online_use_proxy": False if legacy_proxy_default else bool(raw_config.get("online_use_proxy", False)),
         "online_site_urls": normalize_online_site_urls(raw_config),
-        "subdl_api_key": normalize_text(raw_config.get("subdl_api_key")),
-        "subhd_bypass_url": normalize_text(raw_config.get("subhd_bypass_url")).rstrip("/"),
         "subtitlecat_include_translations": bool(raw_config.get("subtitlecat_include_translations", True)),
-        "assrt_api_key": assrt_api_key,
-        "assrt_api_url": normalize_root_url(raw_config.get("assrt_api_url"), DEFAULT_ASSRT_API_URL),
-        "opensubtitles_api_key": opensubtitles_api_key,
-        "opensubtitles_api_url": normalize_root_url(
-            raw_config.get("opensubtitles_api_url"),
-            DEFAULT_OPENSUBTITLES_API_URL,
-        ),
-        "opensubtitles_username": opensubtitles_username,
-        "opensubtitles_password": normalize_text(raw_config.get("opensubtitles_password")),
         "ai_link_enabled": bool(raw_config.get("ai_link_enabled", False)),
         "traditional_to_simplified": bool(raw_config.get("traditional_to_simplified", False)),
         "emby_refresh_after_subtitle_write": bool(raw_config.get("emby_refresh_after_subtitle_write", False)),
@@ -297,24 +244,18 @@ def normalize_plugin_config(
         "emby_library_servers": emby_servers,
         "emby_query_libraries": emby_libraries,
         "emby_subtitle_path_mappings": normalize_text(raw_config.get("emby_subtitle_path_mappings")),
-        "auto_skip_chinese_media_on_transfer": bool(raw_config.get("auto_skip_chinese_media_on_transfer", False)),
-        "auto_transfer_subtitle_strategy": normalize_auto_transfer_subtitle_strategy(
-            raw_config.get("auto_transfer_subtitle_strategy")
-        ),
+        "auto_skip_chinese_media_on_transfer": DEFAULT_CONFIG["auto_skip_chinese_media_on_transfer"],
+        "auto_transfer_subtitle_strategy": DEFAULT_CONFIG["auto_transfer_subtitle_strategy"],
         "trust_transfer_history_paths": bool(raw_config.get("trust_transfer_history_paths", False)),
         "manual_strm_enabled": bool(raw_config.get("manual_strm_enabled", True)),
         "manual_strm_paths": normalize_manual_strm_paths(raw_config.get("manual_strm_paths")),
         "auto_search_on_manual_strm": bool(raw_config.get("auto_search_on_manual_strm", True)),
-        "auto_multi_subtitle_mode": normalize_auto_multi_subtitle_mode(raw_config.get("auto_multi_subtitle_mode")),
-        "auto_subtitle_legacy_ranking": bool(raw_config.get("auto_subtitle_legacy_ranking", False)),
-        "auto_subtitle_language_priority": language_priority,
-        "auto_subtitle_language_strict": language_strict,
-        "auto_subtitle_format_priority": normalize_auto_format_priority(
-            raw_config.get("auto_subtitle_format_priority"),
-            subtitle_exts or DEFAULT_AUTO_FORMAT_PRIORITY,
-            list(default_auto_format_priority or DEFAULT_AUTO_FORMAT_PRIORITY),
-        ),
-        "auto_ass_to_srt_for_ai": bool(raw_config.get("auto_ass_to_srt_for_ai", True)),
+        "auto_multi_subtitle_mode": DEFAULT_CONFIG["auto_multi_subtitle_mode"],
+        "auto_subtitle_legacy_ranking": DEFAULT_CONFIG["auto_subtitle_legacy_ranking"],
+        "auto_subtitle_language_priority": list(DEFAULT_CONFIG["auto_subtitle_language_priority"]),
+        "auto_subtitle_language_strict": DEFAULT_CONFIG["auto_subtitle_language_strict"],
+        "auto_subtitle_format_priority": list(DEFAULT_CONFIG["auto_subtitle_format_priority"]),
+        "auto_ass_to_srt_for_ai": DEFAULT_CONFIG["auto_ass_to_srt_for_ai"],
         "timeline_max_offset_seconds": normalize_timeline_max_offset(raw_config.get("timeline_max_offset_seconds")),
         "timeline_min_offset_seconds": normalize_timeline_min_offset(raw_config.get("timeline_min_offset_seconds")),
         "timeline_vad_mode": normalize_timeline_vad_mode(raw_config.get("timeline_vad_mode")),
@@ -454,16 +395,6 @@ def build_config_form(
                     ),
                     _col(
                         "VSwitch",
-                        {"model": "auto_skip_chinese_media_on_transfer", "label": "入库自动处理跳过中文资源"},
-                        md=6,
-                    ),
-                    _col(
-                        "VSwitch",
-                        {"model": "auto_subtitle_legacy_ranking", "label": "使用 1.2.34 自动字幕排序"},
-                        md=6,
-                    ),
-                    _col(
-                        "VSwitch",
                         {
                             "model": "manual_strm_enabled",
                             "label": "监控本地整理目录",
@@ -476,7 +407,7 @@ def build_config_form(
                         "VTextarea",
                         {
                             "model": "manual_strm_paths",
-                            "label": "额外 STRM 本地目录",
+                            "label": "本地整理目录",
                             "placeholder": "/vol2/1000/raid/2/links2\n/vol1/1000/media-strm",
                             "rows": 3,
                             "autoGrow": True,
@@ -489,22 +420,9 @@ def build_config_form(
                         "VSwitch",
                         {
                             "model": "auto_search_on_manual_strm",
-                            "label": "额外 STRM 实时变化后自动搜索字幕",
-                            "hint": "只处理新增或变更的 STRM，已处理且未变化的文件不会重复搜索。",
+                            "label": "本地视频新增或更新时自动补中文字幕",
+                            "hint": "发现本地视频新增或变化时检查字幕；已有中文就跳过，否则尝试补一份。",
                             "persistentHint": True,
-                        },
-                        md=6,
-                    ),
-                    _col(
-                        "VSelect",
-                        {
-                            "model": "auto_transfer_subtitle_strategy",
-                            "label": "入库后字幕处理策略",
-                            "items": [
-                                {"title": "在线匹配优先，AI 来源兜底", "value": "online_then_ai_source"},
-                                {"title": "只用在线匹配来源", "value": "online_source_only"},
-                                {"title": "只用 AI 来源生成", "value": "ai_source_only"},
-                            ],
                         },
                         md=6,
                     ),
@@ -517,56 +435,6 @@ def build_config_form(
                             "persistentHint": True,
                         },
                         md=6,
-                    ),
-                    _col(
-                        "VSelect",
-                        {
-                            "model": "auto_multi_subtitle_mode",
-                            "label": "自动多字幕处理",
-                            "items": [
-                                {"title": "按偏好选择最佳", "value": "best"},
-                                {"title": "中文/双语全部入库", "value": "chinese_all"},
-                                {"title": "全部入库", "value": "all"},
-                            ],
-                        },
-                        md=4,
-                    ),
-                    _col(
-                        "VTextField",
-                        {
-                            "model": "auto_subtitle_language_priority",
-                            "label": "语言优先级",
-                            "placeholder": "chi&eng,chi&jp,chi&kr,chi,cht,eng",
-                            "hint": "选了双语，已有字幕须满足所选双语之一，否则补充搜索；多选按顺序优先，找不到时不回退单语或 AI。",
-                            "persistentHint": True,
-                        },
-                        md=4,
-                    ),
-                    _col(
-                        "VSwitch",
-                        {
-                            "model": "auto_subtitle_language_strict",
-                            "label": "仅接受所选语言",
-                            "hint": "未选择双语时，开启此项才限制为所选语言；无匹配不回退或提交 AI 翻译。双语要求始终生效。",
-                            "persistentHint": True,
-                        },
-                        md=4,
-                    ),
-                    _col(
-                        "VTextField",
-                        {
-                            "model": "auto_subtitle_format_priority",
-                            "label": "格式优先级",
-                            "placeholder": "ass,srt,ssa,vtt",
-                            "hint": "默认：ASS, SRT, SSA, VTT",
-                            "persistentHint": True,
-                        },
-                        md=4,
-                    ),
-                    _col(
-                        "VSwitch",
-                        {"model": "auto_ass_to_srt_for_ai", "label": "英文 ASS 转临时 SRT 后提交 AI"},
-                        md=4,
                     ),
                 ),
                 _row(
@@ -586,97 +454,8 @@ def build_config_form(
                         {"model": "online_use_proxy", "label": "API 搜索和下载使用 MoviePilot 系统代理（默认关闭）"},
                         md=6,
                     ),
+                    _col("VSwitch", {"model": "subtitlecat_include_translations", "label": "接受 SubtitleCat 已有中文字幕译文"}, md=6),
                 ),
-                _row(
-                    _col(
-                        "VTextField",
-                        {
-                            "model": "subhd_url",
-                            "label": "SubHD 站点地址",
-                            "placeholder": DEFAULT_PROVIDER_ROOTS["subhd"],
-                        },
-                        md=6,
-                    ),
-                    _col("VTextField", {"model": "subhd_bypass_url", "label": "SubHD CF 服务地址", "placeholder": "http://NAS地址:18089", "hint": "使用 CF 服务自身网络，不继承 MP 系统代理；Turnstile 验证需支持 /turnstile", "persistent-hint": True}, md=6),
-                    _col("VTextField", {"model": "subdl_api_key", "label": "SubDL API Key", "type": "password", "placeholder": "填写后在自动字幕源中选择 SubDL"}, md=6),
-                    _col("VSwitch", {"model": "subtitlecat_include_translations", "label": "接受 SubtitleCat 已有中文站点翻译"}, md=6),
-                    _col(
-                        "VTextField",
-                        {
-                            "model": "assrt_url",
-                            "label": "射手网(伪) 站点地址",
-                            "placeholder": DEFAULT_PROVIDER_ROOTS["assrt"],
-                        },
-                        md=6,
-                    ),
-                    _col(
-                        "VTextField",
-                        {
-                            "model": "opensubtitles_url",
-                            "label": "OpenSubtitles 站点地址",
-                            "placeholder": DEFAULT_PROVIDER_ROOTS["opensubtitles"],
-                        },
-                        md=6,
-                    ),
-                    _col(
-                        "VTextField",
-                        {
-                            "model": "assrt_api_url",
-                            "label": "射手网(伪) API 地址",
-                            "placeholder": DEFAULT_ASSRT_API_URL,
-                        },
-                        md=6,
-                    ),
-                    _col(
-                        "VTextField",
-                        {
-                            "model": "assrt_api_key",
-                            "label": "射手网(伪) API Key",
-                            "type": "password",
-                            "placeholder": "未填写时不参与自动搜索",
-                        },
-                        md=6,
-                    ),
-                    _col(
-                        "VTextField",
-                        {
-                            "model": "opensubtitles_api_url",
-                            "label": "OpenSubtitles API 地址",
-                            "placeholder": DEFAULT_OPENSUBTITLES_API_URL,
-                        },
-                        md=6,
-                    ),
-                    _col(
-                        "VTextField",
-                        {
-                            "model": "opensubtitles_api_key",
-                            "label": "OpenSubtitles API Key",
-                            "type": "password",
-                            "placeholder": "未填写时不参与自动搜索",
-                        },
-                        md=6,
-                    ),
-                    _col(
-                        "VTextField",
-                        {
-                            "model": "opensubtitles_username",
-                            "label": "OpenSubtitles 用户名（可选）",
-                            "placeholder": "下载时用于后台登录换取 token",
-                        },
-                        md=6,
-                    ),
-                    _col(
-                        "VTextField",
-                        {
-                            "model": "opensubtitles_password",
-                            "label": "OpenSubtitles 密码（可选）",
-                            "type": "password",
-                            "placeholder": "下载时用于后台登录换取 token",
-                        },
-                        md=6,
-                    ),
-                ),
-                _alert("从 MoviePilot 本地整理记录中搜索已有视频资源；在线字幕搜索支持 SubHD、射手网(伪)、OpenSubtitles、SubtitleCat 和 SubDL。"),
                 _row(
                     _col(
                         "VSelect",

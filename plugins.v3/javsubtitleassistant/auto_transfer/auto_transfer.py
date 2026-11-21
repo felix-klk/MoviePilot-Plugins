@@ -26,7 +26,7 @@ from ..matching.subtitle_language import (
     is_chinese_language_suffix,
     language_profile_from_text,
     required_auto_languages,
-    target_satisfies_auto_subtitle_policy,
+    target_has_chinese_subtitle,
 )
 
 
@@ -383,14 +383,7 @@ class AutoTransferService:
         return self._queue.retry_task(task_id, force_low_confidence=force_low_confidence)
 
     def can_follow_up_bilingual_subtitle(self, entry: Dict[str, Any]) -> bool:
-        owner = self._owner
-        return (
-            entry.get("media_type") == "tv"
-            and owner._safe_int(entry.get("episode"), 0) > 0
-            and required_auto_languages(owner._auto_subtitle_language_priority) is not None
-            and owner._normalize_auto_transfer_subtitle_strategy(owner._auto_transfer_subtitle_strategy) != "ai_source_only"
-            and bool(self.auto_search_providers())
-        )
+        return False
 
     def cancel_bilingual_followup(self, task_id: str) -> bool:
         return self._queue.cancel_bilingual_followup(task_id)
@@ -637,12 +630,8 @@ class AutoTransferService:
         if not target.get("is_stream") and owner._auto_transfer_subtitle_strategy == "ai_source_only":
             return None
 
-        required = required_auto_languages(
-            owner._auto_subtitle_language_priority,
-            strict=owner._auto_subtitle_language_strict,
-        )
-        local_skip = {"status": "skipped", "reason": "目标已有符合语言要求的字幕"}
-        if target_satisfies_auto_subtitle_policy(target, required):
+        local_skip = {"status": "skipped", "reason": "目标已有中文字幕"}
+        if target_has_chinese_subtitle(target):
             return local_skip
         inventory = owner.services.subtitle_inventory()
         local_tracks = inventory.probe_embedded_subtitle_tracks(entry)
@@ -653,7 +642,7 @@ class AutoTransferService:
                 target.get("label"),
                 len(local_tracks),
             )
-            return local_skip if target_satisfies_auto_subtitle_policy(target, required) else None
+            return local_skip if target_has_chinese_subtitle(target) else None
 
         if owner._auto_skip_chinese_media_on_transfer:
             is_chinese, evidence = self._chinese_transfer_media_evidence(entry)
@@ -717,7 +706,7 @@ class AutoTransferService:
                             suffix = tagged_language
 
             subtitle = {"language_suffix": suffix}
-            if suffix != "und" and target_satisfies_auto_subtitle_policy({"subtitles": [subtitle]}, required):
+            if target_has_chinese_subtitle({"subtitles": [subtitle]}):
                 kind = "外挂" if external else "内嵌"
                 label = language_profile_from_text(suffix)["label"]
                 return {"status": "skipped", "reason": f"Emby 已检测到符合要求的{kind}字幕（{label}）"}
@@ -733,13 +722,8 @@ class AutoTransferService:
         pending = []
         for task in tasks:
             if task.get("bilingual_retry_since") is not None:
-                entry = task.get("entry") or {}
-                if not self.can_follow_up_bilingual_subtitle(entry):
-                    owner._update_auto_transfer_task(task["id"], status="skipped", message="当前设置不适用双语补搜")
-                    continue
-                if not owner.services.local_media_catalog().filter_existing_local_entries([entry]):
-                    owner._update_auto_transfer_task(task["id"], status="skipped", message="补搜目标已失效")
-                    continue
+                owner._update_auto_transfer_task(task["id"], status="skipped", message="旧版双语补搜已结束")
+                continue
             pending.append(task)
         if getattr(owner, "_auto_check_emby_subtitles", False):
             tasks, pending = pending, []
@@ -767,7 +751,7 @@ class AutoTransferService:
 
         entries = [
             task["entry"] for task in pending
-            if isinstance(task.get("entry"), dict) and task.get("bilingual_retry_since") is None
+            if isinstance(task.get("entry"), dict)
         ]
         task_ids = [task["id"] for task in pending if task.get("id")]
         is_tv_batch = (
@@ -788,19 +772,11 @@ class AutoTransferService:
             }
         for task in pending:
             entry = task.get("entry") or {}
-            if task.get("bilingual_retry_since") is not None:
-                result = self.auto_process_transfer_entry(entry, queue_rate_limited=True, task_ids=[task["id"]])
-            else:
-                result = results.get(self._auto_task_result_key(entry))
+            result = results.get(self._auto_task_result_key(entry))
             result = result or {
                 "status": "failed",
                 "reason": "入库自动字幕任务没有返回结果",
             }
-            if result.get("needs_online_retry") and self.can_follow_up_bilingual_subtitle(entry):
-                self._queue.defer_bilingual_followup(task, result)
-                self._logger.info("[JavSubtitleAssistant] 已安排双语字幕补搜 target=%s reason=%s",
-                                  task.get("target_label"), result.get("reason"))
-                continue
             status = result.get("status") if result.get("status") in {"completed", "written", "skipped", "failed", "ai_submitted"} else "completed"
             public_status = "completed" if status in {"written", "ai_submitted"} else status
             owner._update_auto_transfer_task(
