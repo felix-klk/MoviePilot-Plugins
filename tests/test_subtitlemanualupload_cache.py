@@ -16,9 +16,9 @@ from pathlib import Path
 import pytest
 
 
-def load_plugin_module(generation="plugins.v2"):
+def load_plugin_module(generation="plugins.v2", plugin_id="SubtitleManualUpload"):
     root = Path(__file__).resolve().parents[1]
-    package_dir = root / generation / "subtitlemanualupload"
+    package_dir = root / generation / plugin_id.lower()
 
     class HTTPException(Exception):
         def __init__(self, status_code=500, detail=""):
@@ -95,7 +95,7 @@ def load_plugin_module(generation="plugins.v2"):
     for name, module in modules.items():
         sys.modules[name] = module
 
-    package_name = "subtitlemanualupload_cache_testpkg"
+    package_name = f"{plugin_id.lower()}_cache_testpkg"
     for name in list(sys.modules):
         if name == package_name or name.startswith(f"{package_name}."):
             sys.modules.pop(name, None)

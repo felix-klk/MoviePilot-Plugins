@@ -1,0 +1,579 @@
+<script setup>
+import { ref } from 'vue'
+
+defineProps({
+  modelValue: { type: Boolean, default: false },
+  mobile: { type: Boolean, default: false },
+  uploadTitle: { type: String, default: '' },
+  error: { type: String, default: '' },
+  hasPreviewItems: { type: Boolean, default: false },
+  allSelectedPreviewTargetsAreStream: { type: Boolean, default: false },
+  hasSelectedPreviewStreamTargets: { type: Boolean, default: false },
+  timelineAvailable: { type: Boolean, default: false },
+  applying: { type: Boolean, default: false },
+  canApply: { type: Boolean, default: false },
+  dragging: { type: Boolean, default: false },
+  preparing: { type: Boolean, default: false },
+  rarPythonAvailable: { type: Boolean, default: false },
+  rarAvailable: { type: Boolean, default: false },
+  archiveStatus: { type: Object, default: () => ({}) },
+  rarDependencyStatus: { type: Object, default: () => ({}) },
+  timelineMissing: { type: String, default: '' },
+  files: { type: Array, default: () => [] },
+  preview: { type: Object, default: null },
+  writeConflict: { type: Object, default: null },
+  canConfirmWrite: { type: Boolean, default: false },
+  batchLanguageSuffix: { type: String, default: '' },
+  targetSelectItems: { type: Array, default: () => [] },
+  uploadTargets: { type: Array, default: () => [] },
+  fixTimeline: { type: Boolean, default: false },
+  formatBytes: { type: Function, required: true },
+  rarDependencyModeLabel: { type: Function, required: true },
+  buildOutputName: { type: Function, required: true },
+})
+
+const emit = defineEmits([
+  'update:modelValue',
+  'update:fixTimeline',
+  'update:batchLanguageSuffix',
+  'reset-upload-preview',
+  'apply-upload',
+  'confirm-write',
+  'back-to-preview',
+  'update-write-choice',
+  'pick-files',
+  'drop',
+  'dragover',
+  'dragleave',
+  'remove-file',
+  'apply-batch-language-suffix',
+  'toggle-preview-item',
+  'update-preview-target',
+  'update-language-suffix',
+  'update-default-subtitle',
+])
+
+const fileInputRef = ref(null)
+const languageSuffixPresets = [
+  'chi', 'chs', 'cht', 'eng', 'jp', 'kr',
+  'chi&eng', 'chs&eng', 'cht&eng',
+  'chi&jp', 'chs&jp', 'cht&jp',
+  'chi&kr', 'cht&kr', 'eng&jp', 'und',
+]
+
+function openFileDialog() {
+  fileInputRef.value?.click()
+}
+
+function updateBatchLanguageSuffix(value) {
+  const suffix = String(value || '').trim()
+  emit('update:batchLanguageSuffix', suffix)
+  if (suffix) emit('apply-batch-language-suffix', suffix)
+}
+
+function onPickFiles(event) {
+  emit('pick-files', event)
+  if (event.target) {
+    event.target.value = ''
+  }
+}
+</script>
+
+<template>
+  <VDialog
+    :model-value="modelValue"
+    :fullscreen="mobile"
+    :scrollable="mobile"
+    max-width="980"
+    @update:model-value="$emit('update:modelValue', $event)"
+  >
+    <VCard
+      class="upload-dialog"
+      :class="{ 'neo-sub-mobile-dialog-card': mobile }"
+      :rounded="mobile ? 0 : 'xl'"
+    >
+      <VCardTitle class="dialog-title">
+        <span>{{ uploadTitle || '上传字幕' }}</span>
+        <VBtn icon="mdi-close" variant="text" @click="$emit('update:modelValue', false)" />
+      </VCardTitle>
+      <VDivider />
+      <VCardActions v-if="!writeConflict" class="dialog-actions dialog-actions-top">
+        <VBtn variant="text" @click="$emit('update:modelValue', false)">关闭</VBtn>
+        <VSpacer />
+        <VBtn
+          v-if="hasPreviewItems"
+          variant="tonal"
+          @click="$emit('reset-upload-preview')"
+        >
+          重新选择文件
+        </VBtn>
+        <VTooltip
+          v-if="hasPreviewItems"
+          location="top"
+          :text="allSelectedPreviewTargetsAreStream ? 'STRM 资源暂不支持智能调轴。' : (hasSelectedPreviewStreamTargets ? 'STRM 目标会跳过调轴，其余本地视频正常处理。' : '写入前会分析视频/字幕时间轴，可能占用 CPU 并造成短暂卡顿。')"
+        >
+          <template #activator="{ props: tooltipProps }">
+            <div
+              v-bind="tooltipProps"
+              class="timeline-action"
+            >
+              <VSwitch
+                :model-value="fixTimeline"
+                color="primary"
+                density="comfortable"
+                hide-details
+                :disabled="!timelineAvailable || allSelectedPreviewTargetsAreStream"
+                :label="hasSelectedPreviewStreamTargets ? '智能调轴（STRM跳过）' : '智能调轴'"
+                @update:model-value="$emit('update:fixTimeline', $event)"
+              />
+            </div>
+          </template>
+        </VTooltip>
+        <VBtn
+          v-if="hasPreviewItems"
+          color="success"
+          :disabled="!canApply"
+          :loading="applying"
+          @click="$emit('apply-upload')"
+        >
+          写入字幕
+        </VBtn>
+      </VCardActions>
+      <VDivider />
+      <VCardText v-if="writeConflict" class="write-conflicts">
+        <VAlert v-if="error" type="error" variant="tonal" class="mb-3" role="alert" :text="error" />
+        <h3>处理已有字幕</h3>
+        <div v-for="row in writeConflict.rows" :key="row.id" class="write-conflict-row">
+          <div class="write-conflict-title">
+            <strong>{{ row.same_names.length ? '完整文件名相同' : '后缀不同' }}</strong>
+            <VChip v-if="row.other_names.length" size="small" color="success" variant="tonal">异名文件保留</VChip>
+          </div>
+          <dl class="write-conflict-paths">
+            <template v-if="row.same_names.length">
+              <dt>同名文件</dt>
+              <dd>{{ row.same_names.join('、') }}</dd>
+            </template>
+            <template v-if="row.other_names.length">
+              <dt>已有异名文件</dt>
+              <dd>{{ row.other_names.join('、') }}</dd>
+            </template>
+            <dt>写入文件</dt>
+            <dd>{{ row.destinations.join('、') }}</dd>
+          </dl>
+          <VRadioGroup
+            :model-value="writeConflict.choices[row.id]"
+            :disabled="applying"
+            :aria-label="`选择 ${row.destinations[0]} 的写入方式`"
+            inline
+            hide-details
+            @update:model-value="value => $emit('update-write-choice', row.id, value)"
+          >
+            <VRadio v-if="row.same_names.length" label="覆盖同名文件" value="overwrite" />
+            <VRadio v-else label="另存新字幕" value="save" />
+            <VRadio label="跳过这条" value="skip" />
+          </VRadioGroup>
+        </div>
+      </VCardText>
+      <VCardText v-else>
+        <VAlert v-if="error" type="error" variant="tonal" class="mb-3" role="alert" :text="error" />
+        <VAlert v-if="preview?.invalid_files?.length" type="warning" variant="tonal" class="mb-3" role="alert">
+          <div>以下文件解析失败，可继续选择已解析的字幕。</div>
+          <div v-for="(file, index) in preview.invalid_files" :key="index" class="preview-file-warning">
+            <strong>{{ file.name }}</strong>
+            <div>{{ file.reason }}</div>
+          </div>
+        </VAlert>
+        <VAlert
+          v-if="preview?.unsupported_files?.length"
+          type="warning"
+          variant="tonal"
+          class="mb-3"
+          role="alert"
+          :text="`已忽略不支持的文件 ${preview.unsupported_files.join('、')}`"
+        />
+        <div
+          v-if="!hasPreviewItems"
+          class="dropzone"
+          :class="{ dragging }"
+          @drop="$emit('drop', $event)"
+          @dragover="$emit('dragover', $event)"
+          @dragleave="$emit('dragleave', $event)"
+        >
+          <div class="dropzone-icon">SRT / ASS / SUP / ZIP / RAR / 7Z</div>
+          <div class="dropzone-title">把字幕或压缩包拖到这里</div>
+          <div class="dropzone-text">
+            支持字幕文件、ZIP、RAR、7Z；RAR / 7Z 默认使用容器内 unar 解压。
+          </div>
+          <VBtn
+            color="primary"
+            variant="flat"
+            :disabled="preparing"
+            :loading="preparing"
+            @click="openFileDialog"
+          >
+            选择文件
+          </VBtn>
+          <input
+            ref="fileInputRef"
+            class="hidden-input"
+            type="file"
+            multiple
+            accept=".srt,.ass,.ssa,.sbv,.sub,.sup,.idx,.vtt,.webvtt,.smi,.sami,.ttml,.dfxp,.zip,.rar,.7z"
+            @change="onPickFiles"
+          >
+        </div>
+
+        <div v-if="!hasPreviewItems" class="support-row">
+          <span :class="{ ok: rarAvailable }">压缩包解压器：{{ rarAvailable ? archiveStatus.rar_tool || 'unar 可用' : '未检测到 unar' }}</span>
+          <span :class="{ ok: rarPythonAvailable }">rarfile：{{ rarPythonAvailable ? '已安装' : '备用依赖未安装' }}</span>
+          <span :class="{ ok: rarDependencyStatus.state === 'ready' }">
+            处理方式：{{ rarDependencyModeLabel(archiveStatus.dependency_mode) }}
+          </span>
+          <span :class="{ ok: timelineAvailable }">
+            智能调轴：{{ timelineAvailable ? '可用' : `缺少 ${timelineMissing || '依赖'}` }}
+          </span>
+        </div>
+
+        <div v-if="!hasPreviewItems && files.length" class="file-list">
+          <div v-for="file in files" :key="`${file.name}-${file.size}`" class="file-row">
+            <div>
+              <strong>{{ file.name }}</strong>
+              <span>{{ formatBytes(file.size) }}</span>
+            </div>
+            <VBtn size="small" variant="text" color="error" @click="$emit('remove-file', file)">移除</VBtn>
+          </div>
+        </div>
+
+        <div v-if="hasPreviewItems" class="preview-list">
+          <div class="preview-head">
+            <div>
+              <div class="section-kicker">NEO字幕大师</div>
+              <h3>确认集数与输出文件名</h3>
+            </div>
+            <div class="batch-language">
+              <VCombobox
+                :model-value="batchLanguageSuffix"
+                :items="languageSuffixPresets"
+                :return-object="false"
+                label="批量语言后缀"
+                clearable
+                variant="outlined"
+                density="comfortable"
+                hide-details
+                @update:model-value="updateBatchLanguageSuffix"
+                @keyup.enter="$emit('apply-batch-language-suffix')"
+              />
+              <VBtn
+                variant="tonal"
+                color="primary"
+                :disabled="!batchLanguageSuffix.trim()"
+                @click="$emit('apply-batch-language-suffix')"
+              >
+                应用到全部
+              </VBtn>
+            </div>
+          </div>
+          <div
+            v-for="item in preview.items"
+            :key="item.upload_id"
+            class="preview-row"
+            :class="{ disabled: item.selected === false }"
+          >
+            <VCheckbox
+              :model-value="item.selected !== false"
+              density="compact"
+              hide-details
+              @update:model-value="value => $emit('toggle-preview-item', item.upload_id, value)"
+            />
+            <div class="subtitle-source">
+              <strong>{{ item.source_name }}</strong>
+              <span>
+                {{ item.archive_name ? `来自 ${item.archive_name} · ` : '' }}{{ item.detected_label || '未知语言' }}
+              </span>
+            </div>
+            <VSelect
+              :model-value="item.target_id"
+              :items="targetSelectItems"
+              label="对应集数"
+              variant="outlined"
+              density="comfortable"
+              hide-details
+              :disabled="item.selected === false"
+              @update:model-value="value => $emit('update-preview-target', item.upload_id, value)"
+            />
+            <VTextField
+              :model-value="item.language_suffix"
+              label="语言后缀"
+              variant="outlined"
+              density="comfortable"
+              hide-details
+              :disabled="item.selected === false"
+              @update:model-value="value => $emit('update-language-suffix', item.upload_id, value)"
+            />
+            <div class="output-name">
+              <span>改名为</span>
+              <strong>{{ item.output_name || buildOutputName(uploadTargets.find(target => target.id === item.target_id), item) || '待选择目标' }}</strong>
+              <VCheckbox
+                :model-value="item.default_subtitle === true"
+                label="设为默认字幕"
+                density="compact"
+                hide-details
+                :disabled="item.selected === false || applying"
+                @update:model-value="value => $emit('update-default-subtitle', item.upload_id, value)"
+              />
+            </div>
+          </div>
+        </div>
+      </VCardText>
+      <VCardActions v-if="writeConflict" class="dialog-actions">
+        <span v-if="writeConflict.ready_count" class="write-ready-count">
+          另有 {{ writeConflict.ready_count }} 条无冲突字幕待写入
+        </span>
+        <VSpacer />
+        <VBtn variant="text" :disabled="applying" @click="$emit('back-to-preview')">返回预览</VBtn>
+        <VBtn color="success" :disabled="!canConfirmWrite" :loading="applying" @click="$emit('confirm-write')">
+          确认写入
+        </VBtn>
+      </VCardActions>
+    </VCard>
+  </VDialog>
+</template>
+
+<style scoped>
+.upload-dialog {
+  background: var(--neo-sub-dialog-bg);
+  color: var(--neo-sub-text);
+  backdrop-filter: blur(16px);
+}
+
+.preview-file-warning {
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+
+.write-conflicts,
+.write-conflict-row {
+  display: grid;
+  gap: 10px;
+}
+
+.write-conflict-row {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--neo-sub-border);
+  border-radius: 14px;
+  background: var(--neo-sub-card-bg);
+}
+
+.write-conflict-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.write-conflict-paths {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 10px;
+}
+
+.write-conflict-paths dt,
+.write-ready-count {
+  color: var(--neo-sub-text-muted);
+}
+
+.write-conflict-paths dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.dialog-actions:has(.write-ready-count) {
+  flex-wrap: wrap;
+}
+
+.dialog-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dialog-title p {
+  margin: 4px 0 0;
+  color: var(--neo-sub-text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.dialog-actions {
+  padding: 12px 18px;
+}
+
+.dialog-actions-top {
+  flex-wrap: wrap;
+  gap: 8px;
+  background: var(--neo-sub-dialog-bar-bg);
+}
+
+.timeline-action {
+  display: flex;
+  align-items: center;
+}
+
+.dropzone {
+  position: relative;
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  padding: 30px 18px;
+  border: 1px dashed var(--neo-sub-border-active);
+  border-radius: 24px;
+  background: var(--neo-sub-card-bg-soft);
+  text-align: center;
+  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.dropzone.dragging {
+  transform: translateY(-1px);
+  border-color: var(--neo-sub-accent);
+  background: var(--neo-sub-card-bg-active);
+}
+
+.dropzone-icon {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--neo-sub-accent);
+  color: var(--neo-sub-accent-text);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.dropzone-title {
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.dropzone-text,
+.support-row,
+.file-row span,
+.subtitle-source span,
+.output-name span {
+  color: var(--neo-sub-text-muted);
+  font-size: 12px;
+}
+
+.hidden-input {
+  display: none;
+}
+
+.support-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.support-row span {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: var(--neo-sub-card-bg-soft);
+}
+
+.support-row span.ok {
+  background: var(--neo-sub-success-soft);
+  color: var(--neo-sub-success-text);
+}
+
+.file-list,
+.preview-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.file-row,
+.preview-row {
+  border: 1px solid var(--neo-sub-border);
+  border-radius: 18px;
+  background: var(--neo-sub-card-bg);
+}
+
+.file-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+}
+
+.file-row div,
+.subtitle-source,
+.output-name {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.preview-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.section-kicker {
+  color: var(--neo-sub-accent);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.batch-language {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: min(100%, 360px);
+}
+
+.preview-row {
+  display: grid;
+  grid-template-columns: auto minmax(160px, 1fr) minmax(210px, 1fr) 116px minmax(180px, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+}
+
+.preview-row.disabled {
+  opacity: 0.58;
+}
+
+.subtitle-source strong,
+.output-name strong {
+  word-break: break-word;
+}
+
+@media (max-width: 900px) {
+  .preview-row {
+    grid-template-columns: 1fr;
+  }
+
+  .preview-head {
+    display: grid;
+  }
+
+  .batch-language {
+    grid-template-columns: 1fr;
+  }
+
+  .dialog-actions-top {
+    align-items: stretch;
+  }
+
+  .dialog-actions-top .v-btn {
+    flex: 1 1 auto;
+  }
+}
+</style>
