@@ -12,12 +12,6 @@
 
 [V2 使用说明](plugins.v2/clouddrivecontrolassistant/README.md) · [V3 使用说明](plugins.v3/clouddrivecontrolassistant/README.md)。
 
-## CloudDrive2助手 NEO(自用版)（旧版）
-
-在 MoviePilot 添加仓库 `https://github.com/felix-klk/MoviePilot-Plugins`，在插件商城搜索 **CloudDrive2助手 NEO(自用版)**。V2 安装 **2.3.1**（MoviePilot 2.10.0+），V3 的 [3.3.1 安装包](https://github.com/felix-klk/MoviePilot-Plugins/releases/tag/Cd2Assistant_v3.3.1) 可从 GitHub 下载。在设置首页分别填写服务器地址和 API 令牌。已保存的令牌留空即可沿用。开启“外网播放传输保护”后，外网视频播放时暂停上传及复制/移动，或使用可调上传上限。默认每 10 秒检查，播放结束后延迟 45 秒恢复。
-
-[V2 使用说明](plugins.v2/cd2assistant/README.md) · [V3 使用说明](plugins.v3/cd2assistant/README.md)。基于 thsrite 的 CloudDrive2助手，播放检测参考 Shurelol / jxxghp 的 speedlimiter。
-
 ## 展示图
 
 ![插件界面](images/plugin-preview.svg)
@@ -35,7 +29,6 @@
 | --- | --- | --- | --- |
 | 海拉鲁字幕大师 | 0.1.101 | 1.2.19 | 字幕搜索、下载、上传、匹配、改名、调轴、入库自动处理 |
 | CloudDrive控制助手 | 2.0.0 | 3.0.0 | 监控网盘与上传异常，支持外网播放保护 |
-| CloudDrive2助手 NEO(自用版) | 2.3.1 | 3.3.1 | 外网播放暂停上传及复制/移动，支持可调上传限速 |
 | AI字幕生成(联动版) | 3.5.63 | 4.0.3 | 音轨识别、字幕提取、AI 翻译、任务队列、联动字幕匹配 |
 
 ## 字幕匹配
