@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 const EMPTY_AUTO_TRANSFER_QUEUE = {
   summary: { total: 0, active: 0, pending: 0, in_progress: 0, completed: 0, skipped: 0, failed: 0 },
@@ -27,7 +27,12 @@ export function useAutoTransferQueue({
   const autoQueueDialog = ref(false)
   const autoQueueMutating = ref(false)
   const autoQueueActionTaskId = ref('')
+  const batchFollowupResult = ref(null)
   let autoQueueTimer = null
+
+  watch(autoQueueDialog, (open) => {
+    if (!open) batchFollowupResult.value = null
+  })
 
   const autoQueueSummary = computed(() => autoTransferQueue.value?.summary || {})
   const autoQueueTasks = computed(() => autoTransferQueue.value?.tasks || [])
@@ -115,17 +120,26 @@ export function useAutoTransferQueue({
     }
   }
 
-  async function changeBilingualFollowup({ targetId, taskId }) {
+  async function changeBilingualFollowup({ targetId, targetIds, taskId, lockedTargetIds = [] }) {
     if (autoQueueMutating.value) return false
+    const batchRequest = Array.isArray(targetIds)
+    const enqueue = batchRequest || Boolean(targetId)
     autoQueueMutating.value = true
     autoQueueActionTaskId.value = taskId || ''
+    if (enqueue) batchFollowupResult.value = null
     error.value = ''
     try {
-      const response = targetId
-        ? await pluginApi.value.enqueueBilingualFollowup({ target_id: targetId })
+      const response = enqueue
+        ? await pluginApi.value.enqueueBilingualFollowup(batchRequest
+          ? { target_ids: targetIds, locked_target_ids: lockedTargetIds }
+          : { target_id: targetId })
         : await pluginApi.value.cancelBilingualFollowup({ task_id: taskId })
-      autoTransferQueue.value = unwrapResponse(response) || autoTransferQueue.value
-      message.value = response?.message || (targetId ? '已加入双语字幕补搜' : '已取消双语字幕补搜')
+      const result = unwrapResponse(response)
+      autoTransferQueue.value = result || autoTransferQueue.value
+      message.value = response?.message || (enqueue ? '已加入双语字幕补搜' : '已取消双语字幕补搜')
+      if (batchRequest && result?.followup_batch) {
+        batchFollowupResult.value = { message: message.value, items: result.followup_batch.items }
+      }
       scheduleAutoQueuePolling()
       return true
     } catch (err) {
@@ -142,6 +156,7 @@ export function useAutoTransferQueue({
     autoQueueDialog,
     autoQueueMutating,
     autoQueueActionTaskId,
+    batchFollowupResult,
     autoQueueSummary,
     autoQueueTasks,
     autoQueueActive,

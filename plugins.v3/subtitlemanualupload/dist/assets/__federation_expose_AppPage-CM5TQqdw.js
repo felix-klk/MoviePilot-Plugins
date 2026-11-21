@@ -27,7 +27,7 @@ function buildAiSummaryText({ aiEnabled, aiAvailable, aiStatus, aiSummary }) {
   return parts.length ? `AI：${parts.join(' / ')}` : `${pluginName}：暂无当前资源任务`
 }
 
-const {computed: computed$e,nextTick: nextTick$1,ref: ref$g} = await importShared('vue');
+const {computed: computed$f,nextTick: nextTick$1,ref: ref$g} = await importShared('vue');
 
 const EMPTY_AI_TASK_DATA = {
   summary: { total: 0, active: 0, pending: 0, in_progress: 0, completed: 0, ignored: 0, no_audio: 0, failed: 0, cancelled: 0 }};
@@ -83,44 +83,44 @@ function useAiTasks({
   const aiTaskData = ref$g(createEmptyAiTaskData());
   let aiTaskTimer = null;
 
-  const aiStatus = computed$e(() => aiTaskData.value.status || status.value?.ai_subtitle || {});
-  const aiEnabled = computed$e(() => aiStatus.value.enabled !== false);
-  const aiAvailable = computed$e(() => aiEnabled.value && aiStatus.value.available === true);
-  const aiSummary = computed$e(() => aiTaskData.value.summary || {});
-  const aiHasActiveTasks = computed$e(() => Number(aiSummary.value.active || 0) > 0);
-  const aiBatchCancelTargets = computed$e(() => batchUploadTargets.value.filter(target => isAiTaskActive(aiTaskForTarget(target))));
-  const aiCapableBatchTargets = computed$e(() => batchUploadTargets.value.filter(target => !isStreamTarget(target)));
-  const aiBatchLabel = computed$e(() => {
+  const aiStatus = computed$f(() => aiTaskData.value.status || status.value?.ai_subtitle || {});
+  const aiEnabled = computed$f(() => aiStatus.value.enabled !== false);
+  const aiAvailable = computed$f(() => aiEnabled.value && aiStatus.value.available === true);
+  const aiSummary = computed$f(() => aiTaskData.value.summary || {});
+  const aiHasActiveTasks = computed$f(() => Number(aiSummary.value.active || 0) > 0);
+  const aiBatchCancelTargets = computed$f(() => batchUploadTargets.value.filter(target => isAiTaskActive(aiTaskForTarget(target))));
+  const aiCapableBatchTargets = computed$f(() => batchUploadTargets.value.filter(target => !isStreamTarget(target)));
+  const aiBatchLabel = computed$f(() => {
     if (selectedMedia.value?.media_type !== 'tv') return 'AI 生成字幕'
     if (selectedTargets.value.length) return `AI 生成选中 ${selectedTargets.value.length} 集`
     return selectedSeason.value === 'all' ? 'AI 生成全部季' : 'AI 生成本季'
   });
-  const aiSummaryText = computed$e(() => buildAiSummaryText({
+  const aiSummaryText = computed$f(() => buildAiSummaryText({
     aiEnabled: aiEnabled.value,
     aiAvailable: aiAvailable.value,
     aiStatus: aiStatus.value,
     aiSummary: aiSummary.value,
   }));
-  const aiDialogTasks = computed$e(() => {
+  const aiDialogTasks = computed$f(() => {
     const targetId = aiTaskDialogTarget.value?.id;
     if (targetId) {
       return (aiTaskData.value.tasks_by_target || {})[targetId] || []
     }
     return aiTaskData.value.tasks || []
   });
-  const aiDialogHasScopeTargets = computed$e(() => aiTaskScopeTargets.value.length > 0);
-  const aiDialogHasExistingTasks = computed$e(() => Boolean(aiDialogTasks.value.length));
-  const aiDialogActiveTasks = computed$e(() => aiDialogTasks.value.filter(task => isAiTaskActive(task)));
-  const aiDialogHasActiveTasks = computed$e(() => aiDialogActiveTasks.value.length > 0);
-  const aiDialogRestartableTasks = computed$e(() => aiDialogTasks.value.filter(task => isAiTaskRestartable(task)));
-  const aiDialogSelectedRestartableTasks = computed$e(() => {
+  const aiDialogHasScopeTargets = computed$f(() => aiTaskScopeTargets.value.length > 0);
+  const aiDialogHasExistingTasks = computed$f(() => Boolean(aiDialogTasks.value.length));
+  const aiDialogActiveTasks = computed$f(() => aiDialogTasks.value.filter(task => isAiTaskActive(task)));
+  const aiDialogHasActiveTasks = computed$f(() => aiDialogActiveTasks.value.length > 0);
+  const aiDialogRestartableTasks = computed$f(() => aiDialogTasks.value.filter(task => isAiTaskRestartable(task)));
+  const aiDialogSelectedRestartableTasks = computed$f(() => {
     const selected = new Set(aiSelectedTaskIds.value);
     return aiDialogRestartableTasks.value.filter(task => selected.has(task.task_id))
   });
-  const aiDialogSelectedAllowedTasks = computed$e(() => aiDialogSelectedRestartableTasks.value.filter(isAiTaskAllowed));
-  const aiDialogActionText = computed$e(() => (aiDialogHasExistingTasks.value ? '重新生成选中' : '生成'));
-  const aiDialogSourceLabel = computed$e(() => (aiDialogHasExistingTasks.value ? '重新生成来源' : '生成来源'));
-  const aiRestartSubtitleOptions = computed$e(() => {
+  const aiDialogSelectedAllowedTasks = computed$f(() => aiDialogSelectedRestartableTasks.value.filter(isAiTaskAllowed));
+  const aiDialogActionText = computed$f(() => (aiDialogHasExistingTasks.value ? '重新生成选中' : '生成'));
+  const aiDialogSourceLabel = computed$f(() => (aiDialogHasExistingTasks.value ? '重新生成来源' : '生成来源'));
+  const aiRestartSubtitleOptions = computed$f(() => {
     const target = aiTaskDialogTarget.value;
     const subtitles = target?.subtitles || [];
     return subtitles
@@ -532,7 +532,7 @@ function useAiTasks({
   }
 }
 
-const {computed: computed$d,ref: ref$f} = await importShared('vue');
+const {computed: computed$e,ref: ref$f,watch} = await importShared('vue');
 
 
 const EMPTY_AUTO_TRANSFER_QUEUE = {
@@ -558,12 +558,17 @@ function useAutoTransferQueue({
   const autoQueueDialog = ref$f(false);
   const autoQueueMutating = ref$f(false);
   const autoQueueActionTaskId = ref$f('');
+  const batchFollowupResult = ref$f(null);
   let autoQueueTimer = null;
 
-  const autoQueueSummary = computed$d(() => autoTransferQueue.value?.summary || {});
-  const autoQueueTasks = computed$d(() => autoTransferQueue.value?.tasks || []);
-  const autoQueueActive = computed$d(() => Number(autoQueueSummary.value.active || 0) > 0);
-  const autoQueueSummaryText = computed$d(() => {
+  watch(autoQueueDialog, (open) => {
+    if (!open) batchFollowupResult.value = null;
+  });
+
+  const autoQueueSummary = computed$e(() => autoTransferQueue.value?.summary || {});
+  const autoQueueTasks = computed$e(() => autoTransferQueue.value?.tasks || []);
+  const autoQueueActive = computed$e(() => Number(autoQueueSummary.value.active || 0) > 0);
+  const autoQueueSummaryText = computed$e(() => {
     const parts = [];
     if (autoQueueSummary.value.in_progress) parts.push(`${autoQueueSummary.value.in_progress} 个处理中`);
     const waiting = Number(autoQueueSummary.value.waiting_bilingual || 0);
@@ -646,17 +651,26 @@ function useAutoTransferQueue({
     }
   }
 
-  async function changeBilingualFollowup({ targetId, taskId }) {
+  async function changeBilingualFollowup({ targetId, targetIds, taskId, lockedTargetIds = [] }) {
     if (autoQueueMutating.value) return false
+    const batchRequest = Array.isArray(targetIds);
+    const enqueue = batchRequest || Boolean(targetId);
     autoQueueMutating.value = true;
     autoQueueActionTaskId.value = taskId || '';
+    if (enqueue) batchFollowupResult.value = null;
     error.value = '';
     try {
-      const response = targetId
-        ? await pluginApi.value.enqueueBilingualFollowup({ target_id: targetId })
+      const response = enqueue
+        ? await pluginApi.value.enqueueBilingualFollowup(batchRequest
+          ? { target_ids: targetIds, locked_target_ids: lockedTargetIds }
+          : { target_id: targetId })
         : await pluginApi.value.cancelBilingualFollowup({ task_id: taskId });
-      autoTransferQueue.value = unwrapResponse(response) || autoTransferQueue.value;
-      message.value = response?.message || (targetId ? '已加入双语字幕补搜' : '已取消双语字幕补搜');
+      const result = unwrapResponse(response);
+      autoTransferQueue.value = result || autoTransferQueue.value;
+      message.value = response?.message || (enqueue ? '已加入双语字幕补搜' : '已取消双语字幕补搜');
+      if (batchRequest && result?.followup_batch) {
+        batchFollowupResult.value = { message: message.value, items: result.followup_batch.items };
+      }
       scheduleAutoQueuePolling();
       return true
     } catch (err) {
@@ -673,6 +687,7 @@ function useAutoTransferQueue({
     autoQueueDialog,
     autoQueueMutating,
     autoQueueActionTaskId,
+    batchFollowupResult,
     autoQueueSummary,
     autoQueueTasks,
     autoQueueActive,
@@ -687,7 +702,7 @@ function useAutoTransferQueue({
   }
 }
 
-const {computed: computed$c,ref: ref$e} = await importShared('vue');
+const {computed: computed$d,ref: ref$e} = await importShared('vue');
 
 
 const MATCH_HISTORY_PAGE_SIZE = 20;
@@ -723,7 +738,7 @@ function useMatchHistory({
   const selectedHistoryTargetIds = ref$e({});
   let historyTimelineTimer = null;
 
-  const matchHistorySummary = computed$c(() => {
+  const matchHistorySummary = computed$d(() => {
     if (matchHistoryRefreshing.value && !matchHistoryTotal.value) return '正在读取匹配历史'
     if (!matchHistoryTotal.value) return '暂无已匹配字幕记录'
     return `${matchHistoryTotal.value} 部资源有外挂字幕记录`
@@ -1237,7 +1252,7 @@ function useMediaSearch({
   }
 }
 
-const {computed: computed$b,nextTick,ref: ref$c} = await importShared('vue');
+const {computed: computed$c,nextTick,ref: ref$c} = await importShared('vue');
 
 const ONLINE_PROVIDER_TIMEOUT_MS = 25000;
 const ONLINE_DOWNLOAD_TIMEOUT_MS = 180000;
@@ -1312,10 +1327,10 @@ function useOnlineSubtitles({
   let onlineSearchSeq = 0;
   let onlineDownloadSeq = 0;
 
-  const hasOnlineResults = computed$b(() => onlineResults.value.length > 0);
+  const hasOnlineResults = computed$c(() => onlineResults.value.length > 0);
   const matchesLanguage = item => onlineLanguageFilter.value === 'all' || onlineResultLanguageFilterCategory(item) === onlineLanguageFilter.value;
   const matchesProvider = item => onlineProviderFilter.value === 'all' || item.provider === onlineProviderFilter.value;
-  const metadataFilteredResults = computed$b(() => {
+  const metadataFilteredResults = computed$c(() => {
     const { days, minimum, type } = onlineResultFilters.value;
     const now = Date.now();
     return onlineResults.value.filter(item => {
@@ -1326,7 +1341,7 @@ function useOnlineSubtitles({
       return uploaded !== null && uploaded <= now && now - uploaded <= Number(days) * DAY_MS
     })
   });
-  const filteredOnlineResults = computed$b(() => {
+  const filteredOnlineResults = computed$c(() => {
     const items = metadataFilteredResults.value.filter(item => matchesLanguage(item) && matchesProvider(item));
     const order = onlineResultFilters.value.order;
     if (order === 'recent') return items.sort((a, b) => compareMetadata(resultUploadTime(a), resultUploadTime(b), -1))
@@ -1336,7 +1351,7 @@ function useOnlineSubtitles({
     }
     return items
   });
-  const onlineLanguageFilterItems = computed$b(() => {
+  const onlineLanguageFilterItems = computed$c(() => {
     const results = metadataFilteredResults.value.filter(matchesProvider);
     const counts = results.reduce((acc, item) => {
       const category = onlineResultLanguageFilterCategory(item);
@@ -1348,7 +1363,7 @@ function useOnlineSubtitles({
       ...onlineLanguageItems.map(item => ({ title: `${item.title} ${counts[item.value] || 0}`, value: item.value })),
     ]
   });
-  const onlineProviderFilterItems = computed$b(() => {
+  const onlineProviderFilterItems = computed$c(() => {
     const results = metadataFilteredResults.value.filter(matchesLanguage);
     const counts = results.reduce((acc, item) => {
       const provider = item.provider || 'unknown';
@@ -1360,14 +1375,14 @@ function useOnlineSubtitles({
       ...onlineProviderItems.map(item => ({ title: `${item.title} ${counts[item.value] || 0}`, value: item.value })),
     ]
   });
-  const selectedOnlineResults = computed$b(() => {
+  const selectedOnlineResults = computed$c(() => {
     const picked = new Set(selectedOnlineResultIds.value);
     return onlineResults.value.filter(item => picked.has(onlineResultKey(item)) && isOnlineResultDownloadable(item))
   });
-  const canSubmitOnlineAiTranslate = computed$b(() => {
+  const canSubmitOnlineAiTranslate = computed$c(() => {
     return aiAvailable.value && selectedOnlineResults.value.length > 0 && selectedOnlineResults.value.every(isForeignOnlineResult)
   });
-  const onlineMessageSummary = computed$b(() => {
+  const onlineMessageSummary = computed$c(() => {
     const messages = onlineMessages.value || [];
     if (!messages.length) return ''
     const warnings = messages.filter(item => item.level !== 'info');
@@ -1380,19 +1395,19 @@ function useOnlineSubtitles({
     const extra = source.length > 3 ? `；另有 ${source.length - 3} 条提示` : '';
     return `${text}${extra}`
   });
-  const onlineMessageType = computed$b(() => {
+  const onlineMessageType = computed$c(() => {
     return (onlineMessages.value || []).some(item => item.level !== 'info') ? 'warning' : 'info'
   });
-  const onlineProviderProgressItems = computed$b(() => onlineSelectedProviders.value.map(provider => ({
+  const onlineProviderProgressItems = computed$c(() => onlineSelectedProviders.value.map(provider => ({
     provider,
     state: onlineProviderProgress.value[provider] || 'idle',
   })));
-  const onlineAiConfirmText = computed$b(() => {
+  const onlineAiConfirmText = computed$c(() => {
     const count = selectedOnlineResults.value.length;
     const targetCount = onlineTargets.value.length;
     return `将把当前范围的 ${targetCount} 个目标提交给 AI字幕生成(联动版)；已选择 ${count} 个外语结果，提交后会关闭在线搜索并打开 AI 状态。`
   });
-  const onlineBatchLabel = computed$b(() => {
+  const onlineBatchLabel = computed$c(() => {
     if (selectedMedia.value?.media_type !== 'tv') return '搜索在线字幕'
     if (selectedTargets.value.length) return `搜索选中 ${selectedTargets.value.length} 集`
     return selectedSeason.value === 'all' ? '搜索全部季字幕包' : '搜索本季字幕包'
@@ -1831,7 +1846,7 @@ function useOnlineSubtitles({
   }
 }
 
-const {computed: computed$a,ref: ref$b} = await importShared('vue');
+const {computed: computed$b,ref: ref$b} = await importShared('vue');
 
 
 const DEFAULT_STATUS = {
@@ -1890,8 +1905,8 @@ function usePluginStatus({
   const refreshing = ref$b(false);
   let indexRefreshTimer = null;
 
-  const indexStatus = computed$a(() => status.value?.index || {});
-  const indexSummary = computed$a(() => {
+  const indexStatus = computed$b(() => status.value?.index || {});
+  const indexSummary = computed$b(() => {
     if (!indexStatus.value.ready) return '媒体库清单尚未缓存'
     const parts = [
       `${indexStatus.value.media_count || 0} 个媒体`,
@@ -1900,18 +1915,18 @@ function usePluginStatus({
     if (indexStatus.value.updated_at) parts.push(`更新于 ${indexStatus.value.updated_at}`);
     return parts.join(' · ')
   });
-  const archiveStatus = computed$a(() => status.value?.archive_support || { zip: true, rar: false, rar_tool: '', rar_python: false });
-  const rarAvailable = computed$a(() => archiveStatus.value.rar === true);
-  const rarPythonAvailable = computed$a(() => archiveStatus.value.rar_python === true);
-  const rarDependencyStatus = computed$a(() => archiveStatus.value.dependency_status || {});
-  const timelineStatus = computed$a(() => status.value?.timeline_fixer || { available: false, modules: {} });
-  const timelineAvailable = computed$a(() => timelineStatus.value.available === true);
-  const timelineConfiguredMaxOffset = computed$a(() => {
+  const archiveStatus = computed$b(() => status.value?.archive_support || { zip: true, rar: false, rar_tool: '', rar_python: false });
+  const rarAvailable = computed$b(() => archiveStatus.value.rar === true);
+  const rarPythonAvailable = computed$b(() => archiveStatus.value.rar_python === true);
+  const rarDependencyStatus = computed$b(() => archiveStatus.value.dependency_status || {});
+  const timelineStatus = computed$b(() => status.value?.timeline_fixer || { available: false, modules: {} });
+  const timelineAvailable = computed$b(() => timelineStatus.value.available === true);
+  const timelineConfiguredMaxOffset = computed$b(() => {
     const value = Number(timelineStatus.value.configured_max_offset_seconds || timelineStatus.value.max_offset_seconds || 120);
     return Number.isFinite(value) && value > 0 ? value : 120
   });
-  const timelineNeedsRiskyConfirm = computed$a(() => timelineConfiguredMaxOffset.value > 120);
-  const timelineMissing = computed$a(() => {
+  const timelineNeedsRiskyConfirm = computed$b(() => timelineConfiguredMaxOffset.value > 120);
+  const timelineMissing = computed$b(() => {
     const missing = [];
     if (timelineStatus.value.ffmpeg === false) missing.push('ffmpeg');
     if (timelineStatus.value.ffprobe === false) missing.push('ffprobe');
@@ -2049,7 +2064,7 @@ function usePluginStatus({
   }
 }
 
-const {computed: computed$9,ref: ref$a} = await importShared('vue');
+const {computed: computed$a,ref: ref$a} = await importShared('vue');
 
 
 function useTargets({
@@ -2074,14 +2089,14 @@ function useTargets({
   const lockedTargetIds = ref$a([]);
   const expandedDetailTargetIds = ref$a([]);
 
-  const visibleTargets = computed$9(() => targets.value || []);
-  const selectedTargets = computed$9(() => {
+  const visibleTargets = computed$a(() => targets.value || []);
+  const selectedTargets = computed$a(() => {
     const picked = new Set(selectedTargetIds.value || []);
     return visibleTargets.value.filter(item => picked.has(item.id))
   });
-  const targetById = computed$9(() => new Map(visibleTargets.value.map(target => [target.id, target])));
-  const unlockedVisibleTargets = computed$9(() => visibleTargets.value.filter(item => !isLocked(item.id) && item.writable !== false));
-  const allVisibleSelected = computed$9(() => {
+  const targetById = computed$a(() => new Map(visibleTargets.value.map(target => [target.id, target])));
+  const unlockedVisibleTargets = computed$a(() => visibleTargets.value.filter(item => !isLocked(item.id) && item.writable !== false));
+  const allVisibleSelected = computed$a(() => {
     if (!visibleTargets.value.length) return false
     const picked = new Set(selectedTargetIds.value || []);
     return visibleTargets.value.every(item => picked.has(item.id))
@@ -2243,7 +2258,7 @@ function useTargets({
   }
 }
 
-const {computed: computed$8,ref: ref$9} = await importShared('vue');
+const {computed: computed$9,ref: ref$9} = await importShared('vue');
 
 
 const EMPTY_TIMELINE_TASK_DATA = {
@@ -2279,7 +2294,7 @@ function useTimelineTasks({
   const timelineTaskData = ref$9(createEmptyTimelineTaskData());
   let timelineTaskTimer = null;
 
-  const selectedTimelineTargets = computed$8(() => selectedSubtitleTargets.value.filter(target => !isStreamTarget(target)));
+  const selectedTimelineTargets = computed$9(() => selectedSubtitleTargets.value.filter(target => !isStreamTarget(target)));
 
   function applyTimelineTaskData(data) {
     timelineTaskData.value = data || timelineTaskData.value;
@@ -2397,7 +2412,7 @@ function useTimelineTasks({
   }
 }
 
-const {computed: computed$7,ref: ref$8} = await importShared('vue');
+const {computed: computed$8,ref: ref$8} = await importShared('vue');
 
 
 function useUploadPreview({
@@ -2435,35 +2450,35 @@ function useUploadPreview({
   const batchLanguageSuffix = ref$8('');
   const lastWritten = ref$8([]);
 
-  const uploadTargets = computed$7(() => uploadScopeTargets.value.filter(item => !isLocked(item.id) && item.writable !== false));
-  const batchUploadTargets = computed$7(() => {
+  const uploadTargets = computed$8(() => uploadScopeTargets.value.filter(item => !isLocked(item.id) && item.writable !== false));
+  const batchUploadTargets = computed$8(() => {
     const base = selectedTargets.value.length ? selectedTargets.value : visibleTargets.value;
     return base.filter(item => !isLocked(item.id) && item.writable !== false)
   });
-  const targetSelectItems = computed$7(() => uploadTargets.value.map(target => ({
+  const targetSelectItems = computed$8(() => uploadTargets.value.map(target => ({
     title: compactTargetName(target),
     value: target.id,
   })));
-  const canPrepare = computed$7(() => uploadTargets.value.length > 0 && files.value.length > 0);
-  const canApply = computed$7(() => {
+  const canPrepare = computed$8(() => uploadTargets.value.length > 0 && files.value.length > 0);
+  const canApply = computed$8(() => {
     const items = selectedPreviewItems.value;
     return items.length > 0 && items.every(item => item.target_id)
   });
-  const hasPreviewItems = computed$7(() => (preview.value?.items || []).length > 0);
-  const selectedPreviewItems = computed$7(() => (preview.value?.items || []).filter(item => item.selected !== false));
-  const selectedPreviewTargets = computed$7(() => {
+  const hasPreviewItems = computed$8(() => (preview.value?.items || []).length > 0);
+  const selectedPreviewItems = computed$8(() => (preview.value?.items || []).filter(item => item.selected !== false));
+  const selectedPreviewTargets = computed$8(() => {
     const targetMap = new Map(uploadTargets.value.map(target => [target.id, target]));
     return selectedPreviewItems.value
       .map(item => targetMap.get(item.target_id))
       .filter(Boolean)
   });
-  const allSelectedPreviewTargetsAreStream = computed$7(() => {
+  const allSelectedPreviewTargetsAreStream = computed$8(() => {
     const items = selectedPreviewTargets.value;
     return items.length > 0 && items.every(isStreamTarget)
   });
-  const hasSelectedPreviewStreamTargets = computed$7(() => selectedPreviewTargets.value.some(isStreamTarget));
-  const timelineEnabledForApply = computed$7(() => fixTimeline.value && timelineAvailable.value && !allSelectedPreviewTargetsAreStream.value);
-  const canConfirmWrite = computed$7(() => {
+  const hasSelectedPreviewStreamTargets = computed$8(() => selectedPreviewTargets.value.some(isStreamTarget));
+  const timelineEnabledForApply = computed$8(() => fixTimeline.value && timelineAvailable.value && !allSelectedPreviewTargetsAreStream.value);
+  const canConfirmWrite = computed$8(() => {
     const conflict = writeConflict.value;
     return Boolean(conflict && (conflict.ready_count || Object.values(conflict.choices).some(action => action !== 'skip')))
   });
@@ -2808,7 +2823,7 @@ const _hoisted_8$9 = {
   class: "empty-state"
 };
 
-const {computed: computed$6} = await importShared('vue');
+const {computed: computed$7} = await importShared('vue');
 
 
 const _sfc_main$e = {
@@ -2856,7 +2871,7 @@ const props = __props;
 
 
 
-const aiStatusDetail = computed$6(() => buildAiStatusDetail(props.aiStatus));
+const aiStatusDetail = computed$7(() => buildAiStatusDetail(props.aiStatus));
 
 return (_ctx, _cache) => {
   const _component_VBtn = _resolveComponent$e("VBtn");
@@ -3059,22 +3074,28 @@ const {createElementVNode:_createElementVNode$c,toDisplayString:_toDisplayString
 
 
 const _hoisted_1$d = { class: "online-title-actions" };
-const _hoisted_2$b = { class: "auto-queue-rates" };
-const _hoisted_3$b = {
-  key: 0,
+const _hoisted_2$b = { role: "status" };
+const _hoisted_3$b = { key: 0 };
+const _hoisted_4$a = { class: "ps-5" };
+const _hoisted_5$9 = { class: "auto-queue-rates" };
+const _hoisted_6$8 = {
+  key: 1,
   class: "auto-queue-list"
 };
-const _hoisted_4$a = { class: "auto-queue-copy" };
-const _hoisted_5$9 = ["title"];
-const _hoisted_6$8 = { key: 0 };
-const _hoisted_7$8 = {
+const _hoisted_7$8 = { class: "auto-queue-copy" };
+const _hoisted_8$8 = ["title"];
+const _hoisted_9$8 = { key: 0 };
+const _hoisted_10$7 = {
   key: 0,
   class: "auto-queue-actions"
 };
-const _hoisted_8$8 = {
-  key: 1,
+const _hoisted_11$6 = {
+  key: 2,
   class: "empty-state compact-empty"
 };
+
+const {computed: computed$6} = await importShared('vue');
+
 
 
 const _sfc_main$d = {
@@ -3087,6 +3108,7 @@ const _sfc_main$d = {
   autoQueueTasks: { type: Array, default: () => [] },
   autoQueueMutating: { type: Boolean, default: false },
   autoQueueActionTaskId: { type: String, default: '' },
+  batchFollowupResult: { type: Object, default: null },
 },
   emits: [
   'update:modelValue',
@@ -3098,7 +3120,18 @@ const _sfc_main$d = {
 ],
   setup(__props) {
 
+const props = __props;
 
+const skippedFollowupItems = computed$6(() => (props.batchFollowupResult?.items || []).filter(item => item.status !== 'queued'));
+const followupReasons = {
+  already_active: '已在队列',
+  recent: '刚处理过',
+  unavailable: '目标已失效或不可用',
+  locked: '目标已锁定',
+  read_only: '目标不可写',
+  ineligible: '目标或当前设置不支持双语补搜',
+  stopped: '自动入库服务已停止',
+};
 
 
 
@@ -3106,6 +3139,7 @@ return (_ctx, _cache) => {
   const _component_VBtn = _resolveComponent$d("VBtn");
   const _component_VCardTitle = _resolveComponent$d("VCardTitle");
   const _component_VDivider = _resolveComponent$d("VDivider");
+  const _component_VAlert = _resolveComponent$d("VAlert");
   const _component_VTooltip = _resolveComponent$d("VTooltip");
   const _component_VCardText = _resolveComponent$d("VCardText");
   const _component_VCard = _resolveComponent$d("VCard");
@@ -3169,22 +3203,48 @@ return (_ctx, _cache) => {
           _createVNode$c(_component_VDivider),
           _createVNode$c(_component_VCardText, null, {
             default: _withCtx$b(() => [
-              _createElementVNode$c("div", _hoisted_2$b, [
+              (__props.batchFollowupResult)
+                ? (_openBlock$d(), _createBlock$d(_component_VAlert, {
+                    key: 0,
+                    type: "info",
+                    variant: "tonal",
+                    density: "compact",
+                    class: "mb-3"
+                  }, {
+                    default: _withCtx$b(() => [
+                      _createElementVNode$c("span", _hoisted_2$b, _toDisplayString$a(__props.batchFollowupResult.message), 1),
+                      (skippedFollowupItems.value.length)
+                        ? (_openBlock$d(), _createElementBlock$d("details", _hoisted_3$b, [
+                            _cache[7] || (_cache[7] = _createElementVNode$c("summary", null, "查看未加入的目标", -1)),
+                            _createElementVNode$c("ul", _hoisted_4$a, [
+                              (_openBlock$d(true), _createElementBlock$d(_Fragment$a, null, _renderList$8(skippedFollowupItems.value, (item) => {
+                                return (_openBlock$d(), _createElementBlock$d("li", {
+                                  key: item.target_id
+                                }, _toDisplayString$a(item.label) + " · " + _toDisplayString$a(followupReasons[item.status] || '未加入'), 1))
+                              }), 128))
+                            ])
+                          ]))
+                        : _createCommentVNode$d("", true)
+                    ]),
+                    _: 1
+                  }))
+                : _createCommentVNode$d("", true),
+              _createElementVNode$c("div", _hoisted_5$9, [
                 (_openBlock$d(true), _createElementBlock$d(_Fragment$a, null, _renderList$8(__props.autoTransferQueue.rate_limits || {}, (rate, provider) => {
                   return (_openBlock$d(), _createElementBlock$d("span", { key: provider }, _toDisplayString$a(provider) + "：" + _toDisplayString$a(rate.remaining) + "/" + _toDisplayString$a(rate.limit_per_minute) + " 可用 ", 1))
                 }), 128))
               ]),
               (__props.autoQueueTasks.length)
-                ? (_openBlock$d(), _createElementBlock$d("div", _hoisted_3$b, [
+                ? (_openBlock$d(), _createElementBlock$d("div", _hoisted_6$8, [
                     (_openBlock$d(true), _createElementBlock$d(_Fragment$a, null, _renderList$8(__props.autoQueueTasks.slice().reverse(), (task) => {
                       return (_openBlock$d(), _createElementBlock$d("div", {
                         key: task.id,
                         class: _normalizeClass$9(["auto-queue-row", `auto-queue-${task.status}`])
                       }, [
-                        _createElementVNode$c("div", _hoisted_4$a, [
+                        _createElementVNode$c("div", _hoisted_7$8, [
                           _createElementVNode$c("strong", {
                             title: task.target_label || task.title || task.id
-                          }, _toDisplayString$a(task.target_label || task.title || task.id), 9, _hoisted_5$9),
+                          }, _toDisplayString$a(task.target_label || task.title || task.id), 9, _hoisted_8$8),
                           _createVNode$c(_component_VTooltip, {
                             location: "top",
                             "max-width": "520",
@@ -3196,11 +3256,11 @@ return (_ctx, _cache) => {
                             _: 2
                           }, 1032, ["text"]),
                           (task.next_run_at)
-                            ? (_openBlock$d(), _createElementBlock$d("small", _hoisted_6$8, "下次 " + _toDisplayString$a(task.next_run_at), 1))
+                            ? (_openBlock$d(), _createElementBlock$d("small", _hoisted_9$8, "下次 " + _toDisplayString$a(task.next_run_at), 1))
                             : _createCommentVNode$d("", true)
                         ]),
                         (task.can_retry)
-                          ? (_openBlock$d(), _createElementBlock$d("div", _hoisted_7$8, [
+                          ? (_openBlock$d(), _createElementBlock$d("div", _hoisted_10$7, [
                               (task.can_force_low_confidence)
                                 ? (_openBlock$d(), _createBlock$d(_component_VBtn, {
                                     key: 0,
@@ -3211,7 +3271,7 @@ return (_ctx, _cache) => {
                                     disabled: __props.autoQueueMutating && __props.autoQueueActionTaskId !== task.id,
                                     onClick: $event => (_ctx.$emit('force-auto-transfer-task', task))
                                   }, {
-                                    default: _withCtx$b(() => [...(_cache[7] || (_cache[7] = [
+                                    default: _withCtx$b(() => [...(_cache[8] || (_cache[8] = [
                                       _createTextVNode$a(" 强制入库 ", -1)
                                     ]))]),
                                     _: 1
@@ -3237,7 +3297,7 @@ return (_ctx, _cache) => {
                                     disabled: __props.autoQueueMutating,
                                     onClick: $event => (_ctx.$emit('cancel-bilingual-followup', task))
                                   }, {
-                                    default: _withCtx$b(() => [...(_cache[8] || (_cache[8] = [
+                                    default: _withCtx$b(() => [...(_cache[9] || (_cache[9] = [
                                       _createTextVNode$a(" 取消补搜 ", -1)
                                     ]))]),
                                     _: 1
@@ -3248,7 +3308,7 @@ return (_ctx, _cache) => {
                       ], 2))
                     }), 128))
                   ]))
-                : (_openBlock$d(), _createElementBlock$d("div", _hoisted_8$8, " 当前没有自动入库任务。 "))
+                : (_openBlock$d(), _createElementBlock$d("div", _hoisted_11$6, " 当前没有自动入库任务。 "))
             ]),
             _: 1
           })
@@ -3262,7 +3322,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const AutoTransferQueueDialog = /*#__PURE__*/_export_sfc(_sfc_main$d, [['__scopeId',"data-v-e4ad9800"]]);
+const AutoTransferQueueDialog = /*#__PURE__*/_export_sfc(_sfc_main$d, [['__scopeId',"data-v-34e6110b"]]);
 
 const {renderList:_renderList$7,Fragment:_Fragment$9,openBlock:_openBlock$c,createElementBlock:_createElementBlock$c,createCommentVNode:_createCommentVNode$c,toDisplayString:_toDisplayString$9,createElementVNode:_createElementVNode$b,resolveComponent:_resolveComponent$c,createVNode:_createVNode$b,createTextVNode:_createTextVNode$9,withCtx:_withCtx$a,createBlock:_createBlock$c} = await importShared('vue');
 
@@ -5181,6 +5241,7 @@ const _sfc_main$6 = {
   aiCancelling: { type: Boolean, default: false },
   onlineSearching: { type: Boolean, default: false },
   onlineBatchLabel: { type: String, default: '' },
+  batchFollowup: { type: Object, default: () => ({ label: '补搜选中', disabled: true, loading: false }) },
   batchUploadTargets: { type: Array, default: () => [] },
   clearing: { type: Boolean, default: false },
   selectedTimelineTargets: { type: Array, default: () => [] },
@@ -5220,6 +5281,7 @@ const _sfc_main$6 = {
   'open-batch-ai-generate',
   'cancel-batch-ai-generate',
   'open-batch-online-search',
+  'enqueue-selected-bilingual-followup',
   'clear-selected-subtitles',
   'fix-selected-detail-timeline',
   'restore-selected-backups',
@@ -5302,7 +5364,7 @@ return (_ctx, _cache) => {
               loading: __props.resolving,
               onClick: _cache[2] || (_cache[2] = $event => (_ctx.$emit('load-targets', __props.selectedMedia, __props.selectedSeason)))
             }, {
-              default: _withCtx$5(() => [...(_cache[12] || (_cache[12] = [
+              default: _withCtx$5(() => [...(_cache[13] || (_cache[13] = [
                 _createTextVNode$4(" 刷新列表 ", -1)
               ]))]),
               _: 1
@@ -5379,7 +5441,7 @@ return (_ctx, _cache) => {
                     loading: __props.aiCancelling,
                     onClick: _cache[7] || (_cache[7] = $event => (_ctx.$emit('cancel-batch-ai-generate')))
                   }, {
-                    default: _withCtx$5(() => [...(_cache[13] || (_cache[13] = [
+                    default: _withCtx$5(() => [...(_cache[14] || (_cache[14] = [
                       _createTextVNode$4(" 取消 AI ", -1)
                     ]))]),
                     _: 1
@@ -5399,14 +5461,30 @@ return (_ctx, _cache) => {
                 ]),
                 _: 1
               }, 8, ["disabled", "loading"]),
+              (__props.selectedMedia.media_type === 'tv')
+                ? (_openBlock$6(), _createBlock$6(_component_VBtn, {
+                    key: 2,
+                    color: "info",
+                    variant: "tonal",
+                    "prepend-icon": "mdi-playlist-plus",
+                    disabled: __props.batchFollowup.disabled,
+                    loading: __props.batchFollowup.loading,
+                    onClick: _cache[9] || (_cache[9] = $event => (_ctx.$emit('enqueue-selected-bilingual-followup')))
+                  }, {
+                    default: _withCtx$5(() => [
+                      _createTextVNode$4(_toDisplayString$4(__props.batchFollowup.label), 1)
+                    ]),
+                    _: 1
+                  }, 8, ["disabled", "loading"]))
+                : _createCommentVNode$6("", true),
               _createVNode$6(_component_VBtn, {
                 color: "error",
                 variant: "tonal",
                 disabled: !__props.selectedTargetIds.length,
                 loading: __props.clearing,
-                onClick: _cache[9] || (_cache[9] = $event => (_ctx.$emit('clear-selected-subtitles')))
+                onClick: _cache[10] || (_cache[10] = $event => (_ctx.$emit('clear-selected-subtitles')))
               }, {
-                default: _withCtx$5(() => [...(_cache[14] || (_cache[14] = [
+                default: _withCtx$5(() => [...(_cache[15] || (_cache[15] = [
                   _createTextVNode$4(" 清空选中外挂字幕 ", -1)
                 ]))]),
                 _: 1
@@ -5417,9 +5495,9 @@ return (_ctx, _cache) => {
                 "prepend-icon": "mdi-timeline-clock",
                 disabled: !__props.selectedTimelineTargets.length || __props.timelineFixing || !__props.timelineAvailable,
                 loading: __props.timelineFixing,
-                onClick: _cache[10] || (_cache[10] = $event => (_ctx.$emit('fix-selected-detail-timeline')))
+                onClick: _cache[11] || (_cache[11] = $event => (_ctx.$emit('fix-selected-detail-timeline')))
               }, {
-                default: _withCtx$5(() => [...(_cache[15] || (_cache[15] = [
+                default: _withCtx$5(() => [...(_cache[16] || (_cache[16] = [
                   _createTextVNode$4(" 批量调轴 ", -1)
                 ]))]),
                 _: 1
@@ -5430,9 +5508,9 @@ return (_ctx, _cache) => {
                 "prepend-icon": "mdi-restore",
                 disabled: !__props.selectedRestorableTargets.length || __props.clearing,
                 loading: __props.clearing,
-                onClick: _cache[11] || (_cache[11] = $event => (_ctx.$emit('restore-selected-backups')))
+                onClick: _cache[12] || (_cache[12] = $event => (_ctx.$emit('restore-selected-backups')))
               }, {
-                default: _withCtx$5(() => [...(_cache[16] || (_cache[16] = [
+                default: _withCtx$5(() => [...(_cache[17] || (_cache[17] = [
                   _createTextVNode$4(" 批量恢复 ", -1)
                 ]))]),
                 _: 1
@@ -5486,7 +5564,7 @@ return (_ctx, _cache) => {
                                   _createVNode$6(_component_VList, { density: "compact" }, {
                                     default: _withCtx$5(() => [
                                       _createVNode$6(_component_VListSubheader, null, {
-                                        default: _withCtx$5(() => [...(_cache[17] || (_cache[17] = [
+                                        default: _withCtx$5(() => [...(_cache[18] || (_cache[18] = [
                                           _createTextVNode$4("已有外挂字幕", -1)
                                         ]))]),
                                         _: 1
@@ -5547,7 +5625,7 @@ return (_ctx, _cache) => {
                         disabled: __props.isTargetActionDisabled(target),
                         onClick: $event => (_ctx.$emit('open-single-upload', target))
                       }, {
-                        default: _withCtx$5(() => [...(_cache[18] || (_cache[18] = [
+                        default: _withCtx$5(() => [...(_cache[19] || (_cache[19] = [
                           _createTextVNode$4(" 单集上传 ", -1)
                         ]))]),
                         _: 1
@@ -5591,7 +5669,7 @@ return (_ctx, _cache) => {
                                           title: subtitle.is_bitmap ? '图片字幕不支持文本调轴' : '调轴',
                                           onClick: _withModifiers$1($event => (_ctx.$emit('fix-history-subtitle-timeline', target, subtitle)), ["stop"])
                                         }, {
-                                          default: _withCtx$5(() => [...(_cache[19] || (_cache[19] = [
+                                          default: _withCtx$5(() => [...(_cache[20] || (_cache[20] = [
                                             _createTextVNode$4(" 调轴 ", -1)
                                           ]))]),
                                           _: 1
@@ -5604,7 +5682,7 @@ return (_ctx, _cache) => {
                                           disabled: !subtitle.backup_available || __props.isTargetActionDisabled(target),
                                           onClick: _withModifiers$1($event => (_ctx.$emit('restore-subtitle-backup', target, subtitle)), ["stop"])
                                         }, {
-                                          default: _withCtx$5(() => [...(_cache[20] || (_cache[20] = [
+                                          default: _withCtx$5(() => [...(_cache[21] || (_cache[21] = [
                                             _createTextVNode$4(" 恢复 ", -1)
                                           ]))]),
                                           _: 1
@@ -5617,7 +5695,7 @@ return (_ctx, _cache) => {
                                           disabled: __props.isTargetActionDisabled(target),
                                           onClick: _withModifiers$1($event => (_ctx.$emit('delete-subtitle', target, subtitle)), ["stop"])
                                         }, {
-                                          default: _withCtx$5(() => [...(_cache[21] || (_cache[21] = [
+                                          default: _withCtx$5(() => [...(_cache[22] || (_cache[22] = [
                                             _createTextVNode$4(" 删除 ", -1)
                                           ]))]),
                                           _: 1
@@ -5635,7 +5713,7 @@ return (_ctx, _cache) => {
               : (_openBlock$6(), _createElementBlock$6("div", _hoisted_24, _toDisplayString$4(__props.resolving ? '正在读取本地视频目标...' : '这个资源没有本地视频文件。'), 1)),
             (__props.lastWritten.length)
               ? (_openBlock$6(), _createElementBlock$6("div", _hoisted_25, [
-                  _cache[22] || (_cache[22] = _createElementVNode$6("div", { class: "section-kicker" }, "写入结果", -1)),
+                  _cache[23] || (_cache[23] = _createElementVNode$6("div", { class: "section-kicker" }, "写入结果", -1)),
                   (_openBlock$6(true), _createElementBlock$6(_Fragment$6, null, _renderList$4(__props.lastWritten, (item) => {
                     return (_openBlock$6(), _createElementBlock$6("div", {
                       key: item.output_path,
@@ -5671,7 +5749,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const TargetDetailPanel = /*#__PURE__*/_export_sfc(_sfc_main$6, [['__scopeId',"data-v-a864aee5"]]);
+const TargetDetailPanel = /*#__PURE__*/_export_sfc(_sfc_main$6, [['__scopeId',"data-v-80f646f3"]]);
 
 const {toDisplayString:_toDisplayString$3,createElementVNode:_createElementVNode$5,resolveComponent:_resolveComponent$5,createVNode:_createVNode$5,withCtx:_withCtx$4,createTextVNode:_createTextVNode$3,openBlock:_openBlock$5,createBlock:_createBlock$5,createCommentVNode:_createCommentVNode$5,mergeProps:_mergeProps$3,renderList:_renderList$3,Fragment:_Fragment$5,createElementBlock:_createElementBlock$5,normalizeClass:_normalizeClass$4,withKeys:_withKeys} = await importShared('vue');
 
@@ -6533,7 +6611,7 @@ return (_ctx, _cache) => {
         title: "返回资源列表",
         onClick: _cache[0] || (_cache[0] = $event => (__props.actions.resetSelection()))
       }),
-      _cache[13] || (_cache[13] = _createElementVNode$3("span", null, "海拉鲁字幕大师(NEO自用版)", -1)),
+      _cache[14] || (_cache[14] = _createElementVNode$3("span", null, "海拉鲁字幕大师(NEO自用版)", -1)),
       _createVNode$3(_component_VBtn, {
         icon: "mdi-refresh",
         variant: "text",
@@ -6592,23 +6670,38 @@ return (_ctx, _cache) => {
         "prepend-icon": "mdi-cloud-search-outline",
         onClick: _cache[4] || (_cache[4] = $event => (__props.actions.openBatchOnlineSearch()))
       }, {
-        default: _withCtx$2(() => [...(_cache[14] || (_cache[14] = [
+        default: _withCtx$2(() => [...(_cache[15] || (_cache[15] = [
           _createTextVNode$1(" 搜索 ", -1)
         ]))]),
         _: 1
       }, 8, ["disabled", "loading"]),
+      (__props.detail.selectedMedia.media_type === 'tv')
+        ? (_openBlock$3(), _createBlock$3(_component_VBtn, {
+            key: 0,
+            color: "info",
+            variant: "tonal",
+            disabled: __props.detail.batchFollowup.disabled,
+            loading: __props.detail.batchFollowup.loading,
+            onClick: _cache[5] || (_cache[5] = $event => (__props.actions.enqueueSelectedBilingualFollowup()))
+          }, {
+            default: _withCtx$2(() => [
+              _createTextVNode$1(_toDisplayString$1(__props.detail.batchFollowup.label), 1)
+            ]),
+            _: 1
+          }, 8, ["disabled", "loading"]))
+        : _createCommentVNode$3("", true),
       _createVNode$3(_component_VBtn, {
         color: "primary",
         variant: "tonal",
         disabled: !__props.detail.unlockedVisibleTargets.length,
-        onClick: _cache[5] || (_cache[5] = $event => (__props.actions.openBatchUpload()))
+        onClick: _cache[6] || (_cache[6] = $event => (__props.actions.openBatchUpload()))
       }, {
         default: _withCtx$2(() => [
           _createVNode$3(_component_VIcon, {
             start: "",
             icon: "mdi-upload-file"
           }),
-          _cache[15] || (_cache[15] = _createTextVNode$1(" 上传 ", -1))
+          _cache[16] || (_cache[16] = _createTextVNode$1(" 上传 ", -1))
         ]),
         _: 1
       }, 8, ["disabled"]),
@@ -6616,12 +6709,12 @@ return (_ctx, _cache) => {
         icon: "mdi-dots-horizontal",
         variant: "tonal",
         title: "更多批量操作",
-        onClick: _cache[6] || (_cache[6] = $event => (bulkActionsOpen.value = true))
+        onClick: _cache[7] || (_cache[7] = $event => (bulkActionsOpen.value = true))
       })
     ]),
     _createElementVNode$3("section", _hoisted_11$1, [
       _createElementVNode$3("div", _hoisted_12$1, [
-        _cache[16] || (_cache[16] = _createElementVNode$3("h2", null, "视频目标", -1)),
+        _cache[17] || (_cache[17] = _createElementVNode$3("h2", null, "视频目标", -1)),
         _createElementVNode$3("span", null, _toDisplayString$1(__props.detail.visibleTargets.length), 1)
       ]),
       (__props.detail.resolving && !__props.detail.visibleTargets.length)
@@ -6631,7 +6724,7 @@ return (_ctx, _cache) => {
               size: "22",
               width: "2"
             }),
-            _cache[17] || (_cache[17] = _createTextVNode$1(" 正在读取本地视频目标 ", -1))
+            _cache[18] || (_cache[18] = _createTextVNode$1(" 正在读取本地视频目标 ", -1))
           ]))
         : (!__props.detail.visibleTargets.length)
           ? (_openBlock$3(), _createElementBlock$3("div", _hoisted_14$1, " 当前资源没有本地可写入的视频文件。 "))
@@ -6646,7 +6739,7 @@ return (_ctx, _cache) => {
     ]),
     (__props.detail.lastWritten.length)
       ? (_openBlock$3(), _createElementBlock$3("section", _hoisted_15$1, [
-          _cache[18] || (_cache[18] = _createElementVNode$3("div", { class: "mobile-target-list-head" }, [
+          _cache[19] || (_cache[19] = _createElementVNode$3("div", { class: "mobile-target-list-head" }, [
             _createElementVNode$3("h2", null, "写入结果")
           ], -1)),
           (_openBlock$3(true), _createElementBlock$3(_Fragment$3, null, _renderList$1(__props.detail.lastWritten, (item) => {
@@ -6663,7 +6756,7 @@ return (_ctx, _cache) => {
       : _createCommentVNode$3("", true),
     _createVNode$3(_component_VBottomSheet, {
       modelValue: bulkActionsOpen.value,
-      "onUpdate:modelValue": _cache[12] || (_cache[12] = $event => ((bulkActionsOpen).value = $event)),
+      "onUpdate:modelValue": _cache[13] || (_cache[13] = $event => ((bulkActionsOpen).value = $event)),
       inset: ""
     }, {
       default: _withCtx$2(() => [
@@ -6673,7 +6766,7 @@ return (_ctx, _cache) => {
         }, {
           default: _withCtx$2(() => [
             _createVNode$3(_component_VCardTitle, null, {
-              default: _withCtx$2(() => [...(_cache[19] || (_cache[19] = [
+              default: _withCtx$2(() => [...(_cache[20] || (_cache[20] = [
                 _createTextVNode$1("更多批量操作", -1)
               ]))]),
               _: 1
@@ -6688,7 +6781,7 @@ return (_ctx, _cache) => {
                       variant: "tonal",
                       disabled: !__props.detail.aiCapableBatchTargets.length || !__props.detail.aiAvailable,
                       loading: __props.detail.aiSubmitting,
-                      onClick: _cache[7] || (_cache[7] = $event => {__props.actions.openBatchAiGenerate(); bulkActionsOpen.value = false;})
+                      onClick: _cache[8] || (_cache[8] = $event => {__props.actions.openBatchAiGenerate(); bulkActionsOpen.value = false;})
                     }, {
                       default: _withCtx$2(() => [
                         _createTextVNode$1(_toDisplayString$1(__props.detail.aiBatchLabel), 1)
@@ -6703,9 +6796,9 @@ return (_ctx, _cache) => {
                       color: "error",
                       variant: "tonal",
                       loading: __props.detail.aiCancelling,
-                      onClick: _cache[8] || (_cache[8] = $event => {__props.actions.cancelBatchAiGenerate(); bulkActionsOpen.value = false;})
+                      onClick: _cache[9] || (_cache[9] = $event => {__props.actions.cancelBatchAiGenerate(); bulkActionsOpen.value = false;})
                     }, {
-                      default: _withCtx$2(() => [...(_cache[20] || (_cache[20] = [
+                      default: _withCtx$2(() => [...(_cache[21] || (_cache[21] = [
                         _createTextVNode$1(" 取消 AI 任务 ", -1)
                       ]))]),
                       _: 1
@@ -6717,9 +6810,9 @@ return (_ctx, _cache) => {
                   variant: "tonal",
                   disabled: !__props.detail.selectedTargetIds.length,
                   loading: __props.detail.clearing,
-                  onClick: _cache[9] || (_cache[9] = $event => {__props.actions.clearSelectedSubtitles(); bulkActionsOpen.value = false;})
+                  onClick: _cache[10] || (_cache[10] = $event => {__props.actions.clearSelectedSubtitles(); bulkActionsOpen.value = false;})
                 }, {
-                  default: _withCtx$2(() => [...(_cache[21] || (_cache[21] = [
+                  default: _withCtx$2(() => [...(_cache[22] || (_cache[22] = [
                     _createTextVNode$1(" 清空选中外挂字幕 ", -1)
                   ]))]),
                   _: 1
@@ -6730,9 +6823,9 @@ return (_ctx, _cache) => {
                   variant: "tonal",
                   disabled: !__props.detail.selectedTimelineTargets.length || __props.detail.timelineFixing || !__props.detail.timelineAvailable,
                   loading: __props.detail.timelineFixing,
-                  onClick: _cache[10] || (_cache[10] = $event => {__props.actions.fixSelectedDetailTimeline(); bulkActionsOpen.value = false;})
+                  onClick: _cache[11] || (_cache[11] = $event => {__props.actions.fixSelectedDetailTimeline(); bulkActionsOpen.value = false;})
                 }, {
-                  default: _withCtx$2(() => [...(_cache[22] || (_cache[22] = [
+                  default: _withCtx$2(() => [...(_cache[23] || (_cache[23] = [
                     _createTextVNode$1(" 批量调轴 ", -1)
                   ]))]),
                   _: 1
@@ -6743,9 +6836,9 @@ return (_ctx, _cache) => {
                   variant: "tonal",
                   disabled: !__props.detail.selectedRestorableTargets.length || __props.detail.clearing,
                   loading: __props.detail.clearing,
-                  onClick: _cache[11] || (_cache[11] = $event => {__props.actions.restoreSelectedBackups(); bulkActionsOpen.value = false;})
+                  onClick: _cache[12] || (_cache[12] = $event => {__props.actions.restoreSelectedBackups(); bulkActionsOpen.value = false;})
                 }, {
-                  default: _withCtx$2(() => [...(_cache[23] || (_cache[23] = [
+                  default: _withCtx$2(() => [...(_cache[24] || (_cache[24] = [
                     _createTextVNode$1(" 恢复调轴前备份 ", -1)
                   ]))]),
                   _: 1
@@ -6764,7 +6857,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const MobileSubtitleDetail = /*#__PURE__*/_export_sfc(_sfc_main$3, [['__scopeId',"data-v-9814102a"]]);
+const MobileSubtitleDetail = /*#__PURE__*/_export_sfc(_sfc_main$3, [['__scopeId',"data-v-8bd7168a"]]);
 
 const {createElementVNode:_createElementVNode$2,toDisplayString:_toDisplayString,normalizeClass:_normalizeClass$1,createTextVNode:_createTextVNode,openBlock:_openBlock$2,createElementBlock:_createElementBlock$2,createCommentVNode:_createCommentVNode$2,resolveComponent:_resolveComponent$2,createVNode:_createVNode$2,renderList:_renderList,Fragment:_Fragment$2,withCtx:_withCtx$1,createBlock:_createBlock$2,withModifiers:_withModifiers} = await importShared('vue');
 
@@ -7306,6 +7399,7 @@ const {
   autoQueueDialog,
   autoQueueMutating,
   autoQueueActionTaskId,
+  batchFollowupResult,
   autoQueueTasks,
   autoQueueSummaryText,
   applyAutoTransferSummary,
@@ -7328,6 +7422,28 @@ async function enqueueBilingualFollowup(targetId) {
     autoQueueDialog.value = true;
   } else {
     onlineError.value = error.value;
+  }
+}
+
+const batchFollowup = computed(() => {
+  const targets = selectedTargets.value;
+  const episodes = new Set(targets.map(target => `${target.season}:${target.episode}`));
+  const unit = episodes.size === targets.length ? '集' : '个视频目标';
+  const eligible = selectedMedia.value?.media_type === 'tv' && targets.some(
+    target => Number(target.episode) > 0 && !isTargetActionDisabled(target),
+  );
+  return {
+    label: targets.length ? `补搜选中 ${targets.length} ${unit}` : '补搜选中',
+    disabled: !eligible || resolving.value || autoQueueMutating.value,
+    loading: autoQueueMutating.value,
+  }
+});
+
+async function enqueueSelectedBilingualFollowup() {
+  if (batchFollowup.value.disabled) return
+  const targetIds = selectedTargets.value.map(target => target.id);
+  if (await changeBilingualFollowup({ targetIds, lockedTargetIds: lockedTargetPayload() })) {
+    autoQueueDialog.value = true;
   }
 }
 
@@ -7861,6 +7977,7 @@ const mobileView = reactive({
     aiCapableBatchTargets,
     onlineSearching,
     onlineBatchLabel,
+    batchFollowup,
     batchUploadTargets,
     unlockedVisibleTargets,
     allVisibleSelected,
@@ -7967,6 +8084,7 @@ const mobileActions = {
     openBatchAiGenerate,
     cancelBatchAiGenerate,
     openBatchOnlineSearch,
+    enqueueSelectedBilingualFollowup,
     clearSelectedSubtitles,
     fixSelectedDetailTimeline,
     restoreSelectedBackups,
@@ -8210,6 +8328,7 @@ return (_ctx, _cache) => {
                   "ai-cancelling": _unref(aiCancelling),
                   "online-searching": _unref(onlineSearching),
                   "online-batch-label": _unref(onlineBatchLabel),
+                  "batch-followup": batchFollowup.value,
                   "batch-upload-targets": _unref(batchUploadTargets),
                   clearing: clearing.value,
                   "selected-timeline-targets": _unref(selectedTimelineTargets),
@@ -8247,6 +8366,7 @@ return (_ctx, _cache) => {
                   onOpenBatchAiGenerate: _unref(openBatchAiGenerate),
                   onCancelBatchAiGenerate: _unref(cancelBatchAiGenerate),
                   onOpenBatchOnlineSearch: _unref(openBatchOnlineSearch),
+                  onEnqueueSelectedBilingualFollowup: enqueueSelectedBilingualFollowup,
                   onClearSelectedSubtitles: clearSelectedSubtitles,
                   onFixSelectedDetailTimeline: _unref(fixSelectedDetailTimeline),
                   onRestoreSelectedBackups: restoreSelectedBackups,
@@ -8259,7 +8379,7 @@ return (_ctx, _cache) => {
                   onFixHistorySubtitleTimeline: _unref(fixHistorySubtitleTimeline),
                   onRestoreSubtitleBackup: restoreSubtitleBackup,
                   onDeleteSubtitle: deleteSubtitle
-                }, null, 8, ["selected-media", "selected-season", "selected-targets", "selected-target-ids", "locked-target-ids", "visible-targets", "season-cards", "resolving", "ai-enabled", "ai-available", "ai-has-active-tasks", "ai-tasks-loading", "ai-summary-text", "ai-status", "all-visible-selected", "unlocked-visible-targets", "ai-capable-batch-targets", "ai-submitting", "ai-batch-label", "ai-batch-cancel-targets", "ai-cancelling", "online-searching", "online-batch-label", "batch-upload-targets", "clearing", "selected-timeline-targets", "timeline-fixing", "timeline-available", "selected-restorable-targets", "last-written", "poster-image-src", "media-label", "format-media-type", "compact-target-name", "format-bytes", "is-locked", "is-target-action-disabled", "is-stream-target", "detail-expanded", "ai-task-for-target", "ai-task-status-class", "ai-task-icon", "ai-task-color", "ai-task-title", "ai-status-text", "timeline-meta-items", "timeline-task-for-target", "timeline-result-text", "onResetSelection", "onMarkPosterFailed", "onLoadTargets", "onChangeSeason", "onOpenAiTaskDialog", "onToggleSelectAll", "onOpenBatchUpload", "onOpenBatchAiGenerate", "onCancelBatchAiGenerate", "onOpenBatchOnlineSearch", "onFixSelectedDetailTimeline", "onToggleTarget", "onToggleDetailExpanded", "onOpenSingleAiGenerate", "onOpenSingleOnlineSearch", "onToggleLock", "onOpenSingleUpload", "onFixHistorySubtitleTimeline"])
+                }, null, 8, ["selected-media", "selected-season", "selected-targets", "selected-target-ids", "locked-target-ids", "visible-targets", "season-cards", "resolving", "ai-enabled", "ai-available", "ai-has-active-tasks", "ai-tasks-loading", "ai-summary-text", "ai-status", "all-visible-selected", "unlocked-visible-targets", "ai-capable-batch-targets", "ai-submitting", "ai-batch-label", "ai-batch-cancel-targets", "ai-cancelling", "online-searching", "online-batch-label", "batch-followup", "batch-upload-targets", "clearing", "selected-timeline-targets", "timeline-fixing", "timeline-available", "selected-restorable-targets", "last-written", "poster-image-src", "media-label", "format-media-type", "compact-target-name", "format-bytes", "is-locked", "is-target-action-disabled", "is-stream-target", "detail-expanded", "ai-task-for-target", "ai-task-status-class", "ai-task-icon", "ai-task-color", "ai-task-title", "ai-status-text", "timeline-meta-items", "timeline-task-for-target", "timeline-result-text", "onResetSelection", "onMarkPosterFailed", "onLoadTargets", "onChangeSeason", "onOpenAiTaskDialog", "onToggleSelectAll", "onOpenBatchUpload", "onOpenBatchAiGenerate", "onCancelBatchAiGenerate", "onOpenBatchOnlineSearch", "onFixSelectedDetailTimeline", "onToggleTarget", "onToggleDetailExpanded", "onOpenSingleAiGenerate", "onOpenSingleOnlineSearch", "onToggleLock", "onOpenSingleUpload", "onFixHistorySubtitleTimeline"])
               ]))
         ])),
     _createVNode(AutoTransferQueueDialog, {
@@ -8271,12 +8391,13 @@ return (_ctx, _cache) => {
       "auto-queue-tasks": _unref(autoQueueTasks),
       "auto-queue-mutating": _unref(autoQueueMutating),
       "auto-queue-action-task-id": _unref(autoQueueActionTaskId),
+      "batch-followup-result": _unref(batchFollowupResult),
       onLoadAutoTransferQueue: _unref(loadAutoTransferQueue),
       onRetryAutoTransferTask: _unref(retryAutoTransferTask),
       onForceAutoTransferTask: _cache[8] || (_cache[8] = task => _unref(retryAutoTransferTask)(task, { forceLowConfidence: true })),
       onCancelBilingualFollowup: _cache[9] || (_cache[9] = task => _unref(changeBilingualFollowup)({ taskId: task.id })),
       onClearAutoTransferHistory: _unref(clearAutoTransferHistory)
-    }, null, 8, ["modelValue", "mobile", "auto-queue-summary-text", "auto-transfer-queue", "auto-queue-tasks", "auto-queue-mutating", "auto-queue-action-task-id", "onLoadAutoTransferQueue", "onRetryAutoTransferTask", "onClearAutoTransferHistory"]),
+    }, null, 8, ["modelValue", "mobile", "auto-queue-summary-text", "auto-transfer-queue", "auto-queue-tasks", "auto-queue-mutating", "auto-queue-action-task-id", "batch-followup-result", "onLoadAutoTransferQueue", "onRetryAutoTransferTask", "onClearAutoTransferHistory"]),
     _createVNode(AiTaskDialog, {
       modelValue: _unref(aiTaskDialog),
       "onUpdate:modelValue": _cache[10] || (_cache[10] = $event => (_isRef(aiTaskDialog) ? (aiTaskDialog).value = $event : null)),
@@ -8428,6 +8549,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-0d319daa"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-8d57e99a"]]);
 
 export { AppPage as default };

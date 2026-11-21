@@ -337,6 +337,9 @@ class AutoTransferService:
     def enqueue_transfer_auto_entries(self, entries: List[Dict[str, Any]]) -> Tuple[int, int]:
         return self._queue.enqueue_entries(entries)
 
+    def enqueue_transfer_auto_entries_with_outcomes(self, entries: List[Dict[str, Any]]) -> List[str]:
+        return self._queue.enqueue_entries_with_outcomes(entries)
+
     def handle_transfer_complete(self, event: Any) -> Dict[str, Any]:
         owner = self._owner
         event_data = getattr(event, "event_data", None) or {}

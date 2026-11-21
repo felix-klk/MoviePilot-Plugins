@@ -164,6 +164,7 @@ const {
   autoQueueDialog,
   autoQueueMutating,
   autoQueueActionTaskId,
+  batchFollowupResult,
   autoQueueTasks,
   autoQueueSummaryText,
   applyAutoTransferSummary,
@@ -186,6 +187,28 @@ async function enqueueBilingualFollowup(targetId) {
     autoQueueDialog.value = true
   } else {
     onlineError.value = error.value
+  }
+}
+
+const batchFollowup = computed(() => {
+  const targets = selectedTargets.value
+  const episodes = new Set(targets.map(target => `${target.season}:${target.episode}`))
+  const unit = episodes.size === targets.length ? '集' : '个视频目标'
+  const eligible = selectedMedia.value?.media_type === 'tv' && targets.some(
+    target => Number(target.episode) > 0 && !isTargetActionDisabled(target),
+  )
+  return {
+    label: targets.length ? `补搜选中 ${targets.length} ${unit}` : '补搜选中',
+    disabled: !eligible || resolving.value || autoQueueMutating.value,
+    loading: autoQueueMutating.value,
+  }
+})
+
+async function enqueueSelectedBilingualFollowup() {
+  if (batchFollowup.value.disabled) return
+  const targetIds = selectedTargets.value.map(target => target.id)
+  if (await changeBilingualFollowup({ targetIds, lockedTargetIds: lockedTargetPayload() })) {
+    autoQueueDialog.value = true
   }
 }
 
@@ -728,6 +751,7 @@ const mobileView = reactive({
     aiCapableBatchTargets,
     onlineSearching,
     onlineBatchLabel,
+    batchFollowup,
     batchUploadTargets,
     unlockedVisibleTargets,
     allVisibleSelected,
@@ -834,6 +858,7 @@ const mobileActions = {
     openBatchAiGenerate,
     cancelBatchAiGenerate,
     openBatchOnlineSearch,
+    enqueueSelectedBilingualFollowup,
     clearSelectedSubtitles,
     fixSelectedDetailTimeline,
     restoreSelectedBackups,
@@ -1058,6 +1083,7 @@ defineExpose({
         :ai-cancelling="aiCancelling"
         :online-searching="onlineSearching"
         :online-batch-label="onlineBatchLabel"
+        :batch-followup="batchFollowup"
         :batch-upload-targets="batchUploadTargets"
         :clearing="clearing"
         :selected-timeline-targets="selectedTimelineTargets"
@@ -1095,6 +1121,7 @@ defineExpose({
         @open-batch-ai-generate="openBatchAiGenerate"
         @cancel-batch-ai-generate="cancelBatchAiGenerate"
         @open-batch-online-search="openBatchOnlineSearch"
+        @enqueue-selected-bilingual-followup="enqueueSelectedBilingualFollowup"
         @clear-selected-subtitles="clearSelectedSubtitles"
         @fix-selected-detail-timeline="fixSelectedDetailTimeline"
         @restore-selected-backups="restoreSelectedBackups"
@@ -1120,6 +1147,7 @@ defineExpose({
       :auto-queue-tasks="autoQueueTasks"
       :auto-queue-mutating="autoQueueMutating"
       :auto-queue-action-task-id="autoQueueActionTaskId"
+      :batch-followup-result="batchFollowupResult"
       @load-auto-transfer-queue="loadAutoTransferQueue"
       @retry-auto-transfer-task="retryAutoTransferTask"
       @force-auto-transfer-task="task => retryAutoTransferTask(task, { forceLowConfidence: true })"

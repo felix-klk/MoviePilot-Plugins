@@ -1,5 +1,7 @@
 <script setup>
-defineProps({
+import { computed } from 'vue'
+
+const props = defineProps({
   modelValue: { type: Boolean, default: false },
   mobile: { type: Boolean, default: false },
   autoQueueSummaryText: { type: String, default: '' },
@@ -7,7 +9,19 @@ defineProps({
   autoQueueTasks: { type: Array, default: () => [] },
   autoQueueMutating: { type: Boolean, default: false },
   autoQueueActionTaskId: { type: String, default: '' },
+  batchFollowupResult: { type: Object, default: null },
 })
+
+const skippedFollowupItems = computed(() => (props.batchFollowupResult?.items || []).filter(item => item.status !== 'queued'))
+const followupReasons = {
+  already_active: '已在队列',
+  recent: '刚处理过',
+  unavailable: '目标已失效或不可用',
+  locked: '目标已锁定',
+  read_only: '目标不可写',
+  ineligible: '目标或当前设置不支持双语补搜',
+  stopped: '自动入库服务已停止',
+}
 
 defineEmits([
   'update:modelValue',
@@ -61,6 +75,17 @@ defineEmits([
       </VCardTitle>
       <VDivider />
       <VCardText>
+        <VAlert v-if="batchFollowupResult" type="info" variant="tonal" density="compact" class="mb-3">
+          <span role="status">{{ batchFollowupResult.message }}</span>
+          <details v-if="skippedFollowupItems.length">
+            <summary>查看未加入的目标</summary>
+            <ul class="ps-5">
+              <li v-for="item in skippedFollowupItems" :key="item.target_id">
+                {{ item.label }} · {{ followupReasons[item.status] || '未加入' }}
+              </li>
+            </ul>
+          </details>
+        </VAlert>
         <div class="auto-queue-rates">
           <span
             v-for="(rate, provider) in autoTransferQueue.rate_limits || {}"

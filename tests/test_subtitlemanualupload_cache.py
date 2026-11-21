@@ -4074,6 +4074,115 @@ def test_v3_bilingual_followup_survives_restart_and_stops_after_matching(tmp_pat
     assert saved["next_run_ts"] == 0
 
 
+def test_v3_batch_followup_only_queues_selected_versions_and_reports_partial_results(
+    tmp_path, durable_auto_transfer_queue, monkeypatch,
+):
+    new_queue, _, state_path, _ = durable_auto_transfer_queue
+    plugin, service, _ = new_queue()
+    plugin._enabled = True
+    plugin._auto_subtitle_language_priority = ["chi&eng"]
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    entries = {
+        name: make_auto_entry(
+            media_dir, filename=f"Show.S01E{episode:02d}.{name}.mkv",
+            id=name, media_type="tv", season=1, episode=episode, writable=name != "read-only",
+        )
+        for name, episode in [
+            ("unselected", 1), ("active", 2), ("1080p", 3), ("2160p", 3),
+            ("locked", 4), ("read-only", 5), ("recent", 6), ("removed-file", 7),
+        ]
+    }
+    entries["movie"] = make_auto_entry(media_dir, id="movie")
+    Path(entries["removed-file"]["path"]).unlink()
+    catalog = plugin.services.local_media_catalog()
+    resolve_calls = []
+
+    def resolve_targets(target_ids):
+        resolve_calls.append(target_ids)
+        return {target_id: entries[target_id] for target_id in target_ids if target_id in entries}
+
+    monkeypatch.setattr(catalog, "resolve_targets", resolve_targets)
+    override_services(plugin, auto_transfer=service, local_media_catalog=catalog)
+    assert service.enqueue_transfer_auto_entries([entries["active"], entries["recent"]]) == (2, 0)
+    active, recent = plugin._auto_transfer_tasks.values()
+    service._queue.defer_bilingual_followup(active, {"reason": "未找到双语"})
+    original_next_run = active["next_run_ts"]
+    service.update_auto_transfer_task(recent["id"], status="completed")
+
+    endpoint = api_endpoint(plugin, "/auto_transfer_queue/followup")
+    payload = {
+        "target_ids": [
+            "active", "1080p", "2160p", "1080p", "locked", "read-only",
+            "missing", "movie", "recent", "removed-file",
+        ],
+        "locked_target_ids": ["locked"],
+    }
+    response = asyncio.run(endpoint(FakeRequest(payload)))
+    assert {item["target_id"]: item["status"] for item in response["data"]["followup_batch"]["items"]} == {
+        "active": "already_active", "1080p": "queued", "2160p": "queued", "locked": "locked",
+        "read-only": "read_only", "missing": "unavailable", "movie": "ineligible",
+        "recent": "recent", "removed-file": "unavailable",
+    }
+    assert response["message"] == "已加入 2 个补搜任务，1 个已在队列，6 个未加入"
+    assert resolve_calls == [list(dict.fromkeys(payload["target_ids"]))]
+    assert active["next_run_ts"] == original_next_run
+    repeated = asyncio.run(endpoint(FakeRequest({"target_ids": ["1080p", "2160p"]})))
+    assert repeated["data"]["followup_batch"]["queued"] == 0
+    assert repeated["data"]["followup_batch"]["already_active"] == 2
+    saved = json.loads(state_path.read_text(encoding="utf-8"))["tasks"]
+    assert {task["entry"]["id"] for task in saved} == {"active", "recent", "1080p", "2160p"}
+
+    single = asyncio.run(endpoint(FakeRequest({"target_id": "unselected"})))
+    assert single["message"] == "已加入双语字幕补搜"
+    assert "followup_batch" not in single["data"]
+
+
+def test_v3_batch_followup_keeps_existing_bilingual_and_retries_missing_episode(
+    tmp_path, durable_auto_transfer_queue, monkeypatch,
+):
+    new_queue, clock, _, _ = durable_auto_transfer_queue
+    plugin, service, _ = new_queue()
+    plugin._enabled = True
+    plugin._auto_check_emby_subtitles = False
+    plugin._auto_skip_chinese_media_on_transfer = False
+    plugin._auto_subtitle_language_priority = ["chi&eng", "chi&jp"]
+    plugin._auto_subtitle_language_strict = False
+    plugin._auto_transfer_queue_debounce_seconds = 0
+    existing, missing = [
+        make_auto_entry(tmp_path, filename=f"Show.S01E{episode:02d}.mkv", media_type="tv", season=1, episode=episode)
+        for episode in (1, 2)
+    ]
+    subtitles = "1\n00:00:01,000 --> 00:00:02,000\n你好\nHello\n"
+    bilingual = Path(existing["path"]).with_suffix(".中英双语.zh-CN.srt")
+    bilingual.write_text(subtitles, encoding="utf-8")
+    Path(missing["path"]).with_suffix(".zh-CN.srt").write_text(subtitles.replace("Hello\n", ""), encoding="utf-8")
+    catalog = plugin.services.local_media_catalog()
+    entries = {entry["id"]: entry for entry in (existing, missing)}
+    monkeypatch.setattr(catalog, "resolve_targets", lambda target_ids: {target_id: entries[target_id] for target_id in target_ids})
+    override_services(plugin, auto_transfer=service, local_media_catalog=catalog)
+    searched = []
+
+    def fake_online_search(entry, target, **kwargs):
+        searched.append(entry["episode"])
+        return {"status": "skipped", "reason": "未找到双语", "needs_online_retry": True}
+
+    monkeypatch.setattr(service, "auto_search_write_subtitle", fake_online_search)
+    response = asyncio.run(api_endpoint(plugin, "/auto_transfer_queue/followup")(
+        FakeRequest({"target_ids": list(entries)}),
+    ))
+    assert response["data"]["followup_batch"]["queued"] == 2
+    batch, _ = service.claim_next_auto_transfer_batch()
+    service.process_transfer_auto_task_batch(batch)
+    tasks = {task["episode"]: task for task in plugin._auto_transfer_tasks.values()}
+    assert searched == [2]
+    assert tasks[1]["status"] == "skipped"
+    assert tasks[1]["message"] == "目标已有符合语言要求的字幕"
+    assert tasks[2]["status"] == "pending"
+    assert tasks[2]["next_run_ts"] == clock.now + 3600
+    assert bilingual.read_text(encoding="utf-8") == subtitles
+
+
 def test_v3_bilingual_followup_can_run_now_or_be_cancelled(tmp_path, durable_auto_transfer_queue):
     new_queue, clock, _, _ = durable_auto_transfer_queue
     plugin, service, _ = new_queue()

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 const require = createRequire(new URL('../plugins.v3/subtitlemanualupload/package.json', import.meta.url))
 const { createServer } = require('vite')
 const vuePlugin = require('@vitejs/plugin-vue')
-const { createSSRApp, h, ref } = require('vue')
+const { createSSRApp, h, nextTick, ref } = require('vue')
 const { renderToString } = require('vue/server-renderer')
 const root = fileURLToPath(new URL('../plugins.v3/subtitlemanualupload', import.meta.url))
 const server = await createServer({
@@ -47,6 +47,45 @@ try {
     }
     console.log(`${variant}: queue entry rendered for empty, pending, completed and failed states`)
   }
+  const { useAutoTransferQueue } = await server.ssrLoadModule('/src/composables/useAutoTransferQueue.js')
+  const { default: QueueDialog } = await server.ssrLoadModule('/src/components/AutoTransferQueueDialog.vue')
+  const items = [
+    { target_id: 'e02', label: 'S04E02', status: 'queued' },
+    { target_id: 'e03', label: 'S04E03', status: 'locked' },
+  ]
+  const requests = []
+  const receipt = '已加入 1 个补搜任务，1 个未加入'
+  const queue = useAutoTransferQueue({
+    pluginApi: ref({
+      enqueueBilingualFollowup: async (payload) => {
+        requests.push(payload)
+        return { message: receipt, data: { followup_batch: { items } } }
+      },
+      autoTransferQueue: async () => ({ data: { summary: {}, tasks: [] } }),
+    }),
+    unwrapResponse: response => response.data,
+    errorMessage: (err, fallback) => `${fallback}: ${err.message}`,
+    error: ref(''),
+    message: ref(''),
+  })
+  assert.equal(await queue.changeBilingualFollowup({ targetIds: ['e02', 'e03'], lockedTargetIds: ['e03'] }), true)
+  assert.deepEqual(requests, [{ target_ids: ['e02', 'e03'], locked_target_ids: ['e03'] }])
+
+  queue.autoQueueDialog.value = true
+  await queue.loadAutoTransferQueue()
+  const app = createSSRApp(QueueDialog, { batchFollowupResult: queue.batchFollowupResult.value })
+  for (const [name, tag] of Object.entries({
+    VDialog: 'section', VCard: 'section', VCardTitle: 'header', VCardText: 'div',
+    VBtn: 'button', VDivider: 'hr', VAlert: 'div', VTooltip: 'span',
+  })) {
+    app.component(name, { setup: (_, { slots }) => () => h(tag, null, slots.default?.()) })
+  }
+  const html = await renderToString(app)
+  assert.ok(html.includes(receipt))
+  assert.match(html, /S04E03.*目标已锁定/)
+  queue.autoQueueDialog.value = false
+  await nextTick()
+  assert.equal(queue.batchFollowupResult.value, null)
 } finally {
   await server.close()
 }

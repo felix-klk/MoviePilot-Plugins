@@ -121,25 +121,27 @@ class AutoTransferQueue:
     def claim_entries(self, entries: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
         owner = self._owner
         now = self._time.time()
-        claimed: List[Dict[str, Any]] = []
-        skipped = 0
         with owner._transfer_auto_lock:
-            owner._transfer_auto_recent = {
-                key: ts
-                for key, ts in (owner._transfer_auto_recent or {}).items()
-                if now - ts < owner._transfer_auto_dedupe_seconds
-            }
-            for entry in entries:
-                key = self.transfer_key(entry)
-                if not key:
-                    claimed.append(entry)
-                    continue
-                if key in owner._transfer_auto_recent:
-                    skipped += 1
-                    continue
-                owner._transfer_auto_recent[key] = now
-                claimed.append(entry)
-        return claimed, skipped
+            self._trim_recent_locked(now)
+            claimed = [entry for entry in entries if self._claim_key_locked(self.transfer_key(entry), now)]
+        return claimed, len(entries) - len(claimed)
+
+    def _trim_recent_locked(self, now: float) -> None:
+        owner = self._owner
+        owner._transfer_auto_recent = {
+            key: ts
+            for key, ts in (owner._transfer_auto_recent or {}).items()
+            if now - ts < owner._transfer_auto_dedupe_seconds
+        }
+
+    def _claim_key_locked(self, key: str, now: float) -> bool:
+        if not key:
+            return True
+        recent = self._owner._transfer_auto_recent
+        if key in recent:
+            return False
+        recent[key] = now
+        return True
 
     def entry_key(self, entry: Dict[str, Any]) -> str:
         owner = self._owner
@@ -177,27 +179,36 @@ class AutoTransferQueue:
             self._save_locked()
 
     def enqueue_entries(self, entries: List[Dict[str, Any]]) -> Tuple[int, int]:
+        outcomes = self.enqueue_entries_with_outcomes(entries)
+        queued = outcomes.count("queued")
+        return queued, len(outcomes) - queued
+
+    def enqueue_entries_with_outcomes(self, entries: List[Dict[str, Any]]) -> List[str]:
+        """Return one result per input in order, with deduplication under the queue lock."""
         owner = self._owner
-        valid_entries = owner.services.local_media_catalog().filter_existing_local_entries(entries)
-        if getattr(owner, "_auto_transfer_stopping", False):
-            return 0, len(valid_entries) + (len(entries or []) - len(valid_entries))
-        claimed, skipped = self.claim_entries(valid_entries)
-        if not claimed:
-            return 0, skipped + (len(entries or []) - len(valid_entries))
-        now = self._time.time()
-        queued = 0
+        valid_ids = {id(entry) for entry in owner.services.local_media_catalog().filter_existing_local_entries(entries)}
+        outcomes: List[str] = []
         with owner._transfer_auto_lock:
-            if owner._auto_transfer_stopping:
-                return 0, len(entries or [])
+            if getattr(owner, "_auto_transfer_stopping", False):
+                return ["stopped"] * len(entries)
+            now = self._time.time()
+            self._trim_recent_locked(now)
             active_keys = {
                 self._target_key(task["entry"])
                 for task in (owner._auto_transfer_tasks or OrderedDict()).values()
                 if task.get("status") in AUTO_TRANSFER_ACTIVE_STATUSES
             }
-            for entry in claimed:
+            for entry in entries:
+                if id(entry) not in valid_ids:
+                    outcomes.append("unavailable")
+                    continue
+                claimed = self._claim_key_locked(self.transfer_key(entry), now)
                 target_key = self._target_key(entry)
                 if target_key in active_keys:
-                    skipped += 1
+                    outcomes.append("already_active")
+                    continue
+                if not claimed:
+                    outcomes.append("recent")
                     continue
                 entry_key = self.entry_key(entry)
                 task_id = owner._hash_text(f"auto-transfer|{entry_key}|{now}")[:16]
@@ -210,13 +221,14 @@ class AutoTransferQueue:
                     safe_int=owner._safe_int,
                 )
                 active_keys.add(target_key)
-                queued += 1
+                outcomes.append("queued")
+            queued = "queued" in outcomes
             if queued:
                 self._save_locked()
                 owner._auto_transfer_wakeup.set()
         if queued and self._ensure_worker:
             self._ensure_worker()
-        return queued, skipped
+        return outcomes
 
     def update_task(self, task_id: str, **updates: Any) -> None:
         owner = self._owner

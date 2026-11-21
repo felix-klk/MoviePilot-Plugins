@@ -26,6 +26,7 @@ defineProps({
   aiCancelling: { type: Boolean, default: false },
   onlineSearching: { type: Boolean, default: false },
   onlineBatchLabel: { type: String, default: '' },
+  batchFollowup: { type: Object, default: () => ({ label: '补搜选中', disabled: true, loading: false }) },
   batchUploadTargets: { type: Array, default: () => [] },
   clearing: { type: Boolean, default: false },
   selectedTimelineTargets: { type: Array, default: () => [] },
@@ -66,6 +67,7 @@ defineEmits([
   'open-batch-ai-generate',
   'cancel-batch-ai-generate',
   'open-batch-online-search',
+  'enqueue-selected-bilingual-followup',
   'clear-selected-subtitles',
   'fix-selected-detail-timeline',
   'restore-selected-backups',
@@ -191,6 +193,17 @@ defineExpose({
             @click="$emit('open-batch-online-search')"
           >
             {{ onlineBatchLabel }}
+          </VBtn>
+          <VBtn
+            v-if="selectedMedia.media_type === 'tv'"
+            color="info"
+            variant="tonal"
+            prepend-icon="mdi-playlist-plus"
+            :disabled="batchFollowup.disabled"
+            :loading="batchFollowup.loading"
+            @click="$emit('enqueue-selected-bilingual-followup')"
+          >
+            {{ batchFollowup.label }}
           </VBtn>
           <VBtn
             color="error"

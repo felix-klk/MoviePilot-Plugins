@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from asyncio import to_thread
 from pathlib import Path
 from typing import Any, Dict
 
@@ -127,6 +128,8 @@ class StatusApi:
     async def enqueue_bilingual_followup(self, request: Request) -> Dict[str, Any]:
         owner = self.owner
         body = await request.json()
+        if isinstance(body, dict) and "target_ids" in body:
+            return await to_thread(self._enqueue_bilingual_followup_batch, body)
         target_id = owner._normalize_text(body.get("target_id")) if isinstance(body, dict) else ""
         if not target_id:
             raise HTTPException(status_code=400, detail="缺少剧集目标 ID")
@@ -140,6 +143,60 @@ class StatusApi:
         if not queued:
             raise HTTPException(status_code=409, detail="已在队列中、刚处理过或目标不可用")
         return owner._ok(service.auto_transfer_queue_snapshot(limit=200), message="已加入双语字幕补搜")
+
+    def _enqueue_bilingual_followup_batch(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        owner = self.owner
+        raw_ids = body["target_ids"]
+        if not isinstance(raw_ids, list) or not raw_ids or any(
+            not isinstance(target_id, str) or not target_id.strip() for target_id in raw_ids
+        ):
+            raise HTTPException(status_code=400, detail="请勾选需要补搜的剧集目标")
+        target_ids = list(dict.fromkeys(target_id.strip() for target_id in raw_ids))
+        raw_locked_ids = body.get("locked_target_ids", [])
+        if not isinstance(raw_locked_ids, list) or any(not isinstance(item, str) for item in raw_locked_ids):
+            raise HTTPException(status_code=400, detail="锁定目标列表格式无效")
+        locked_ids = {item.strip() for item in raw_locked_ids}
+        if not owner.get_state():
+            raise HTTPException(status_code=422, detail="请先启用字幕插件")
+        service = owner.services.auto_transfer()
+        entries = owner.services.local_media_catalog().resolve_targets(target_ids)
+        results = []
+        pending = []
+        for target_id in target_ids:
+            entry = entries.get(target_id)
+            result = {"target_id": target_id, "label": (entry or {}).get("target_label") or target_id}
+            results.append(result)
+            if target_id in locked_ids:
+                result["status"] = "locked"
+            elif not entry:
+                result["status"] = "unavailable"
+            elif entry.get("writable") is False:
+                result["status"] = "read_only"
+            elif not service.can_follow_up_bilingual_subtitle(entry):
+                result["status"] = "ineligible"
+            else:
+                pending.append((entry, result))
+
+        if pending:
+            outcomes = service.enqueue_transfer_auto_entries_with_outcomes([entry for entry, _ in pending])
+            for (_, result), outcome in zip(pending, outcomes, strict=True):
+                result["status"] = outcome
+
+        queued = sum(result["status"] == "queued" for result in results)
+        already_active = sum(result["status"] == "already_active" for result in results)
+        skipped = len(results) - queued - already_active
+        parts = [f"已加入 {queued} 个补搜任务"]
+        if already_active:
+            parts.append(f"{already_active} 个已在队列")
+        if skipped:
+            parts.append(f"{skipped} 个未加入")
+        return owner._ok(
+            {
+                **service.auto_transfer_queue_snapshot(limit=200),
+                "followup_batch": {"queued": queued, "already_active": already_active, "skipped": skipped, "items": results},
+            },
+            message="，".join(parts),
+        )
 
     async def cancel_bilingual_followup(self, request: Request) -> Dict[str, Any]:
         owner = self.owner
