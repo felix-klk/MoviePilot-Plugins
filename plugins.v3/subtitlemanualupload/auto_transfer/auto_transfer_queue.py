@@ -251,6 +251,7 @@ class AutoTransferQueue:
         self.update_task(
             task["id"], status="pending", result=result, next_run_ts=next_run,
             bilingual_retry_since=started, emby_rechecked=False,
+            emby_offline_attempts=0,
             message=f"等待双语字幕补搜：{result.get('reason') or '本轮未补齐双语字幕'}",
         )
 
@@ -291,6 +292,7 @@ class AutoTransferQueue:
                 entry.pop("_force_timeline_write", None)
             now = self._time.time()
             task.pop("emby_rechecked", None)
+            task.pop("emby_offline_attempts", None)
             task.update(
                 {
                     "entry": entry,
@@ -352,12 +354,15 @@ class AutoTransferQueue:
                 return [], -1
             ready = [
                 task for task in pending
-                if (not task.get("emby_rechecked") and not is_bilingual_followup_waiting(task))
+                if (not task.get("emby_rechecked") and not task.get("emby_offline_attempts")
+                    and not is_bilingual_followup_waiting(task))
                 or float(task.get("next_run_ts") or 0) <= now
             ]
             if not ready:
                 next_run = min([*deadlines, *(float(task["next_run_ts"]) for task in pending)])
-                max_wait = 1.0 if any(task.get("emby_rechecked") for task in pending) else 3600.0
+                max_wait = 1.0 if any(
+                    task.get("emby_rechecked") and not task.get("emby_offline_attempts") for task in pending
+                ) else 3600.0
                 return [], min(next_run - now, max_wait)
             first = ready[0]
             group_key = owner._normalize_text(first.get("group_key"))

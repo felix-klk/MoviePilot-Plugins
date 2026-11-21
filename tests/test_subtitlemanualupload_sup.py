@@ -698,6 +698,73 @@ def test_emby_subtitle_lookup_reads_single_strm_source_after_indexing(sup_module
     )
 
 
+@pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)
+def test_emby_selected_library_scopes_version_fallback_and_refresh(sup_modules, monkeypatch):
+    instance, helper, client = emby_refresh_test_runtime(monkeypatch, sup_modules.generation)
+    services = helper.get_services.return_value
+    services["nas-emby"].type = "emby"
+    services["NEOPC"] = types.SimpleNamespace(type="emby", instance=Mock())
+    service = sup_modules.load("integrations.emby_refresh").EmbyRefreshService(Mock())
+    scope = [{"server": "nas-emby", "id": "123", "paths": ["/library/tv"]}]
+    entry = {"path": "/mp/Show.S01E02.strm", "media_type": "tv", "tmdb_id": 10, "season": 1, "episode": 2}
+    path = "/library/tv/Show.S01E02.strm"
+    track = {"Type": "Subtitle", "Language": "zh-CN"}
+    client.get_res.return_value.json.side_effect = [
+        {"Items": []},
+        {"Items": [{"Id": "selected-series"}]},
+        {"Items": [{
+            "Id": "selected-episode", "ParentIndexNumber": 1, "IndexNumber": 2,
+            "Path": path, "MediaSources": [{"Path": path, "MediaStreams": [track]}],
+        }]},
+    ]
+
+    assert service.subtitle_tracks_for_entry(entry, "/mp => /library/tv", scope=scope) == ("ready", [track])
+    calls = client.get_res.call_args_list
+    assert all(call.args[0].startswith(instance._host) for call in calls)
+    assert [call.kwargs["params"]["ParentId"] for call in calls] == ["123", "123", "selected-series"]
+    services["NEOPC"].instance.is_inactive.assert_not_called()
+    assert helper.get_services.call_args.kwargs["name_filters"] == ["nas-emby"]
+
+    client.reset_mock()
+    assert service.subtitle_tracks_for_entry(entry, scope=[]) == ("out_of_scope", [])
+    assert service.subtitle_tracks_for_entry({"path": "/library/tv-other/episode.strm"}, scope=scope) == ("out_of_scope", [])
+    assert not service.refresh_for_videos([entry], scope=scope)
+    client.get_res.assert_not_called()
+
+    client.get_res.return_value.json.side_effect = None
+    client.get_res.return_value.json.return_value = [{"Key": "ScanExternalTrackTask", "Id": "scan"}]
+    assert service.refresh_for_videos([entry], scope=scope, mappings="/mp => /library/tv")
+    assert client.post_res.call_args.args[0] == instance._host.rstrip("/") + "/emby/ScheduledTasks/Running/scan"
+
+
+@pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)
+def test_emby_library_discovery_contacts_only_the_requested_server(sup_modules, monkeypatch):
+    instance, helper, client = emby_refresh_test_runtime(monkeypatch, sup_modules.generation)
+    helper.get_configs.return_value = {
+        "nas-emby": types.SimpleNamespace(type="emby"),
+        "NEOPC": types.SimpleNamespace(type="emby"),
+        "Plex": types.SimpleNamespace(type="plex"),
+    }
+    helper.get_services.return_value["nas-emby"].type = "emby"
+    instance.serverid = "nas-id"
+    service = sup_modules.load("integrations.emby_refresh").EmbyRefreshService(Mock())
+    assert service.configured_emby_names() == ["nas-emby", "NEOPC"]
+    client.get_res.assert_not_called()
+    helper.get_services.assert_not_called()
+
+    client.get_res.return_value.json.return_value = {"Items": [{
+        "ItemId": "123", "Name": "TV", "Locations": ["/library/tv"],
+        "LibraryOptions": {"PathInfos": [{"Path": "/library/tv", "NetworkPath": "//nas/tv"}]},
+    }]}
+    scope = service.libraries_for_server("nas-emby")
+    assert scope == [{
+        "server": "nas-emby", "server_id": "nas-id", "id": "123", "name": "TV",
+        "paths": ["/library/tv", "//nas/tv"],
+    }]
+    client.get_res.return_value = None
+    assert service.subtitle_tracks_for_entry({"path": "/library/tv/episode.strm"}, scope=scope) == ("offline", [])
+
+
 @pytest.mark.parametrize("http_module_name", ("app.adapters.network.http", "app.utils.http"))
 def test_emby_refresh_starts_only_external_subtitle_scan_task(sup_modules, monkeypatch, http_module_name):
     server, helper, request_utils = emby_refresh_test_runtime(

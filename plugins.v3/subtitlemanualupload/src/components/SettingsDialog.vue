@@ -71,6 +71,8 @@ onMounted(loadConfig)
       <VCardText class="pa-0">
         <Config
           v-if="initialConfig"
+          :api="props.api"
+          :plugin-id="props.pluginId"
           :initial-config="initialConfig"
           :saving="saving"
           @save="saveConfig"

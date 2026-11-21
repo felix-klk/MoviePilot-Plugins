@@ -4308,6 +4308,58 @@ def test_v3_emby_recheck_keeps_other_episodes_moving(tmp_path, monkeypatch):
     assert emby_checks == [1, 2, 3, 1, 4, 5, 4]
 
 
+def test_v3_emby_offline_wait_recovers_after_restart(tmp_path, durable_auto_transfer_queue):
+    new_queue, clock, _, _ = durable_auto_transfer_queue
+    scope = [{"server": "nas", "id": "1", "paths": [str(tmp_path)]}]
+    entry = make_auto_entry(tmp_path, filename="Show.S01E01.strm", media_type="tv", season=1, episode=1)
+
+    def configure(plugin, service, answer):
+        plugin._auto_check_emby_subtitles = True
+        plugin._auto_skip_chinese_media_on_transfer = False
+        plugin._auto_subtitle_language_priority = ["chi&eng"]
+        plugin._auto_subtitle_language_strict = False
+        plugin._auto_transfer_queue_debounce_seconds = 0
+        plugin._emby_query_libraries = scope
+        plugin._emby_subtitle_path_mappings = ""
+        service._time = clock
+
+        def read_tracks(target, mappings, *, scope):
+            assert scope == plugin._emby_query_libraries
+            return answer
+
+        override_services(plugin, auto_transfer=service, emby_refresh=types.SimpleNamespace(
+            subtitle_tracks_for_entry=read_tracks,
+        ))
+
+    plugin, service, _ = new_queue()
+    configure(plugin, service, ("offline", []))
+    assert service.enqueue_transfer_auto_entries([entry]) == (1, 0)
+    batch, _ = service.claim_next_auto_transfer_batch()
+    task_id = batch[0]["id"]
+    service.process_transfer_auto_task_batch(batch)
+    assert plugin._auto_transfer_tasks[task_id]["next_run_ts"] == clock.now + 60
+    assert service.claim_next_auto_transfer_batch() == ([], 60)
+
+    plugin, service, _ = new_queue()
+    configure(plugin, service, ("offline", []))
+    assert service.claim_next_auto_transfer_batch() == ([], 60)
+    clock.now += 60
+    batch, _ = service.claim_next_auto_transfer_batch()
+    service.process_transfer_auto_task_batch(batch)
+    assert service.claim_next_auto_transfer_batch() == ([], 300)
+
+    configure(plugin, service, ("ready", [{
+        "IsExternal": False, "Codec": "ass", "Language": "chi", "Title": "中英双语",
+    }]))
+    clock.now += 300
+    batch, _ = service.claim_next_auto_transfer_batch()
+    service.process_transfer_auto_task_batch(batch)
+    task = plugin._auto_transfer_tasks[task_id]
+    assert task["status"] == "skipped"
+    assert "符合要求" in task["message"]
+    assert task["next_run_ts"] == 0
+
+
 def test_auto_transfer_queue_stop_service_marks_pending_queue_stopped(tmp_path):
     module, _, _ = load_plugin_module()
     plugin = make_plugin(module)

@@ -1,9 +1,13 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import '../styles/theme.css'
+import { createSubtitleManualUploadApi } from '../api/subtitleManualUploadApi'
+import { errorMessage, unwrapResponse } from '../utils/formatters'
 import { onlineProviderItems, defaultOnlineProviderIds } from '../utils/onlineResult'
 
 const props = defineProps({
+  api: { type: Object, default: null },
+  pluginId: { type: String, default: 'SubtitleManualUpload' },
   initialConfig: {
     type: Object,
     default: () => ({}),
@@ -26,6 +30,7 @@ const localConfig = ref({
   emby_refresh_after_subtitle_write: false,
   auto_search_on_transfer: false,
   auto_check_emby_subtitles: false,
+  emby_query_libraries: null,
   emby_subtitle_path_mappings: "",
   auto_skip_chinese_media_on_transfer: true,
   auto_transfer_subtitle_strategy: 'online_then_ai_source',
@@ -58,6 +63,81 @@ const localConfig = ref({
   ai_link_enabled: true,
   rar_dependency_mode: 'none',
   rar_tool_path: '/usr/bin/unar',
+})
+
+const embyScopeItems = [
+  { title: '沿用 MoviePilot 已启用的 Emby', value: 'inherit' },
+  { title: '仅查询所选媒体库', value: 'selected' },
+]
+const embyScopeEnabled = computed(() => localConfig.value.auto_check_emby_subtitles || localConfig.value.emby_refresh_after_subtitle_write)
+const embyCustomScope = computed(() => embyScopeEnabled.value && localConfig.value.emby_query_libraries !== null)
+const embyServers = ref([])
+const embyServer = ref(null)
+const embyLibrariesLoading = ref(false)
+const embyServersLoaded = ref(false)
+const embyLibrariesError = ref('')
+const embyLoadedLibraries = ref([])
+let lastEmbySelection = []
+
+function embyLibraryKey(item) {
+  return JSON.stringify([item.server, item.server_id || '', item.id])
+}
+
+const embyLibraryByKey = computed(() => new Map(
+  [...(localConfig.value.emby_query_libraries || []), ...embyLoadedLibraries.value].map(item => [embyLibraryKey(item), item]),
+))
+const embyLibraryItems = computed(() => [...embyLibraryByKey.value].map(([value, item]) => ({
+  value, title: `${item.server} · ${item.name}`,
+})))
+const embySelectedKeys = computed({
+  get: () => (localConfig.value.emby_query_libraries || []).map(embyLibraryKey),
+  set: keys => {
+    localConfig.value.emby_query_libraries = (keys || []).map(key => embyLibraryByKey.value.get(key)).filter(Boolean)
+  },
+})
+
+function setEmbyScope(mode) {
+  if (mode === 'inherit') {
+    lastEmbySelection = localConfig.value.emby_query_libraries || []
+    localConfig.value.emby_query_libraries = null
+  } else if (localConfig.value.emby_query_libraries === null) {
+    localConfig.value.emby_query_libraries = lastEmbySelection
+  }
+}
+
+async function readEmbyLibraries(server = '') {
+  if (embyLibrariesLoading.value) return
+  embyLibrariesLoading.value = true
+  embyLibrariesError.value = ''
+  try {
+    if (!props.api?.get) throw new Error('当前设置入口无法读取 MoviePilot 媒体服务器')
+    const pluginApi = createSubtitleManualUploadApi(props.api, () => `plugin/${props.pluginId}`)
+    const response = await pluginApi.embyQueryLibraries(server)
+    if (response?.success === false) throw new Error(response.message || '读取 Emby 媒体库失败')
+    const result = unwrapResponse(response)
+    if (!server) {
+      if (!Array.isArray(result?.servers)) throw new Error('Emby 服务器列表响应无效')
+      embyServers.value = result.servers
+      embyServersLoaded.value = true
+      return
+    }
+    if (!Array.isArray(result?.libraries)) throw new Error('Emby 媒体库列表响应无效')
+    embyLoadedLibraries.value = [...embyLoadedLibraries.value.filter(item => item.server !== server), ...result.libraries]
+    if (localConfig.value.emby_query_libraries !== null) {
+      const refreshed = new Map(result.libraries.map(item => [embyLibraryKey(item), item]))
+      localConfig.value.emby_query_libraries = localConfig.value.emby_query_libraries.map(item =>
+        refreshed.get(embyLibraryKey(item)) || item,
+      )
+    }
+  } catch (err) {
+    embyLibrariesError.value = errorMessage(err, '读取 Emby 媒体库失败')
+  } finally {
+    embyLibrariesLoading.value = false
+  }
+}
+
+watch(embyCustomScope, enabled => {
+  if (enabled && !embyServersLoaded.value) readEmbyLibraries()
 })
 
 
@@ -244,6 +324,9 @@ function normalizeConfig(input) {
     emby_refresh_after_subtitle_write: Boolean(input?.emby_refresh_after_subtitle_write),
     auto_search_on_transfer: Boolean(input?.auto_search_on_transfer),
     auto_check_emby_subtitles: Boolean(input?.auto_check_emby_subtitles),
+    emby_query_libraries: input?.emby_query_libraries == null
+      ? null
+      : (Array.isArray(input.emby_query_libraries) ? input.emby_query_libraries : []),
     emby_subtitle_path_mappings: typeof input?.emby_subtitle_path_mappings === "string" ? input.emby_subtitle_path_mappings : "",
     auto_skip_chinese_media_on_transfer: input?.auto_skip_chinese_media_on_transfer !== false,
     auto_transfer_subtitle_strategy: autoStrategy,
@@ -389,7 +472,7 @@ onMounted(() => {
               persistent-hint
             />
             <VTextarea
-              v-if="localConfig.auto_check_emby_subtitles"
+              v-if="embyScopeEnabled"
               v-model="localConfig.emby_subtitle_path_mappings"
               label="Emby 路径映射"
               placeholder="/media => /mnt/media"
@@ -401,6 +484,58 @@ onMounted(() => {
               density="comfortable"
               class="config-grid-wide"
             />
+            <VSelect
+              v-if="embyScopeEnabled"
+              :model-value="localConfig.emby_query_libraries === null ? 'inherit' : 'selected'"
+              :items="embyScopeItems"
+              label="Emby 查询范围"
+              hint="范围用于检查字幕及写入后通知。实际扫描范围由 Emby 决定。"
+              persistent-hint
+              variant="outlined"
+              density="comfortable"
+              class="config-grid-wide"
+              @update:model-value="setEmbyScope"
+            />
+            <template v-if="embyCustomScope">
+              <VSelect
+                v-model="embyServer"
+                :items="embyServers"
+                :loading="embyLibrariesLoading && !embyServersLoaded"
+                label="Emby 服务器"
+                variant="outlined"
+                density="comfortable"
+                hide-details
+              />
+              <VBtn
+                v-if="!embyServersLoaded"
+                :loading="embyLibrariesLoading"
+                variant="tonal"
+                @click="readEmbyLibraries()"
+              >读取服务器列表</VBtn>
+              <VBtn
+                v-else
+                :disabled="!embyServer"
+                :loading="embyLibrariesLoading"
+                variant="tonal"
+                @click="readEmbyLibraries(embyServer)"
+              >读取所选服务器的媒体库</VBtn>
+              <VAlert v-if="embyLibrariesError" type="error" variant="tonal" class="config-grid-wide" :text="embyLibrariesError" />
+              <VSelect
+                v-model="embySelectedKeys"
+                :items="embyLibraryItems"
+                label="参与查询的媒体库"
+                :hint="embySelectedKeys.length ? '未选媒体库的服务器会被跳过。' : '未选择媒体库，字幕检查仅使用本地信息。'"
+                no-data-text="请先读取需要使用的服务器的媒体库"
+                persistent-hint
+                multiple
+                chips
+                closable-chips
+                clearable
+                variant="outlined"
+                density="comfortable"
+                class="config-grid-wide"
+              />
+            </template>
             <VSwitch
               v-model="localConfig.auto_skip_chinese_media_on_transfer"
               label="入库自动处理跳过中文资源"

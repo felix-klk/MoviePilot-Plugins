@@ -45,6 +45,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "emby_refresh_after_subtitle_write": False,
     "auto_search_on_transfer": False,
     "auto_check_emby_subtitles": False,
+    "emby_query_libraries": None,
     "emby_subtitle_path_mappings": "",
     "auto_skip_chinese_media_on_transfer": True,
     "auto_transfer_subtitle_strategy": "online_then_ai_source",
@@ -83,6 +84,31 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
 def normalize_text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def normalize_emby_query_libraries(value: Any) -> list[dict[str, Any]] | None:
+    """Keep missing scope distinct from an explicitly empty selection."""
+    if value is None:
+        return None
+    by_library = {}
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        server = normalize_text(item.get("server"))
+        library_id = normalize_text(item.get("id"))
+        if not server or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", library_id):
+            continue
+        paths = item.get("paths")
+        by_library[server, library_id] = {
+            "server": server,
+            "server_id": normalize_text(item.get("server_id")),
+            "id": library_id,
+            "name": normalize_text(item.get("name")) or library_id,
+            "paths": list(dict.fromkeys(
+                path.strip() for path in paths if isinstance(path, str) and path.strip()
+            )) if isinstance(paths, list) else [],
+        }
+    return list(by_library.values())
 
 
 def safe_int(value: Any, default: int = 0) -> int:
@@ -259,6 +285,7 @@ def normalize_plugin_config(
         "emby_refresh_after_subtitle_write": bool(raw_config.get("emby_refresh_after_subtitle_write", False)),
         "auto_search_on_transfer": bool(raw_config.get("auto_search_on_transfer", False)),
         "auto_check_emby_subtitles": bool(raw_config.get("auto_check_emby_subtitles", False)),
+        "emby_query_libraries": normalize_emby_query_libraries(raw_config.get("emby_query_libraries")),
         "emby_subtitle_path_mappings": normalize_text(raw_config.get("emby_subtitle_path_mappings")),
         "auto_skip_chinese_media_on_transfer": bool(raw_config.get("auto_skip_chinese_media_on_transfer", True)),
         "auto_transfer_subtitle_strategy": normalize_auto_transfer_subtitle_strategy(

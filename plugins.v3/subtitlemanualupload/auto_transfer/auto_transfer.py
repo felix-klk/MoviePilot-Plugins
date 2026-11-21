@@ -462,7 +462,10 @@ class AutoTransferService:
             if not reason and owner._auto_check_emby_subtitles:
                 check = self._check_emby_subtitles_for_task({"entry": entry})
                 if check:
-                    reason = "Emby 尚未扫描到该目标的字幕轨道" if check["status"] == "pending" else check["reason"]
+                    if check["status"] == "pending" and not check.get("emby_offline_attempts"):
+                        reason = "Emby 尚未扫描到该目标的字幕轨道"
+                    else:
+                        reason = check["reason"]
             if not reason:
                 reason = self._processor.target_skip_reason(entry, target)
             if not reason and strategy == "ai_source_only" and not target.get("is_stream"):
@@ -651,9 +654,20 @@ class AutoTransferService:
             if is_chinese:
                 return {"status": "skipped", "reason": f"中文资源自动跳过：{evidence}"}
 
-        status, tracks = owner.services.emby_refresh().subtitle_tracks_for_entry(
-            entry, owner._emby_subtitle_path_mappings,
-        )
+        emby = owner.services.emby_refresh()
+        scope = getattr(owner, "_emby_query_libraries", None)
+        options = {"scope": scope} if scope is not None else {}
+        status, tracks = emby.subtitle_tracks_for_entry(entry, owner._emby_subtitle_path_mappings, **options)
+        if status == "offline":
+            delays = (60, 300, 900)
+            attempt = min(int(task.get("emby_offline_attempts") or 0), len(delays) - 1)
+            delay = delays[attempt]
+            return {
+                "status": "pending",
+                "reason": f"等待所选 Emby 恢复，{delay // 60} 分钟后重查",
+                "retry_after": delay,
+                "emby_offline_attempts": attempt + 1,
+            }
         if status == "pending" and not task.get("emby_rechecked"):
             return {"status": "pending", "reason": "等待 Emby 扫描字幕轨道，30 秒后重查"}
         if status != "ready":
@@ -728,12 +742,14 @@ class AutoTransferService:
                 if not result:
                     pending.append(task)
                 elif result["status"] == "pending":
+                    offline_attempts = result.get("emby_offline_attempts", 0)
                     owner._update_auto_transfer_task(
                         task["id"],
                         status="pending",
                         message=result["reason"],
-                        next_run_ts=self._time.time() + 30,
-                        emby_rechecked=True,
+                        next_run_ts=self._time.time() + result.get("retry_after", 30),
+                        emby_rechecked=bool(task.get("emby_rechecked")) or not offline_attempts,
+                        emby_offline_attempts=offline_attempts,
                     )
                 else:
                     owner._update_auto_transfer_task(

@@ -325,7 +325,9 @@ class SubtitleWriter:
             if not callable(refresh_factory):
                 self._logger.warning("[SubtitleManualUpload] Emby 外挂字幕扫描服务不可用，跳过扫描")
                 return
-            refresh_factory().refresh_for_videos(items)
+            scope = getattr(owner, "_emby_query_libraries", None)
+            options = {"scope": scope, "mappings": owner._emby_subtitle_path_mappings} if scope is not None else {}
+            refresh_factory().refresh_for_videos(items, **options)
         except Exception as exc:
             self._logger.warning("[SubtitleManualUpload] 通知 Emby 扫描外挂字幕失败，不影响字幕写入: %s", exc)
 

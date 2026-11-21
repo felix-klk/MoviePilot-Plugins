@@ -65,6 +65,18 @@ class StatusApi:
             }
         )
 
+    def emby_query_libraries(self, server: str = "") -> Dict[str, Any]:
+        service = self.owner.services.emby_refresh()
+        try:
+            servers = service.configured_emby_names()
+            if not server:
+                return self.owner._ok({"servers": servers})
+            if server not in servers:
+                raise HTTPException(status_code=404, detail="该 Emby 服务器未启用或已移除")
+            return self.owner._ok({"libraries": service.libraries_for_server(server)})
+        except (ImportError, RuntimeError) as exc:
+            raise HTTPException(status_code=503, detail="无法读取 Emby 媒体库，请检查该连接后重试") from exc
+
     def refresh_index(self) -> Dict[str, Any]:
         owner = self.owner
         local_media_catalog = owner.services.local_media_catalog()

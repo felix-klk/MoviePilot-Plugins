@@ -26,6 +26,13 @@ def build_api_routes(owner: Any) -> List[Dict[str, Any]]:
             "summary": "获取字幕匹配插件状态",
         },
         {
+            "path": "/emby_query_libraries",
+            "endpoint": status_api.emby_query_libraries,
+            "methods": ["GET"],
+            "auth": "bear",
+            "summary": "读取 Emby 服务器或指定服务器的媒体库",
+        },
+        {
             "path": "/refresh_index",
             "endpoint": status_api.refresh_index,
             "methods": ["POST"],

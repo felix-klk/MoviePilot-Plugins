@@ -38,6 +38,10 @@ export function createSubtitleManualUploadApi(api, pluginBase) {
     status() {
       return get('/status')
     },
+    embyQueryLibraries(server = '') {
+      const query = server ? '?' + new URLSearchParams({ server }).toString() : ''
+      return get('/emby_query_libraries' + query)
+    },
     autoTransferQueue() {
       return get('/auto_transfer_queue')
     },
