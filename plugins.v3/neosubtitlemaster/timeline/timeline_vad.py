@@ -5,6 +5,7 @@ import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from subprocess import TimeoutExpired
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..matching.subtitle_formats import is_bitmap_subtitle, pysubs2_format
@@ -83,6 +84,8 @@ def build_embedded_subtitle_vad(
         return None
 
     best: Optional[Tuple[int, Any, str]] = None
+    extraction_timeout = None
+    extraction_timed_out = False
     with tempfile.TemporaryDirectory(prefix="mp-subtitle-fix-") as tmp_dir_name:
         tmp_dir = Path(tmp_dir_name)
         for order, stream in enumerate(streams[:8]):
@@ -96,25 +99,43 @@ def build_embedded_subtitle_vad(
                 order,
             ) or tmp_dir / f"embedded-{order}.srt"
             if not out_path.exists():
-                out_path.parent.mkdir(parents=True, exist_ok=True)
-                cmd = [
-                    "ffmpeg",
-                    "-hide_banner",
-                    "-nostdin",
-                    "-loglevel",
-                    "error",
-                    "-y",
-                    "-i",
-                    str(video_path),
-                    "-map",
-                    f"0:{stream_index}",
-                    "-c:s",
-                    "srt",
-                    str(out_path),
-                ]
-                result = subprocess_module.run(cmd, capture_output=True, text=True, timeout=120)
-                if result.returncode != 0 or not out_path.exists() or out_path.stat().st_size < 128:
+                if extraction_timed_out:
                     continue
+                if extraction_timeout is None:
+                    extraction_timeout = audio_extraction_timeout_seconds(
+                        video_path,
+                        config=config,
+                        probe_video_duration_seconds=lambda path: probe_video_duration_seconds(
+                            path, subprocess_module=subprocess_module,
+                        ),
+                    )
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.TemporaryDirectory(prefix=".extract-", dir=out_path.parent) as extract_dir:
+                    temp_path = Path(extract_dir) / out_path.name
+                    cmd = [
+                        "ffmpeg",
+                        "-hide_banner",
+                        "-nostdin",
+                        "-loglevel",
+                        "error",
+                        "-y",
+                        "-i",
+                        str(video_path),
+                        "-map",
+                        f"0:{stream_index}",
+                        "-c:s",
+                        "srt",
+                        str(temp_path),
+                    ]
+                    try:
+                        result = subprocess_module.run(cmd, capture_output=True, text=True, timeout=extraction_timeout)
+                    except TimeoutExpired:
+                        # Another uncached track would scan the same video again.
+                        extraction_timed_out = True
+                        continue
+                    if result.returncode != 0 or not temp_path.exists() or temp_path.stat().st_size < 128:
+                        continue
+                    temp_path.replace(out_path)
                 record_cache_entry(
                     out_path,
                     kind="embedded_subtitle",
@@ -160,7 +181,10 @@ def probe_text_subtitle_streams(
         "json",
         str(video_path),
     ]
-    result = subprocess_module.run(cmd, capture_output=True, text=True, timeout=60)
+    try:
+        result = subprocess_module.run(cmd, capture_output=True, text=True, timeout=60)
+    except TimeoutExpired:
+        return []
     if result.returncode != 0:
         return []
     try:

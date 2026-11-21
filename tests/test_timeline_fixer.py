@@ -10,11 +10,11 @@ from pathlib import Path
 import pytest
 
 
-def load_timeline_module():
+def load_timeline_module(generation="v2", plugin="subtitlemanualupload"):
     root = Path(__file__).resolve().parents[1]
-    package_dir = root / "plugins.v2" / "subtitlemanualupload" / "timeline"
+    package_dir = root / f"plugins.{generation}" / plugin / "timeline"
     module_path = package_dir / "timeline_fixer.py"
-    package_name = "subtitlemanualupload_timeline_fixer_testpkg"
+    package_name = f"{plugin}_{generation}_timeline_fixer_testpkg"
     module_name = f"{package_name}.timeline.timeline_fixer"
     for name in list(sys.modules):
         if name == package_name or name.startswith(f"{package_name}."):
@@ -87,6 +87,62 @@ def test_audio_extraction_timeout_scales_with_video_duration(monkeypatch, tmp_pa
     monkeypatch.setattr(module, "_probe_video_duration_seconds", lambda path: 0.0)
 
     assert module._audio_extraction_timeout_seconds(video) == module.AUDIO_EXTRACTION_MIN_TIMEOUT_SECONDS
+
+
+@pytest.mark.parametrize("failure", ["probe_timeout", "extraction_timeout"])
+def test_neo_v3_embedded_timeout_uses_audio_and_retries_without_partial_cache(failure, monkeypatch, tmp_path):
+    np = pytest.importorskip("numpy")
+    pysubs2 = pytest.importorskip("pysubs2")
+    legacy = load_timeline_module()
+    module = load_timeline_module("v3", "neosubtitlemaster")
+    video = tmp_path / "Movie.mkv"
+    video.touch()
+    cache_dir = tmp_path / "timeline_cache"
+    old_cache = legacy._cached_embedded_subtitle_path(cache_dir, video, 2, 0)
+    output_cache = module._cached_embedded_subtitle_path(cache_dir, video, 2, 0)
+    srt = "\n".join(f"{i}\n00:00:0{i},000 --> 00:00:0{i},500\nDialogue {i}\n" for i in range(1, 5))
+    old_cache.parent.mkdir(parents=True)
+    old_cache.write_text(srt, encoding="utf-8")
+    streams = {"streams": [{"index": 2, "codec_name": "subrip"}, {"index": 3, "codec_name": "subrip"}]}
+    extracted_tracks = []
+
+    def run(cmd, *, timeout, **kwargs):
+        if "stream=index,codec_name" in cmd:
+            if failure == "probe_timeout":
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            return subprocess.CompletedProcess(cmd, 0, json.dumps(streams))
+        if "format=duration" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "1800")
+        if "-map" in cmd:
+            extracted_tracks.append(cmd[cmd.index("-map") + 1])
+            assert timeout == 450
+            Path(cmd[-1]).write_text(srt, encoding="utf-8")
+            if failure == "extraction_timeout":
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            return subprocess.CompletedProcess(cmd, 0)
+        assert "s16le" in cmd
+        samples_per_half_second = module.FRAME_SAMPLES * module.SAMPLE_RATE // 2
+        pcm = b"\x00\x00" * samples_per_half_second + b"\x00\x20" * samples_per_half_second
+        return subprocess.CompletedProcess(cmd, 0, pcm, b"")
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+    values, base = module._build_base_vad(np, pysubs2, video, cache_dir=cache_dir, vad_mode="rms")
+    assert base == "audio:rms"
+    assert values.size >= module.SAMPLE_RATE
+    assert extracted_tracks == (["0:2"] if failure == "extraction_timeout" else [])
+    assert list(old_cache.parent.iterdir()) == [old_cache]
+
+    failure = None
+    extracted_tracks.clear()
+    _, base = module._build_base_vad(np, pysubs2, video, cache_dir=cache_dir, vad_mode="rms")
+    assert base == "embedded:subrip"
+    assert extracted_tracks == ["0:2", "0:3"]
+    assert output_cache.read_text(encoding="utf-8") == srt
+
+    extracted_tracks.clear()
+    _, base = module._build_base_vad(np, pysubs2, video, cache_dir=cache_dir, vad_mode="rms")
+    assert base == "embedded:subrip"
+    assert extracted_tracks == []
 
 
 def test_vad_io_helpers_are_reexported_from_timeline_fixer():

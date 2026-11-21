@@ -212,6 +212,7 @@ class AutoTransferSeasonCache:
             session_id = owner._hash_text(f"auto-season|{datetime.now().isoformat()}|{entries[0].get('id')}")[:16]
             session_dir = owner.services.upload_session().get_session_root() / session_id
             session_dir.mkdir(parents=True, exist_ok=True)
+            failure_stage = "下载/解析"
             try:
                 downloads = service.download([selected])
                 prepared_uploads: List[Dict[str, Any]] = []
@@ -237,6 +238,7 @@ class AutoTransferSeasonCache:
                 if not prepared_uploads:
                     last_reason = "整季结果未解析到字幕文件"
                 else:
+                    failure_stage = "缓存/写入"
                     self._collaborators.store_cache(entries, prepared_uploads, selected)
                     write_result = self._collaborators.write_prepared_uploads_for_entries(
                         target_entries=entries,
@@ -262,7 +264,7 @@ class AutoTransferSeasonCache:
                     selected.get("provider"), selected.get("result_id"), last_reason,
                 )
             except Exception as exc:
-                last_reason = f"整季包下载/解析失败: {owner._normalize_text(exc)}"
+                last_reason = f"整季包{failure_stage}失败: {owner._normalize_text(exc)}"
                 self._logger.warning(
                     "[NeoSubtitleMaster] %s provider=%s result=%s",
                     last_reason,

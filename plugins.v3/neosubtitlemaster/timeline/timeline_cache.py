@@ -14,6 +14,8 @@ TIMELINE_CACHE_SUBDIRS = (
     "subtitle_activity",
     "results",
 )
+# Older embedded references and results may contain data from an interrupted extraction.
+EMBEDDED_REFERENCE_CACHE_VERSION = "complete-embedded-v1"
 
 
 def file_signature(path: Path, *, cache_version: str) -> str:
@@ -224,7 +226,8 @@ def cached_embedded_subtitle_path(
 ) -> Optional[Path]:
     if not cache_dir:
         return None
-    return Path(cache_dir) / "embedded_subtitles" / f"{file_signature(video_path, cache_version=cache_version)}.{order}.{stream_index}.srt"
+    signature = file_signature(video_path, cache_version=f"{cache_version}|{EMBEDDED_REFERENCE_CACHE_VERSION}")
+    return Path(cache_dir) / "embedded_subtitles" / f"{signature}.{order}.{stream_index}.srt"
 
 
 def cached_subtitle_vad_path(
@@ -285,7 +288,7 @@ def timeline_result_cache_key(
     raw = "|".join(
         [
             cache_version,
-            "result",
+            f"result|{EMBEDDED_REFERENCE_CACHE_VERSION}",
             file_signature(video_path, cache_version=cache_version),
             subtitle_content_signature(subtitle_path, cache_version=cache_version),
             str(int(max_offset_seconds)),
