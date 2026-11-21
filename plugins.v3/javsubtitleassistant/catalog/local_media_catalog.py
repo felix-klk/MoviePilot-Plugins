@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-from ..jav import VIDEOS
-
 import json
 import threading
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+from starlette.concurrency import run_in_threadpool
+
+from ..jav import VIDEOS
+from .local_artwork import local_poster_thumbnail
 
 
 LOCAL_CACHE_VERSION = 2
@@ -495,18 +498,23 @@ class LocalMediaCatalog:
             all_candidates = self.group_entries_as_media(entries, 0)
             self.media_index_cache_set(cache_key, all_entries, all_candidates)
         total = len(all_candidates)
-        candidates = [self.enrich_media_candidate(item) for item in all_candidates[offset: offset + limit]]
+        visible = all_candidates[offset: offset + limit]
+        candidates = await run_in_threadpool(lambda: [self.enrich_media_candidate(item) for item in visible])
         return candidates, total
 
     def enrich_media_candidate(self, media: Dict[str, Any]) -> Dict[str, Any]:
         owner = self._owner
-        if owner._normalize_text(media.get("origin")) != "manual_strm":
-            return dict(media)
-        enriched = owner.services.media_metadata().enrich_media(media)
+        public_media = dict(media)
+        artwork_entries = public_media.pop("_artwork_entries", ())
+        if owner._normalize_text(public_media.get("origin")) != "manual_strm":
+            return public_media
+        enriched = owner.services.media_metadata().enrich_media(public_media)
         if enriched.get("poster_url"):
             enriched["poster_url"] = owner._poster_url(enriched["poster_url"])
             enriched["poster_thumb_url"] = owner._poster_url(enriched["poster_url"], "w185")
-        self.remember_media_enrichment(media, enriched)
+        self.remember_media_enrichment(public_media, enriched)
+        if thumbnail := local_poster_thumbnail(artwork_entries, owner._manual_strm_paths):
+            enriched["poster_thumb_url"] = thumbnail
         return enriched
 
     def remember_media_enrichment(self, media: Dict[str, Any], enriched: Dict[str, Any]) -> None:
@@ -573,7 +581,11 @@ class LocalMediaCatalog:
 
         result = []
         for group in groups.values():
-            seasons = owner._merge_seasons(group.pop("_entries"))
+            entries_for_media = group.pop("_entries")
+            group["_artwork_entries"] = tuple(
+                (entry.get("path"), entry.get("jav_number")) for entry in entries_for_media
+            )
+            seasons = owner._merge_seasons(entries_for_media)
             group["seasons"] = seasons
             group["season_count"] = len(seasons)
             result.append(group)

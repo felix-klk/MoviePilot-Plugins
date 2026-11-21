@@ -5,6 +5,8 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+
+from ..catalog.local_artwork import local_poster_thumbnail
 from typing import Any, Dict, List, Tuple
 
 from .subtitle_formats import is_bitmap_subtitle
@@ -426,10 +428,19 @@ class SubtitleHistory:
         total = len(filtered)
         start = max(page - 1, 0) * page_size
         end = start + page_size
+        items = self.clone_match_history_items(filtered[start:end])
+        for item in items:
+            entries = (
+                (target.get("path"), target.get("jav_number"))
+                for target in item.get("targets") or []
+                if isinstance(target, dict)
+            )
+            if thumbnail := local_poster_thumbnail(entries, owner._manual_strm_paths):
+                item["poster_thumb_url"] = thumbnail
         return {
             "total": total,
             "has_more": end < total,
-            "items": self.clone_match_history_items(filtered[start:end]),
+            "items": items,
             **self.match_history_cache_status(),
         }
 

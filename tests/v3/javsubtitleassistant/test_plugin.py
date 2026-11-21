@@ -1,12 +1,17 @@
+import asyncio
+from base64 import b64decode
 import hashlib
 import json
 import tempfile
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+
+from PIL import Image
 
 import app.plugins
 
@@ -15,6 +20,8 @@ ROOT = Path(__file__).resolve().parents[3]
 app.plugins.__path__.insert(0, str(ROOT / "plugins.v3"))
 
 from app.plugins.javsubtitleassistant import JavSubtitleAssistant
+from app.plugins.javsubtitleassistant.api.catalog_api import CatalogApi
+from app.plugins.javsubtitleassistant.catalog.local_artwork import local_poster_thumbnail
 from app.plugins.javsubtitleassistant.catalog.manual_strm import ManualStrmCatalog
 from app.plugins.javsubtitleassistant.config.config_schema import normalize_plugin_config
 from app.plugins.javsubtitleassistant.matching.subtitle_language import (
@@ -60,6 +67,60 @@ class JavForkTests(unittest.TestCase):
             self.assertIn("ABC-013", entry["title"])
             self.assertEqual(build_search_keywords({}, [entry], "auto"), ["ABC-013", "ABC013"])
             self.assertEqual(catalog().entry_for_path(video, [str(root)])["id"], entry["id"])
+
+    def test_local_artwork_reaches_paginated_catalog_and_reads_replaced_images(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name).resolve()
+            movie = root / "ABC-013"
+            movie.mkdir()
+            video = movie / "ABC-013.mkv"
+            video.touch()
+            poster = movie / "poster.jpg"
+            Image.new("RGB", (540, 810), "red").save(poster)
+            entry, = catalog().scan([str(root)])
+            plugin = JavSubtitleAssistant.__new__(JavSubtitleAssistant)
+            plugin._manual_strm_paths = [str(root)]
+            plugin._local_entries_cache = {"entries": [entry]}
+            media_catalog = plugin.services.local_media_catalog()
+            req = SimpleNamespace(query_params={"page": "1", "page_size": "1"})
+            with (
+                patch.object(plugin.services, "local_media_catalog", return_value=media_catalog),
+                patch.object(plugin.services, "media_metadata", return_value=SimpleNamespace(enrich_media=dict)),
+                patch.object(media_catalog, "load_local_entries", return_value=[entry]),
+            ):
+                data = asyncio.run(CatalogApi(plugin).search(req))["data"]
+                item, = data["medias"]
+                self.assertNotIn("_artwork_entries", item)
+                first = item["poster_thumb_url"]
+                self.assertTrue(first.startswith("data:image/jpeg;base64,"))
+                image_bytes = b64decode(first.partition(",")[2])
+                with Image.open(BytesIO(image_bytes)) as image:
+                    self.assertEqual(image.size, (216, 324))
+                Image.new("RGB", (520, 800), "blue").save(poster)
+                second = asyncio.run(CatalogApi(plugin).search(req))["data"]["medias"][0]["poster_thumb_url"]
+                self.assertNotEqual(first, second)
+
+    def test_artwork_uses_numbered_files_in_shared_folder_and_rejects_parent_paths(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name).resolve()
+            folder = root / "library"
+            folder.mkdir()
+            video = folder / "ABC-013.mkv"
+            video.touch()
+            (folder / "ABC-014.mkv").touch()
+            entries = [(str(video), "ABC-013")]
+            Image.new("RGB", (30, 40), "blue").save(folder / "poster.jpg")
+            Image.new("RGB", (30, 40), "red").save(root / "outside.png")
+            nfo = video.with_suffix(".nfo")
+            nfo.write_text('<movie><thumb aspect="poster">../outside.png</thumb></movie>', encoding="utf8")
+            self.assertEqual(local_poster_thumbnail(entries, [str(folder)]), "")
+            (folder / "ABC-013-poster.JPG").write_bytes((root / "outside.png").read_bytes())
+            self.assertTrue(local_poster_thumbnail(entries, [str(folder)]).startswith("data:image/jpeg;base64,"))
+            (folder / "ABC-013-poster.JPG").unlink()
+            Image.new("RGB", (32, 42), "green").save(folder / "custom.webp")
+            nfo.write_text('<movie><art><poster>custom.webp</poster></art></movie>', encoding="utf8")
+            self.assertTrue(local_poster_thumbnail(entries, [str(folder)]).startswith("data:image/jpeg;base64,"))
+            self.assertEqual(local_poster_thumbnail(entries, [str(root / "missing")]), "")
 
     def test_exact_number_and_part_from_subtitlecat(self):
         query = """<table class="sub-table">
