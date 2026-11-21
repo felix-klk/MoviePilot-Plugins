@@ -76,7 +76,7 @@
     "name": "JAV字幕助手",
     "description": "扫描本地整理目录，从 Subtitle Cat 下载缺少的中文字幕。",
     "labels": "字幕,JAV,Subtitle Cat",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "icon": "",
     "author": "felix-klk",
     "author_url": "https://github.com/felix-klk",
@@ -84,6 +84,7 @@
     "system_version": ">=3.0.0",
     "release": false,
     "history": {
+      "v1.1.0": "基于海拉鲁字幕大师 V3 的 Subtitle Cat 实现，加入立即扫描、成功和失败明细、系统代理及整理目录番号回退。",
       "v1.0.0": "扫描整理后目录，识别现有中文字幕并按番号和分段从 Subtitle Cat 补齐。"
     }
   }

@@ -1,11 +1,14 @@
-"""Download existing Chinese SRTs from Subtitle Cat."""
+"""Subtitle Cat provider adapted from 海拉鲁字幕大师 V3 1.2.38 (GPL-3.0)."""
 
 import re
 from html.parser import HTMLParser
 from http.client import HTTPException
 from pathlib import Path
+from time import monotonic
 from urllib.parse import quote, unquote, urljoin, urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+
+from app.sdk.config import settings
 
 from .media import CHINESE_TAG, MAX_SUBTITLE, chinese_text, decode_subtitle, jav_numbers, release_part
 
@@ -16,169 +19,203 @@ TIMESTAMP = r"\d{2,}:[0-5]\d:[0-5]\d[,.]\d{3}"
 SRT = re.compile(rf"\s*[0-9]+[ \t]*\n[ \t]*{TIMESTAMP}[ \t]+-->[ \t]+{TIMESTAMP}[^\n]*\n[^\n]+")
 
 
-class SearchPage(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.found = False
-        self.rows = []
-        self.in_table = False
-        self.in_first_cell = False
-        self.href = ""
-        self.title = ""
-        self.description = ""
-        self.cells = 0
-        self.in_link = False
-
-    def handle_starttag(self, tag, attrs):
-        attrs = dict(attrs)
-        if tag == "table" and "sub-table" in (attrs.get("class") or "").split():
-            self.found = self.in_table = True
-        if not self.in_table:
-            return
-        if tag == "tr":
-            self.href = self.title = self.description = ""
-            self.cells = 0
-        elif tag == "td":
-            self.cells += 1
-            self.in_first_cell = self.cells == 1
-        elif tag == "a" and self.in_first_cell and not self.href:
-            self.href = attrs.get("href") or ""
-            self.in_link = bool(self.href)
-
-    def handle_endtag(self, tag):
-        if tag == "a":
-            self.in_link = False
-        elif tag == "td":
-            self.in_first_cell = False
-        elif tag == "table":
-            self.in_table = False
-        elif tag == "tr" and self.in_table and self.href:
-            language = re.search(r"\btranslated from\s+([^()]+)", self.description, re.I)
-            chinese = bool(language and CHINESE_TAG.search(language[1]))
-            self.rows.append((self.href, self.title.strip(), chinese))
-
-    def handle_data(self, data):
-        if self.in_link:
-            self.title += data
-        elif self.in_first_cell:
-            self.description += data
-
-
-class DownloadPage(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.translated = {}
-        self.original = []
-
-    def handle_starttag(self, tag, attrs):
-        attrs = dict(attrs)
-        href = attrs.get("href") or ""
-        if tag == "a" and href:
-            link_id = attrs.get("id") or ""
-            if link_id in {"download_zh-CN", "download_zh-TW"}:
-                self.translated[link_id.removeprefix("download_")] = href
-            elif href.endswith("-orig.srt"):
-                self.original.append(href)
-        # This reads the static filename reference without executing page code.
-        reference = re.fullmatch(
-            r"\s*translate_from_server_folder\('[^']+',\s*'([^']+-orig\.srt)',\s*'(/subs/[0-9]+/)'\);?\s*",
-            attrs.get("onclick") or "",
-        )
-        if reference:
-            self.original.append(reference[2] + reference[1])
-
-
-def site_url(url: str) -> bool:
+def _site_url(url: str) -> bool:
     parts = urlsplit(url)
     return parts.scheme == "https" and parts.netloc.lower() in HOSTS
 
 
-class SiteRedirects(HTTPRedirectHandler):
+class _SiteRedirects(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        if not site_url(newurl):
+        if not _site_url(newurl):
             raise OSError("Subtitle Cat 返回了站外跳转")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def fetch(url: str, referer: str = SITE + "/") -> bytes:
-    request = Request(url, headers={"User-Agent": "JAVSubtitleAssistant/1.0", "Referer": referer})
-    try:
-        with build_opener(SiteRedirects()).open(request, timeout=8) as response:
-            data = response.read(MAX_SUBTITLE + 1)
-    except HTTPException as error:
-        raise OSError("Subtitle Cat 返回了不完整的响应") from error
-    if len(data) > MAX_SUBTITLE:
-        raise OSError("Subtitle Cat 响应超过 2 MiB")
-    return data
+class _SearchTable(HTMLParser):
+    """Read the first cell only: metrics and language counts are not language evidence."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.found_table = False
+        self.data_rows = 0
+        self.rows = []
+        self._in_table = False
+        self._cell = 0
+        self._in_cell = False
+        self._href = ""
+        self._title = []
+        self._text = []
+        self._in_anchor = False
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if tag == "table" and "sub-table" in (attributes.get("class") or "").split():
+            self.found_table = self._in_table = True
+        if not self._in_table:
+            return
+        if tag == "tr":
+            self._cell, self._href, self._title, self._text = 0, "", [], []
+        elif tag == "td":
+            self._cell += 1
+            self._in_cell = self._cell == 1
+        elif tag == "a" and self._in_cell and not self._href:
+            self._href = attributes.get("href") or ""
+            self._in_anchor = True
+
+    def handle_data(self, data):
+        if self._in_cell:
+            self._text.append(data)
+        if self._in_anchor:
+            self._title.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "a":
+            self._in_anchor = False
+        elif tag == "td":
+            self._in_cell = False
+        elif tag == "tr" and self._in_table:
+            self.data_rows += bool(self._cell)
+            if self._href:
+                self.rows.append((self._href, "".join(self._title).strip(), " ".join(self._text)))
+        elif tag == "table":
+            self._in_table = False
 
 
-def subtitle_link(href: str, page: str, suffix: str) -> str:
-    if not href:
+class _DownloadLinks(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.links = {}
+        self.originals = []
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if tag == "a" and (attributes.get("id") or "").startswith("download_"):
+            self.links[attributes["id"].removeprefix("download_")] = attributes.get("href") or ""
+        if tag == "a" and (attributes.get("href") or "").endswith("-orig.srt"):
+            self.originals.append(attributes["href"])
+        # This is a static filename reference, never an instruction to run page JavaScript.
+        call = re.fullmatch(
+            r"\s*translate_from_server_folder\('[^']+',\s*'([^']+-orig\.srt)',\s*'(/subs/\d+/)'\);?\s*",
+            attributes.get("onclick") or "",
+        )
+        if call:
+            self.originals.append(call.group(2) + call.group(1))
+
+
+class SubtitleCatProvider:
+    """Keep Hyrule's search/detail/download flow and match local JAV numbers and parts."""
+
+    MAX_KEYWORDS = 3
+    MAX_RESULTS = 20
+    MAX_DETAILS = 6
+    SEARCH_BUDGET_SECONDS = 25
+
+    def __init__(self, use_proxy: bool = False):
+        proxies = getattr(settings, "PROXY", None) if use_proxy else None
+        self._opener = build_opener(ProxyHandler(proxies), _SiteRedirects())
+
+    def _fetch(self, url: str, deadline: float, referer: str = SITE + "/") -> bytes:
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Subtitle Cat 搜索超时")
+        request = Request(url, headers={"User-Agent": "JAVSubtitleAssistant/1.1", "Referer": referer})
+        try:
+            with self._opener.open(request, timeout=min(8, remaining)) as response:
+                data = response.read(MAX_SUBTITLE + 1)
+        except HTTPException as error:
+            raise OSError("Subtitle Cat 返回了不完整的响应") from error
+        if len(data) > MAX_SUBTITLE:
+            raise OSError("Subtitle Cat 响应超过 2 MiB")
+        return data
+
+    @staticmethod
+    def _safe_url(value: str, base: str, suffix: str) -> str:
+        if not value:
+            return ""
+        try:
+            url = urljoin(base, value)
+            parsed = urlsplit(url)
+            path = unquote(parsed.path)
+            if (_site_url(url) and not parsed.query and not parsed.fragment and path.endswith(suffix)
+                    and re.fullmatch(r"/subs/\d+/[^/\\\x00-\x1f]+", path)):
+                return SITE + quote(path, safe="/-._~")
+        except ValueError:
+            pass
         return ""
-    try:
-        url = urljoin(page, href)
-        parts = urlsplit(url)
-        path = unquote(parts.path)
-        if (site_url(url) and not parts.query and not parts.fragment and path.endswith(suffix) and
-                re.fullmatch(r"/subs/[0-9]+/[^/\\\x00-\x1f]+", path)):
-            return SITE + quote(path, safe="/")
-    except ValueError:
-        pass
-    return ""
 
-
-def download_links(detail: str, chinese: bool, search_url: str):
-    parsed = DownloadPage()
-    parsed.feed(fetch(detail, search_url).decode("utf-8", errors="replace"))
-    file_stem = unquote(urlsplit(detail).path).rsplit("/", 1)[-1].removesuffix(".html")
-    original = detail.removesuffix(".html") + "-orig.srt"
-    if chinese and original in {subtitle_link(link, detail, "-orig.srt") for link in parsed.original}:
-        traditional = re.search(r"(?:[._-](?:zh-TW|cht|traditional))\b", file_stem, re.I)
-        simplified = re.search(r"(?:[._-](?:zh-CN|chs|simplified))\b", file_stem, re.I)
-        yield ("zh-TW" if traditional else "zh-CN" if simplified else "zh"), original
-    for language in ("zh-CN", "zh-TW"):
-        suffix = f"-{language}.srt"
-        url = subtitle_link(parsed.translated.get(language, ""), detail, suffix)
-        if url and unquote(urlsplit(url).path).rsplit("/", 1)[-1] == file_stem + suffix:
-            yield language, url
-
-
-def find_chinese_subtitle(number: str, video: Path) -> tuple[str, bytes] | None:
-    """Require the same JAV number and part, then return one verified Chinese SRT."""
-    part = release_part(video.stem)
-    aliases = [number, number.replace("-", "")]
-    if number.startswith("FC2-"):
-        aliases.append(number.replace("FC2-", "FC2-PPV-"))
-    checked = set()
-    failures = []
-    for keyword in dict.fromkeys(aliases):
+    def _search(self, keyword: str, number: str, video: Path, deadline: float):
         search_url = SITE + "/index.php?search=" + quote(keyword, safe="")
-        page = SearchPage()
-        page.feed(fetch(search_url).decode("utf-8", errors="replace"))
-        if not page.found:
-            raise OSError("Subtitle Cat 搜索结果缺少字幕表")
-        matches = [
-            (title, href, chinese) for href, title, chinese in page.rows
-            if number in jav_numbers(title) and release_part(title) == part
-        ]
-        matches.sort(key=lambda row: (not row[0].casefold().startswith(video.stem.casefold()), not row[2]))
-        for _, href, chinese in matches:
-            detail = subtitle_link(href, search_url, ".html")
-            if not detail or detail in checked or len(checked) >= 6:
+        parser = _SearchTable()
+        parser.feed(self._fetch(search_url, deadline).decode("utf-8", errors="replace"))
+        if not parser.found_table or (parser.data_rows and not parser.rows):
+            raise OSError("Subtitle Cat 搜索页面无法解析")
+        part = release_part(video.stem)
+        matches = []
+        for href, title, description in parser.rows:
+            if number not in jav_numbers(title) or release_part(title) != part:
                 continue
-            checked.add(detail)
+            page_url = self._safe_url(href, search_url, ".html")
+            if not page_url:
+                continue
+            language = re.search(r"\btranslated from\s+([^()]+)", description, re.I)
+            original_chinese = bool(language and CHINESE_TAG.search(language[1]))
+            matches.append((page_url, title, original_chinese))
+            if len(matches) >= self.MAX_RESULTS:
+                break
+        matches.sort(key=lambda row: (not row[1].casefold().startswith(video.stem.casefold()), not row[2]))
+        return search_url, matches
+
+    def _download(self, page_url: str, original_chinese: bool, search_url: str, deadline: float):
+        parser = _DownloadLinks()
+        parser.feed(self._fetch(page_url, deadline, search_url).decode("utf-8", errors="replace"))
+        name = unquote(urlsplit(page_url).path).rsplit("/", 1)[-1].removesuffix(".html")
+        original = page_url.removesuffix(".html") + "-orig.srt"
+        downloads = []
+        if original_chinese and original in {self._safe_url(href, page_url, "-orig.srt") for href in parser.originals}:
+            traditional = re.search(r"(?:[._-](?:zh-TW|cht|traditional))\b", name, re.I)
+            simplified = re.search(r"(?:[._-](?:zh-CN|chs|simplified))\b", name, re.I)
+            downloads.append(("zh-TW" if traditional else "zh-CN" if simplified else "zh", original))
+        for code in ("zh-CN", "zh-TW"):
+            suffix = f"-{code}.srt"
+            url = self._safe_url(parser.links.get(code, ""), page_url, suffix)
+            if url and unquote(urlsplit(url).path).rsplit("/", 1)[-1] == name + suffix:
+                downloads.append((code, url))
+        error = None
+        for code, url in downloads:
             try:
-                for language, url in download_links(detail, chinese, search_url):
-                    try:
-                        text = decode_subtitle(fetch(url, detail)).replace("\r\n", "\n").replace("\r", "\n")
-                        if SRT.match(text) and chinese_text(text):
-                            return language, text.encode("utf-8")
-                    except (OSError, UnicodeDecodeError) as error:
-                        failures.append(error)
-            except OSError as error:
-                failures.append(error)
-        if len(checked) >= 6:
-            break
-    if failures:
-        raise OSError(f"Subtitle Cat 下载失败：{failures[-1]}")
-    return None
+                text = decode_subtitle(self._fetch(url, deadline, page_url)).replace("\r\n", "\n").replace("\r", "\n")
+                if SRT.match(text) and chinese_text(text):
+                    return code, text.encode("utf-8")
+                error = OSError("Subtitle Cat 返回的文件不是有效的中文字幕")
+            except (OSError, UnicodeDecodeError) as exc:
+                error = exc
+        if error:
+            raise error
+        return None
+
+    def search_and_download(self, number: str, video: Path) -> tuple[str, bytes] | None:
+        deadline = monotonic() + self.SEARCH_BUDGET_SECONDS
+        aliases = [number, number.replace("-", "")]
+        if number.startswith("FC2-"):
+            aliases.append(number.replace("FC2-", "FC2-PPV-"))
+        seen = set()
+        error = None
+        for keyword in list(dict.fromkeys(aliases))[:self.MAX_KEYWORDS]:
+            search_url, matches = self._search(keyword, number, video, deadline)
+            for page_url, _, original_chinese in matches:
+                if page_url in seen:
+                    continue
+                seen.add(page_url)
+                try:
+                    result = self._download(page_url, original_chinese, search_url, deadline)
+                    if result:
+                        return result
+                except (OSError, UnicodeDecodeError) as exc:
+                    error = exc
+                if len(seen) >= self.MAX_DETAILS:
+                    break
+            if len(seen) >= self.MAX_DETAILS:
+                break
+        if error:
+            raise OSError(f"Subtitle Cat 下载失败：{error}") from error
+        return None

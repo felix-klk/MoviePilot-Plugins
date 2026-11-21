@@ -10,7 +10,7 @@ import app.plugins
 
 
 PROJECT = Path(__file__).resolve().parents[3]
-app.plugins.__path__.append(str(PROJECT / "plugins.v3"))
+app.plugins.__path__.insert(0, str(PROJECT / "plugins.v3"))
 
 from app.plugins import javsubtitleassistant as plugin
 from app.plugins.javsubtitleassistant import media, subtitlecat
@@ -51,6 +51,12 @@ class JavSubtitleAssistantTests(unittest.TestCase):
             video = Path(directory) / "organizer title.mkv"
             video.with_suffix(".nfo").write_text("<movie><num>ABC-013</num></movie>", encoding="utf-8")
             self.assertEqual(media.video_number(video), "ABC-013")
+            video.with_suffix(".nfo").unlink()
+            video.touch()
+            (video.parent / "movie.nfo").write_text("<movie><num>ABC-014</num></movie>", encoding="utf-8")
+            self.assertEqual(media.video_number(video), "ABC-014")
+            (video.parent / "different movie.mkv").touch()
+            self.assertEqual(media.video_number(video), "")
 
     def test_external_chinese_bilingual_and_japanese(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -106,9 +112,10 @@ class JavSubtitleAssistantTests(unittest.TestCase):
             f"{site}/subs/11/ABC-123-CD2-zh-CN.srt": b"<html>not a subtitle</html>",
             f"{site}/subs/11/ABC-123-CD2-zh-TW.srt": CHINESE,
         }
-        with patch.object(subtitlecat, "fetch", side_effect=lambda url, *args: pages[url]):
+        provider = subtitlecat.SubtitleCatProvider()
+        with patch.object(provider, "_fetch", side_effect=lambda url, *args: pages[url]):
             self.assertEqual(
-                subtitlecat.find_chinese_subtitle("ABC-123", Path("ABC-123-CD2.mkv")),
+                provider.search_and_download("ABC-123", Path("ABC-123-CD2.mkv")),
                 ("zh-TW", CHINESE),
             )
 
@@ -126,7 +133,7 @@ class JavSubtitleAssistantTests(unittest.TestCase):
             instance.init_plugin({"enabled": True, "folders": str(root)})
             with (patch.object(instance, "get_data", side_effect=state.get),
                   patch.object(instance, "save_data", side_effect=state.__setitem__),
-                  patch.object(plugin, "find_chinese_subtitle", return_value=("zh-CN", CHINESE)) as search):
+                  patch.object(plugin.SubtitleCatProvider, "search_and_download", return_value=("zh-CN", CHINESE)) as search):
                 service = instance.get_service()[0]
                 service["func"]()
                 service["func"]()
@@ -140,6 +147,42 @@ class JavSubtitleAssistantTests(unittest.TestCase):
             self.assertFalse((root / "ABC-001.zh-CN.srt").exists())
             self.assertIsNone(media.write_subtitle(root / "ABC-002.strm", "zh-CN", b"replacement"))
             self.assertEqual((root / "ABC-002.zh-CN.srt").read_bytes(), CHINESE)
+
+    def test_settings_register_immediate_scan_and_report_missing_directory(self):
+        directory = Path(tempfile.gettempdir()) / "javsubtitle-test-unavailable-root"
+        instance = plugin.JavSubtitleAssistant()
+        state = {}
+        with (patch.object(plugin.scheduler_sdk, "add_plugin_once_job", return_value=True) as add,
+              patch.object(instance, "update_config") as config,
+              patch.object(instance, "get_data", side_effect=state.get),
+              patch.object(instance, "save_data", side_effect=state.__setitem__)):
+            instance.init_plugin({"enabled": True, "folders": str(directory), "onlyonce": True})
+            plugin_id, job, callback, _ = add.call_args.args
+            self.assertEqual((plugin_id, job), ("JavSubtitleAssistant", "scan_once"))
+            self.assertFalse(config.call_args.args[0]["onlyonce"])
+            self.assertEqual(instance.get_page()[0]["props"]["title"], "扫描中")
+            callback()
+            self.assertEqual(state["last_scan"]["failed"], 1)
+            self.assertEqual(instance.get_page()[1]["content"][0]["props"]["title"], str(directory))
+
+    def test_manual_scan_retries_cached_misses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            video = Path(directory) / "ABC-016.strm"
+            video.touch()
+            instance = plugin.JavSubtitleAssistant()
+            instance.init_plugin({"enabled": True, "folders": directory})
+            state = {}
+            with (patch.object(instance, "get_data", side_effect=state.get),
+                  patch.object(instance, "save_data", side_effect=state.__setitem__),
+                  patch.object(plugin.SubtitleCatProvider, "search_and_download",
+                               side_effect=[None, ("zh-CN", CHINESE)]) as search):
+                instance.scan()
+                instance.scan()
+                self.assertEqual(search.call_count, 1)
+                self.assertEqual(state["last_scan"]["cached"], 1)
+                instance.scan_now()
+            self.assertEqual(search.call_count, 2)
+            self.assertEqual(state["last_scan"]["saved"], 1)
 
 
 if __name__ == "__main__":

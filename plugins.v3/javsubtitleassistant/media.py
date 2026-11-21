@@ -50,10 +50,9 @@ def jav_numbers(value: str):
                 yield raw if prefix == "N" else f"{prefix}-{digits}"
 
 
-def video_number(video: Path) -> str:
-    """Prefer the organizer's same-stem NFO when it contains an explicit JAV number."""
+def _nfo_number(path: Path) -> str:
     try:
-        with video.with_suffix(".nfo").open("rb") as file:
+        with path.open("rb") as file:
             metadata = file.read(128 * 1024 + 1)
         if len(metadata) <= 128 * 1024 and b"<!DOCTYPE" not in metadata.upper():
             root = ET.fromstring(metadata)
@@ -65,7 +64,17 @@ def video_number(video: Path) -> str:
                     return number
     except (OSError, ET.ParseError):
         pass
-    return next(jav_numbers(video.stem), "")
+    return ""
+
+
+def video_number(video: Path) -> str:
+    """Use the file's NFO or name, then inspect a single-video directory's metadata."""
+    number = _nfo_number(video.with_suffix(".nfo")) or next(jav_numbers(video.stem), "")
+    if number:
+        return number
+    if not any(file != video and file.suffix.lower() in VIDEOS and file.is_file() for file in video.parent.iterdir()):
+        return _nfo_number(video.parent / "movie.nfo") or next(jav_numbers(video.parent.name), "")
+    return ""
 
 
 def release_part(name: str) -> int | None:
