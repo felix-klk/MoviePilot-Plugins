@@ -222,9 +222,9 @@
     }
   },
   "CloudDriveControlAssistant": {
-    "name": "CloudDrive��������",
-    "description": "��� CloudDrive2 ���̺��ϴ��쳣����������ʱ��ͣ�ϴ�������/�ƶ����������ϴ��ٶȡ�",
-    "labels": "����,��������",
+    "name": "CloudDrive控制助手",
+    "description": "监控 CloudDrive2 网盘和上传异常，外网播放时暂停上传及复制/移动，或限制上传速度。",
+    "labels": "云盘,播放联动",
     "version": "2.0.0",
     "icon": "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/icons/clouddrive.png",
     "author": "felix-klk",
@@ -234,7 +234,7 @@
     "system_version": ">=2.10.0,<3.0.0",
     "plugin_readme": "https://github.com/felix-klk/MoviePilot-Plugins/blob/main/plugins.v2/clouddrivecontrolassistant/README.md",
     "history": {
-      "v2.0.0": "�������� CloudDrive�������֣�֧�� CloudDrive2 ������顢MoviePilot ֪ͨ������������ͣ�����١�"
+      "v2.0.0": "独立发布 CloudDrive控制助手，支持 CloudDrive2 健康检查、MoviePilot 通知及外网播放暂停或限速。"
     }
   }
 }
