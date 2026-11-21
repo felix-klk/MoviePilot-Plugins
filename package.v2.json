@@ -220,5 +220,21 @@
       "v2.1.1": "按官方 gRPC 规范支持 API 令牌直连和 HTTPS，兼容原账号密码配置。",
       "v2.1.0": "适配 MoviePilot V2 2.10.0+：原生设置、上传和网盘健康检测、MP 通知、仅外网播放暂停上传。"
     }
+  },
+  "CloudDriveControlAssistant": {
+    "name": "CloudDrive��������",
+    "description": "��� CloudDrive2 ���̺��ϴ��쳣����������ʱ��ͣ�ϴ�������/�ƶ����������ϴ��ٶȡ�",
+    "labels": "����,��������",
+    "version": "2.0.0",
+    "icon": "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/icons/clouddrive.png",
+    "author": "felix-klk",
+    "author_url": "https://github.com/felix-klk",
+    "level": 2,
+    "release": true,
+    "system_version": ">=2.10.0,<3.0.0",
+    "plugin_readme": "https://github.com/felix-klk/MoviePilot-Plugins/blob/main/plugins.v2/clouddrivecontrolassistant/README.md",
+    "history": {
+      "v2.0.0": "�������� CloudDrive�������֣�֧�� CloudDrive2 ������顢MoviePilot ֪ͨ������������ͣ�����١�"
+    }
   }
 }

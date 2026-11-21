@@ -92,5 +92,21 @@
       "v1.1.0": "基于海拉鲁字幕大师 V3 的 Subtitle Cat 实现，加入立即扫描、成功和失败明细、系统代理及整理目录番号回退。",
       "v1.0.0": "扫描整理后目录，识别现有中文字幕并按番号和分段从 Subtitle Cat 补齐。"
     }
+  },
+  "CloudDriveControlAssistant": {
+    "name": "CloudDrive��������",
+    "description": "��� CloudDrive2 ���̺��ϴ��쳣����������ʱ��ͣ�ϴ�������/�ƶ����������ϴ��ٶȡ�",
+    "labels": "����,��������",
+    "version": "3.0.0",
+    "icon": "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/icons/clouddrive.png",
+    "author": "felix-klk",
+    "author_url": "https://github.com/felix-klk",
+    "level": 2,
+    "release": true,
+    "system_version": ">=3.0.0",
+    "history": {
+      "v3.0.0": "�������� CloudDrive�������֣�֧�� CloudDrive2 ������顢MoviePilot ֪ͨ������������ͣ�����١�"
+    },
+    "plugin_readme": "https://github.com/felix-klk/MoviePilot-Plugins/blob/main/plugins.v3/clouddrivecontrolassistant/README.md"
   }
 }
