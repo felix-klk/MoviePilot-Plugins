@@ -33,6 +33,13 @@ def build_api_routes(owner: Any) -> List[Dict[str, Any]]:
             "summary": "读取 Emby 服务器或指定服务器的媒体库",
         },
         {
+            "path": "/local_directories/scan",
+            "endpoint": status_api.scan_local_directories,
+            "methods": ["POST"],
+            "auth": "bear",
+            "summary": "检查已保存目录的存量视频并补搜缺失字幕",
+        },
+        {
             "path": "/refresh_index",
             "endpoint": status_api.refresh_index,
             "methods": ["POST"],

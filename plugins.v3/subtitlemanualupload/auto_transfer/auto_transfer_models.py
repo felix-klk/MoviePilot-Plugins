@@ -60,6 +60,7 @@ def public_auto_transfer_task(
         public_task["queue_position"] = queue_position
     public_task.pop("entry", None)
     public_task.pop("emby_rechecked", None)
+    public_task.pop("directory_waiting", None)
     public_task.pop("bilingual_retry_since", None)
     public_task["created_at"] = timestamp_iso(public_task.pop("created_ts", 0))
     public_task["updated_at"] = timestamp_iso(public_task.pop("updated_ts", 0))

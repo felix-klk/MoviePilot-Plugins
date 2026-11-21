@@ -1,233 +1,270 @@
 from __future__ import annotations
 
-import json
+import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, Iterable, Optional, Set
+from typing import Any, Iterable
+
+
+_POLL_SECONDS = 5
+_BATCH_SIZE = 20
 
 
 class ManualStrmMonitor:
-    """监控用户配置的 STRM 根目录，并把变化交给本地目录缓存。"""
+    """Maintain a baseline per directory and check changes after two matching observations."""
 
-    def __init__(self, owner: Any, *, logger: Any) -> None:
+    def __init__(self, owner: Any, *, logger: Any, video_exts: Iterable[str]) -> None:
         self._owner = owner
         self._logger = logger
+        self._video_exts = set(video_exts)
         self._stop_event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
-        self._running = False
+        self._thread: threading.Thread | None = None
+        roots = []
+        for raw in self._owner._manual_strm_paths:
+            path = Path(raw)
+            if path.is_absolute():
+                try:
+                    roots.append(path.resolve())
+                except (OSError, RuntimeError):
+                    roots.append(path)
+        self._configured_roots = tuple(dict.fromkeys(roots))
+        self._baseline: dict[Path, dict[Path, tuple[int, ...]]] = {}
+        self._observed: dict[Path, dict[Path, tuple[int, ...]]] = {}
+        self._root_ids: dict[Path, tuple[int, int]] = {}
+        self._offline: set[Path] = set()
+        self._scan_lock = threading.Lock()
+        self._scan_roots: dict[Path, set[Path]] = {}
         self._last_error = ""
         self._last_event_at = ""
         self._last_change_count = 0
 
     def start(self) -> None:
-        self.stop()
-        owner = self._owner
-        if not getattr(owner, "_manual_strm_enabled", False):
+        if self._thread and self._thread.is_alive():
             return
-        roots = self._roots()
+        if not self._owner.get_state() or not self._owner._manual_strm_enabled:
+            return
+        roots = self._configured_roots
         if not roots:
             return
         self._stop_event.clear()
-        self._last_error = ""
         self._thread = threading.Thread(
-            target=self._run,
-            args=(roots,),
-            name="SubtitleManualUploadStrmMonitor",
-            daemon=True,
+            target=self._run, args=(roots,), name="SubtitleManualUploadDirectoryMonitor", daemon=True,
         )
         self._thread.start()
 
     def stop(self) -> None:
         self._stop_event.set()
-        thread = self._thread
-        if thread and thread.is_alive():
-            thread.join(timeout=3)
-        self._thread = None
-        self._running = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=3)
+
+    def _running(self) -> bool:
+        return bool(self._thread and self._thread.is_alive() and not self._stop_event.is_set())
 
     def status(self) -> dict[str, Any]:
+        with self._scan_lock:
+            scanning = bool(self._scan_roots) and self._running()
         return {
-            "enabled": bool(getattr(self._owner, "_manual_strm_enabled", False)),
-            "running": bool(self._running and self._thread and self._thread.is_alive()),
-            "roots": self._roots(),
+            "enabled": bool(self._owner._manual_strm_enabled),
+            "running": self._running(),
+            "roots": [str(root) for root in self._configured_roots],
+            "offline_roots": sorted(str(root) for root in self._offline.copy()),
+            "scanning": scanning,
             "last_error": self._last_error,
             "last_event_at": self._last_event_at,
             "last_change_count": self._last_change_count,
         }
 
-    def _roots(self) -> list[str]:
-        roots: list[str] = []
-        for raw in getattr(self._owner, "_manual_strm_paths", []) or []:
-            try:
-                root = Path(str(raw)).expanduser().resolve()
-                if root.is_dir() and str(root) not in roots:
-                    roots.append(str(root))
-            except OSError:
+    def request_scan(self) -> bool:
+        with self._scan_lock:
+            if not self._running() or self._scan_roots:
+                return False
+            self._scan_roots = {root: set() for root in self._configured_roots}
+            return bool(self._scan_roots)
+
+    @staticmethod
+    def _root_id(root: Path) -> tuple[int, int]:
+        stat = root.stat()
+        return stat.st_dev, stat.st_ino
+
+    def wait_reason(self, entry: dict[str, Any]) -> str:
+        if not self._owner._manual_strm_enabled:
+            return ""
+        path = Path(str(entry.get("path") or ""))
+        for root in self._configured_roots:
+            if not path.is_relative_to(root):
                 continue
-        return roots
-
-    def _run(self, roots: list[str]) -> None:
-        self._running = True
-        try:
-            self._bootstrap(roots)
-            from watchfiles import watch
-
-            self._run_watch(watch, roots)
-        except ImportError:
-            self._logger.warning("[SubtitleManualUpload] watchfiles 不可用，额外 STRM 改用轮询监控")
-            self._run_polling(roots)
-        except Exception as exc:
-            if not self._stop_event.is_set():
-                self._last_error = str(exc)
-                self._logger.warning("[SubtitleManualUpload] 额外 STRM 实时监控异常，改用轮询: %s", exc)
-                self._run_polling(roots)
-        finally:
-            self._running = False
-
-    def _bootstrap(self, roots: list[str]) -> None:
-        """启动时做一次基线刷新，覆盖监控停止期间发生的新增/修改。"""
-        try:
-            entries = self._owner.services.local_media_catalog().refresh_local_cache()
-            manual_entries = [item for item in entries if item.get("origin") == "manual_strm"]
-            self._queue_changed_entries(manual_entries)
-        except Exception as exc:
-            self._last_error = str(exc)
-            self._logger.warning("[SubtitleManualUpload] 额外 STRM 启动基线刷新失败: %s", exc)
-
-    def _run_watch(self, watch: Any, roots: list[str]) -> None:
-        for changes in watch(
-            *roots,
-            stop_event=self._stop_event,
-            recursive=True,
-            yield_on_timeout=True,
-            rust_timeout=1000,
-            poll_delay_ms=1000,
-            ignore_permission_denied=True,
-        ):
-            if self._stop_event.is_set():
-                return
-            paths = self._interesting_paths(changes)
-            if paths:
-                self._dispatch(paths)
-
-    def _run_polling(self, roots: list[str]) -> None:
-        previous = self._snapshot(roots)
-        while not self._stop_event.wait(3):
-            current = self._snapshot(roots)
-            changed = {path for path in set(previous) | set(current) if previous.get(path) != current.get(path)}
-            previous = current
-            if changed:
-                self._dispatch(changed)
-
-    def _snapshot(self, roots: Iterable[str]) -> dict[str, tuple[int, int]]:
-        snapshot: dict[str, tuple[int, int]] = {}
-        for root_text in roots:
-            root = Path(root_text)
+            root_id = None
             try:
-                for path in root.rglob("*"):
-                    if not path.is_file() or not self._is_interesting(path):
-                        continue
-                    try:
-                        stat = path.stat()
-                        snapshot[str(path)] = (int(stat.st_size), int(stat.st_mtime_ns))
-                    except OSError:
-                        continue
+                root_id = self._root_id(root)
+                if root in self._offline or self._root_ids.get(root) not in (None, root_id):
+                    return "等待本地整理目录恢复"
+                stat = path.stat()
+                if not stat.st_size:
+                    return "等待视频写入稳定"
+            except FileNotFoundError:
+                saved_id = tuple(entry.get("_directory_root_id") or ())
+                if root_id is None or (
+                    saved_id and saved_id != root_id and not self._observed.get(root)
+                ):
+                    return "等待本地整理目录恢复"
             except OSError:
-                continue
+                return "等待本地整理目录恢复"
+            else:
+                baseline = self._baseline.get(root, {})
+                if path in self._observed.get(root, {}) and baseline.get(path) != self._signature(stat):
+                    return "等待视频写入稳定"
+            break
+        return ""
+
+    def _run(self, roots: tuple[Path, ...]) -> None:
+        while not self._stop_event.is_set():
+            for root in roots:
+                if self._stop_event.is_set():
+                    return
+                try:
+                    self._poll_root(root)
+                except Exception as exc:
+                    self._last_error = str(exc)
+                    self._logger.warning("[SubtitleManualUpload] 检查本地整理目录失败 path=%s error=%s", root, exc)
+            self._stop_event.wait(_POLL_SECONDS)
+
+    @staticmethod
+    def _signature(stat: os.stat_result) -> tuple[int, int, int]:
+        return stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+    def _snapshot(self, root: Path) -> dict[Path, tuple[int, ...]]:
+        snapshot = {}
+        stack = [root]
+        junction = getattr(os.path, "isjunction", lambda _: False)
+        while stack and not self._stop_event.is_set():
+            directory = stack.pop()
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if entry.is_symlink():
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        if not junction(entry.path):
+                            stack.append(Path(entry.path))
+                        continue
+                    path = Path(entry.path)
+                    if self._is_interesting(path) and entry.is_file(follow_symlinks=False):
+                        try:
+                            stat = entry.stat(follow_symlinks=False)
+                            snapshot[path] = self._signature(stat)
+                        except FileNotFoundError:
+                            continue
         return snapshot
 
-    def _interesting_paths(self, changes: Any) -> Set[str]:
-        paths: Set[str] = set()
-        for _, raw_path in changes or []:
-            path = Path(str(raw_path))
-            if path.is_dir() or self._is_interesting(path) or (not path.exists() and not path.suffix):
-                paths.add(str(path))
-        return paths
-
     def _is_interesting(self, path: Path) -> bool:
-        return path.suffix.casefold() in {
-            ".strm",
-            ".nfo",
-            *set(getattr(self._owner, "_subtitle_exts", set()) or set()),
-        }
+        ext = path.suffix.lower()
+        return ext == ".nfo" or ext in self._video_exts or ext in self._owner._subtitle_exts
 
-    def _dispatch(self, paths: Set[str]) -> None:
-        debounce = max(float(getattr(self._owner, "_manual_strm_watch_debounce_seconds", 2)), 0.2)
-        if self._stop_event.wait(debounce):
-            return
+    def _poll_root(self, root: Path) -> None:
         try:
-            result = self._owner.services.local_media_catalog().apply_manual_strm_changes(paths)
-            changed_entries = result.get("changed_entries") or []
-            self._queue_changed_entries(changed_entries)
-            self._last_change_count = len(paths)
-            self._last_event_at = time.strftime("%Y-%m-%dT%H:%M:%S")
-        except Exception as exc:
-            self._last_error = str(exc)
-            self._logger.warning("[SubtitleManualUpload] 处理额外 STRM 变化失败: %s", exc)
-
-    def _entry_signature(self, entry: dict[str, Any]) -> str:
-        path = Path(str(entry.get("path") or ""))
-        identity = "|".join(
-            str(entry.get(key) or "")
-            for key in ("media_source", "media_id", "title", "year", "season", "episode")
-        )
-        try:
-            stat = path.stat()
-            return f"{path}|{stat.st_size}|{stat.st_mtime_ns}|{identity}"
+            root_id = self._root_id(root)
+            current = self._snapshot(root)
+            if self._root_id(root) != root_id or (
+                not current and self._baseline.get(root) and self._root_ids[root] != root_id
+            ):
+                raise OSError("目录挂载已变化")
         except OSError:
-            return f"{path}|missing|{identity}"
-
-    def _signature_file(self) -> Path:
-        return self._owner.get_data_path() / "manual_strm_auto_signatures.json"
-
-    def _load_signatures(self) -> dict[str, str]:
+            self._offline.add(root)
+            self._observed.pop(root, None)
+            return
+        if self._stop_event.is_set():
+            return
+        videos = {path for path in current if path.suffix.lower() in self._video_exts and current[path][0]}
+        catalog = self._owner.services.local_media_catalog()
+        baseline = self._baseline.get(root)
+        previous = self._observed.get(root)
+        self._observed[root] = current
+        if baseline is None:
+            catalog.apply_manual_strm_changes(str(path) for path in videos)
+            self._baseline[root] = current
+            self._root_ids[root] = root_id
+            self._offline.discard(root)
+            return
+        if previous is None:
+            return
+        stable_videos = {path for path in videos if current[path] == previous.get(path)}
+        changes = {
+            path for path in baseline.keys() | current.keys()
+            if current.get(path) == previous.get(path) and current.get(path) != baseline.get(path)
+            and (path not in videos or path in stable_videos)
+        }
+        self._root_ids[root] = root_id
+        self._offline.discard(root)
+        # Publish the stable observations before the queue worker can claim a task.
+        if changes:
+            updated = baseline.copy()
+            for path in changes:
+                if path in current:
+                    updated[path] = current[path]
+                else:
+                    updated.pop(path, None)
+            self._baseline[root] = updated
         try:
-            payload = json.loads(self._signature_file().read_text(encoding="utf-8"))
-            return {str(key): str(value) for key, value in payload.items()} if isinstance(payload, dict) else {}
-        except (OSError, ValueError):
-            return {}
+            self._dispatch(root, changes, videos, stable_videos, current)
+        except Exception:
+            self._baseline[root] = baseline
+            raise
 
-    def _save_signatures(self, signatures: dict[str, str]) -> None:
-        try:
-            path = self._signature_file()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(signatures, ensure_ascii=False), encoding="utf-8")
-        except OSError as exc:
-            self._logger.warning("[SubtitleManualUpload] 保存额外 STRM 自动处理指纹失败: %s", exc)
+    def _dispatch(
+        self, root: Path, changes: set[Path], videos: set[Path],
+        stable_videos: set[Path], current: dict[Path, tuple[int, ...]],
+    ) -> None:
+        catalog = self._owner.services.local_media_catalog()
+        candidates = set()
+        if changes:
+            catalog.apply_manual_strm_changes(str(path) for path in changes)
+            candidates.update(changes & videos)
+            removed = changes - current.keys()
+            removed_videos = {path for path in removed if path.suffix.lower() in self._video_exts}
+            candidates.update(self._videos_with_removed_subtitles(removed, videos | removed_videos))
+            self._last_change_count = len(changes)
+            self._last_event_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+        if not self._owner._auto_search_on_manual_strm:
+            candidates.clear()
 
-    def _queue_changed_entries(self, entries: list[dict[str, Any]]) -> None:
-        if not getattr(self._owner, "_auto_search_on_manual_strm", False) or not entries:
-            return
-        signatures = self._load_signatures()
-        enriched_entries = [self._owner.services.media_metadata().enrich_media(entry) for entry in entries]
-        for entry in enriched_entries:
-            tmdb_id = str(entry.get("tmdb_id") or "").strip()
-            if tmdb_id:
-                entry["media_source"] = "themoviedb"
-                entry["media_id"] = tmdb_id
-        candidates = [
-            entry for entry in enriched_entries
-            if str(entry.get("path") or "") and signatures.get(str(entry.get("path"))) != self._entry_signature(entry)
-        ]
-        if not candidates:
-            return
-        auto_transfer = self._owner.services.auto_transfer()
-        if not auto_transfer.auto_search_providers():
-            self._logger.info(
-                "[SubtitleManualUpload] 额外 STRM 自动搜索等待启用在线字幕源 count=%s",
-                len(candidates),
-            )
-            return
-        queued, skipped = auto_transfer.enqueue_transfer_auto_entries(candidates)
-        if queued or skipped:
-            for entry in candidates:
-                signatures[str(entry.get("path"))] = self._entry_signature(entry)
-            self._save_signatures(signatures)
-        self._logger.info(
-            "[SubtitleManualUpload] 额外 STRM 自动字幕任务 changed=%s queued=%s skipped=%s",
-            len(candidates), queued, skipped,
-        )
+        with self._scan_lock:
+            scanned = self._scan_roots.get(root)
+        if scanned is not None:
+            candidates.update(stable_videos - scanned)
+        paths = sorted(candidates & stable_videos)
+        for offset in range(0, len(paths), _BATCH_SIZE):
+            if self._stop_event.is_set():
+                return
+            batch = paths[offset:offset + _BATCH_SIZE]
+            entries = catalog.manual_entries_for_paths(batch)
+            for entry in entries:
+                entry["_directory_root_id"] = self._root_ids[root]
+            self._owner.services.auto_transfer().enqueue_missing_directory_entries(entries)
+            if scanned is not None:
+                scanned.update(batch)
+        if scanned is not None and videos <= scanned:
+            with self._scan_lock:
+                self._scan_roots.pop(root, None)
+
+    def _videos_with_removed_subtitles(self, removed: set[Path], videos: set[Path]) -> set[Path]:
+        by_name: dict[tuple[Path, str], set[Path]] = {}
+        subtitles = [path for path in removed if path.suffix.lower() in self._owner._subtitle_exts]
+        affected_dirs = {path.parent for path in subtitles}
+        for video in videos:
+            if video.parent in affected_dirs:
+                by_name.setdefault((video.parent, os.path.normcase(video.stem)), set()).add(video)
+        affected = set()
+        for path in subtitles:
+            name = os.path.normcase(path.stem)
+            while name:
+                targets = by_name.get((path.parent, name))
+                if targets:
+                    affected.update(targets)
+                    break
+                name, separator, _ = name.rpartition(".")
+                if not separator:
+                    break
+        return affected
 
 
 __all__ = ["ManualStrmMonitor"]

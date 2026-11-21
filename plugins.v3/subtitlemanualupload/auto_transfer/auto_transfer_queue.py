@@ -202,12 +202,12 @@ class AutoTransferQueue:
                 if id(entry) not in valid_ids:
                     outcomes.append("unavailable")
                     continue
-                claimed = self._claim_key_locked(self.transfer_key(entry), now)
                 target_key = self._target_key(entry)
                 if target_key in active_keys:
                     outcomes.append("already_active")
                     continue
-                if not claimed:
+                claimed = self._claim_key_locked(self.transfer_key(entry), now)
+                if not claimed and not entry.get("_directory_auto_search"):
                     outcomes.append("recent")
                     continue
                 entry_key = self.entry_key(entry)
@@ -296,7 +296,11 @@ class AutoTransferQueue:
             ):
                 return False
             entry = owner._json_clone(task.get("entry") or {})
-            if not entry:
+            if not entry or any(
+                other is not task and other["status"] in AUTO_TRANSFER_ACTIVE_STATUSES
+                and self._target_key(other["entry"]) == self._target_key(entry)
+                for other in owner._auto_transfer_tasks.values()
+            ):
                 return False
             if force_low_confidence:
                 entry["_force_timeline_write"] = True
@@ -367,7 +371,7 @@ class AutoTransferQueue:
             ready = [
                 task for task in pending
                 if (not task.get("emby_rechecked") and not task.get("emby_offline_attempts")
-                    and not is_bilingual_followup_waiting(task))
+                    and not task.get("directory_waiting") and not is_bilingual_followup_waiting(task))
                 or float(task.get("next_run_ts") or 0) <= now
             ]
             if not ready:
@@ -398,6 +402,7 @@ class AutoTransferQueue:
                 task["message"] = "入库自动字幕处理中"
                 task["updated_ts"] = now
                 task["next_run_ts"] = 0
+                task.pop("directory_waiting", None)
             self._save_locked()
             return [owner._json_clone(task) for task in batch], 0
 

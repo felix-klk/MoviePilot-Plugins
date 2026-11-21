@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from os.path import normcase
+
 from ..matching.subtitle_formats import is_bitmap_subtitle
 from ..matching.subtitle_language import auto_language_bucket, language_profile_from_text
 
@@ -25,6 +27,7 @@ class SubtitleInventory:
         *,
         subtitle_exts: Iterable[str],
         stream_exts: Iterable[str],
+        video_exts: Iterable[str] = (),
         embedded_text_codecs: Iterable[str],
         embedded_image_codecs: Iterable[str],
         embedded_probe_cache: "OrderedDict[str, List[Dict[str, Any]]]",
@@ -44,6 +47,7 @@ class SubtitleInventory:
     ) -> None:
         self._subtitle_exts = set(subtitle_exts)
         self._stream_exts = set(stream_exts)
+        self._video_exts = self._stream_exts | set(video_exts)
         self._embedded_text_codecs = set(embedded_text_codecs)
         self._embedded_image_codecs = set(embedded_image_codecs)
         self._embedded_probe_cache = embedded_probe_cache
@@ -87,17 +91,17 @@ class SubtitleInventory:
             if subtitle_files is None:
                 continue
 
+            video_stems = (self._subtitle_directory_cache.get(str(media_dir)) or {}).get("video_stems", set())
             for entry in directory_entries:
                 target_key = self._target_key(entry)
                 path_text = self._normalize_text(entry.get("path"))
                 if not target_key or not path_text:
                     continue
                 video_path = Path(path_text)
-                stem = video_path.stem
+                stem = normcase(video_path.stem)
                 matched_files = [
-                    item
-                    for item in subtitle_files
-                    if item.stem == stem or item.name.startswith(f"{stem}.")
+                    item for item in subtitle_files
+                    if self._matches_video_stem(normcase(item.stem), stem, video_stems)
                 ]
                 # 信任整理历史路径只跳过视频文件的远程 stat，不应同时隐藏目录内
                 # 已存在的外挂字幕。目录扫描仍在后台/显式目标读取时按需发生。
@@ -114,6 +118,15 @@ class SubtitleInventory:
                 result[target_key] = subtitles
         return result
 
+    @staticmethod
+    def _matches_video_stem(subtitle: str, video: str, video_stems: set[str]) -> bool:
+        # A more specific video basename owns the subtitle when versions share a prefix.
+        while subtitle.startswith(f"{video}."):
+            if subtitle in video_stems:
+                return False
+            subtitle = subtitle.rsplit(".", 1)[0]
+        return subtitle == video
+
     def _subtitle_files_in_directory(self, media_dir: Path) -> Optional[List[Path]]:
         cache_key = str(media_dir)
         now = time.monotonic()
@@ -126,11 +139,14 @@ class SubtitleInventory:
             return [Path(path) for path in cached.get("paths") or []]
 
         try:
-            subtitle_files = [
-                item
-                for item in media_dir.iterdir()
-                if item.suffix.lower() in self._subtitle_exts and item.is_file()
-            ]
+            subtitle_files = []
+            video_stems = set()
+            for item in media_dir.iterdir():
+                ext = item.suffix.lower()
+                if ext in self._subtitle_exts and item.is_file():
+                    subtitle_files.append(item)
+                elif ext in self._video_exts and item.is_file():
+                    video_stems.add(normcase(item.stem))
         except Exception as exc:
             self._logger_warning(
                 "[SubtitleManualUpload] 读取外挂字幕目录失败 directory=%s error=%s",
@@ -143,6 +159,7 @@ class SubtitleInventory:
             "loaded_at": now,
             "signature": current_signature,
             "paths": [str(item) for item in subtitle_files],
+            "video_stems": video_stems,
             "metadata": {},
         }
         self._subtitle_directory_cache.move_to_end(cache_key)
@@ -242,7 +259,7 @@ class SubtitleInventory:
         path_text = self._normalize_text(target_entry.get("path"))
         if storage != "local" or not path_text or self._is_stream_path(path_text):
             return None
-        if self._trust_transfer_history_paths:
+        if self._trust_transfer_history_paths and target_entry.get("origin") != "manual_strm":
             return None
 
         video_path = Path(path_text)

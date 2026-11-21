@@ -52,7 +52,11 @@ def test_v2_v3_match_history_cache_version_is_three():
 def test_v2_v3_strm_placeholder_uses_real_newline_binding():
     for version in ("plugins.v2", "plugins.v3"):
         source = (ROOT / version / "subtitlemanualupload/src/components/Config.vue").read_text(encoding="utf-8-sig")
-        assert "const manualStrmPathPlaceholder = `/vol2/1000/raid/2/links2\n/vol1/1000/media-strm`" in source
+        examples = {
+            "plugins.v2": "/vol2/1000/raid/2/links2\n/vol1/1000/media-strm",
+            "plugins.v3": r"E:\\test" + "\n/media/test",
+        }
+        assert f"const manualStrmPathPlaceholder = `{examples[version]}`" in source
         assert ':placeholder="manualStrmPathPlaceholder"' in source
         assert 'placeholder="/vol2/1000/raid/2/links2\\n/vol1/1000/media-strm"' not in source
 

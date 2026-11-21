@@ -84,14 +84,12 @@ class AutoTransferProcessor:
             targets=[target],
             scope="auto",
         )
-        legacy_ranking = getattr(owner, "_auto_subtitle_legacy_ranking", False)
         candidates = rank_auto_download_candidates(
             search_result.get("results") or [],
             [target],
             getattr(owner, "_auto_subtitle_language_priority", None),
             strict=bool(getattr(owner, "_auto_subtitle_language_strict", False)),
             min_score=owner._auto_search_min_score,
-            legacy=legacy_ranking,
             logger=self._logger,
         )
         if not candidates:
@@ -106,7 +104,7 @@ class AutoTransferProcessor:
 
         last_reason = ""
         for selected in auto_download_attempts(
-            candidates, AUTO_DOWNLOAD_ATTEMPT_LIMIT, legacy=legacy_ranking, logger=self._logger,
+            candidates, AUTO_DOWNLOAD_ATTEMPT_LIMIT, logger=self._logger,
         ):
             log_auto_download_candidate(self._logger, selected)
             session_id = owner._hash_text(f"auto|{datetime.now().isoformat()}|{entry.get('id')}")[:16]
@@ -317,7 +315,7 @@ class AutoTransferProcessor:
         )
         target = self._collaborators.target_from_entry(entry)
         strategy = owner._normalize_auto_transfer_subtitle_strategy(owner._auto_transfer_subtitle_strategy)
-        if target.get("is_stream"):
+        if target.get("is_stream") or entry.get("_directory_auto_search"):
             strategy = "online_source_only"
         base = {"strategy": strategy, "target": target.get("label")}
 
@@ -339,8 +337,6 @@ class AutoTransferProcessor:
         if required is not None or strategy == "online_source_only" or search_result.get("status") == "written":
             return {**base, **search_result}
 
-        if target.get("is_stream"):
-            return {**base, **search_result}
         ai_result = self._collaborators.submit_ai_for_entry(entry, target, "搜索无单一高置信结果后兜底")
         return {**base, **ai_result, "search": search_result}
 

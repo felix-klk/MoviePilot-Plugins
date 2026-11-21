@@ -46,6 +46,7 @@ from ..catalog.target_resolver import (
     TargetEntryCache,
 )
 from ..catalog.manual_strm import ManualStrmCatalog
+from ..catalog.target_normalizers import local_video_extensions
 from ..timeline.timeline_fixer import TimelineFixResult, check_timeline_fixer_dependencies, fix_subtitle_timeline
 from ..integrations.emby_refresh import EmbyRefreshService
 from ..timeline.timeline_tasks import TimelineTaskStore
@@ -107,6 +108,7 @@ def subtitle_inventory(owner_cls) -> SubtitleInventory:
     return SubtitleInventory(
         subtitle_exts=owner_cls._subtitle_exts,
         stream_exts=owner_cls._stream_exts,
+        video_exts=local_video_extensions(settings, owner_cls._stream_exts),
         embedded_text_codecs=owner_cls._embedded_subtitle_text_codecs,
         embedded_image_codecs=owner_cls._embedded_subtitle_image_codecs,
         embedded_probe_cache=owner_cls._embedded_subtitle_probe_cache,
@@ -244,6 +246,7 @@ def local_media_catalog(owner) -> LocalMediaCatalog:
             meta_info_path=lambda path: MetaInfoPath(path, force_video=True),
             build_media_key=build_media_key,
             logger_warning=logger.warning,
+            video_exts=local_video_extensions(settings, owner._stream_exts),
         ),
         threading_module=owner._host_module_value("threading", threading),
     )
@@ -296,4 +299,4 @@ def online_service(owner) -> OnlineSubtitleSearchService:
 
 
 def manual_strm_monitor(owner) -> ManualStrmMonitor:
-    return ManualStrmMonitor(owner, logger=logger)
+    return ManualStrmMonitor(owner, logger=logger, video_exts=local_video_extensions(settings, owner._stream_exts))

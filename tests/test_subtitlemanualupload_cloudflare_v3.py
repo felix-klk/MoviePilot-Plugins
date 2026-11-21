@@ -248,22 +248,23 @@ def test_auto_download_ranks_same_version_by_match_popularity_and_recency(client
         item("other-source", 95, provider="subtitlecat"),
     ]
     ranked = matcher.rank_auto_download_candidates(
-        candidates, [{"basename": "压力 - 2160p WEB-DL"}], ["chi&eng", "chi"], strict=False, legacy=True,
+        candidates, [{"basename": "压力 - 2160p WEB-DL"}], ["chi&eng", "chi"], strict=False,
     )
 
     assert [item["result_id"] for item in ranked] == [
-        "high-fit", "maximum-bonus", "small-new", "large-old", "one-download", "too-old", "other-source", "other-cut",
+        "high-fit", "maximum-bonus", "small-new", "one-download", "large-old", "too-old", "other-source",
     ]
     assert ranked[0]["auto_rank"]["total"] == 82
-    assert ranked[1]["auto_rank"]["download_bonus"] == 3
-    assert ranked[1]["auto_rank"]["time_bonus"] == 2
-    assert ranked[2]["auto_rank"]["time_bonus"] > ranked[3]["auto_rank"]["time_bonus"]
-    assert ranked[2]["auto_rank"]["download_bonus"] > ranked[4]["auto_rank"]["download_bonus"]
-    assert ranked[-1]["auto_rank"]["release"] == "片源不同"
+    assert ranked[1]["auto_rank"]["download_bonus"] == 1.5
+    assert ranked[1]["auto_rank"]["time_bonus"] == 3
+    ranks = {item["result_id"]: item["auto_rank"] for item in ranked}
+    assert ranks["small-new"]["time_bonus"] > ranks["large-old"]["time_bonus"]
+    assert ranks["small-new"]["download_bonus"] > ranks["one-download"]["download_bonus"]
+    assert ranked[-1]["auto_rank"]["release"] == "片源匹配"
     assert "auto_rank" not in candidates[0]
 
 
-def test_auto_download_prioritizes_subhd_type_within_compatible_release(clients):
+def test_auto_download_scores_subhd_type_within_compatible_release(clients):
     matcher = importlib.import_module("cf_test.online_subtitles.matcher")
     candidates = [
         {
@@ -286,11 +287,11 @@ def test_auto_download_prioritizes_subhd_type_within_compatible_release(clients)
         ]
     ]
     ranked = matcher.rank_auto_download_candidates(
-        candidates, [{"basename": "Pressure_2160p_WEB-DL_Theatrical_Cut"}], ["chi&eng"], strict=False, legacy=True,
+        candidates, [{"basename": "Pressure_2160p_WEB-DL_Theatrical_Cut"}], ["chi&eng"], strict=False,
     )
-    assert [item["result_id"] for item in ranked] == ["official", "ai", "other", "untagged", "different-release"]
-    assert ranked[0]["auto_rank"]["subtitle_type"] == "官方字幕"
-    assert ranked[3]["auto_rank"]["subtitle_type"] == "未标注"
+    assert [item["result_id"] for item in ranked] == ["untagged", "other", "ai", "official"]
+    assert ranked[3]["auto_rank"]["type_bonus"] == 4
+    assert ranked[0]["auto_rank"]["subtitle_type"] == "未标注"
 
 
 def test_auto_download_orders_release_identity_site_and_language_before_quality(clients):

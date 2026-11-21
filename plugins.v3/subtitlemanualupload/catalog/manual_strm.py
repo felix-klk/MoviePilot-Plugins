@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 
 
 class ManualStrmCatalog:
-    """扫描用户明确配置的本地 STRM 根目录，不读取 STRM 内容或远端媒体。"""
+    """扫描用户配置的本地媒体目录，不读取 STRM 内容或远端媒体。"""
 
     def __init__(
         self,
@@ -21,6 +21,7 @@ class ManualStrmCatalog:
         meta_info_path: Optional[Callable[[Path], Any]],
         build_media_key: Optional[Callable[[Any, Any], str]] = None,
         logger_warning: Callable[..., None],
+        video_exts: Iterable[str] = (".strm",),
     ) -> None:
         self._normalize_text = normalize_text
         self._safe_int = safe_int
@@ -29,6 +30,7 @@ class ManualStrmCatalog:
         self._meta_info_path = meta_info_path
         self._build_media_key = build_media_key
         self._logger_warning = logger_warning
+        self.video_exts = set(video_exts)
 
     def scan(self, roots: Iterable[str], *, max_entries: Optional[int] = None) -> List[Dict[str, Any]]:
         entries: List[Dict[str, Any]] = []
@@ -50,8 +52,10 @@ class ManualStrmCatalog:
         return entries
 
     def entry_for_path(self, path: Path, roots: Iterable[str]) -> Optional[Dict[str, Any]]:
+        if path.is_symlink():
+            return None
         path = path.resolve()
-        if path.suffix.lower() != ".strm" or not path.is_file():
+        if path.suffix.lower() not in self.video_exts or not path.is_file():
             return None
         for root_text in roots:
             root = self._resolve_root(root_text)
@@ -70,7 +74,7 @@ class ManualStrmCatalog:
             root = root.resolve()
             return root if root.is_dir() else None
         except Exception as exc:
-            self._logger_warning("[SubtitleManualUpload] 手动 STRM 根目录不可用 path=%s error=%s", raw, exc)
+            self._logger_warning("[SubtitleManualUpload] 本地整理目录不可用 path=%s error=%s", raw, exc)
             return None
 
     def _iter_strm_files(self, root: Path):
@@ -84,13 +88,14 @@ class ManualStrmCatalog:
                             if item.is_symlink():
                                 continue
                             if item.is_dir(follow_symlinks=False):
-                                stack.append(Path(item.path))
-                            elif item.is_file(follow_symlinks=False) and item.name.lower().endswith(".strm"):
+                                if not getattr(os.path, "isjunction", lambda _: False)(item.path):
+                                    stack.append(Path(item.path))
+                            elif item.is_file(follow_symlinks=False) and Path(item.name).suffix.lower() in self.video_exts:
                                 yield Path(item.path)
                         except OSError:
                             continue
             except OSError as exc:
-                self._logger_warning("[SubtitleManualUpload] 扫描手动 STRM 目录失败 directory=%s error=%s", current, exc)
+                self._logger_warning("[SubtitleManualUpload] 扫描本地整理目录失败 directory=%s error=%s", current, exc)
 
     def _entry_from_path(self, root: Path, path: Path) -> Optional[Dict[str, Any]]:
         nfo = self._read_nfo(root, path)
@@ -163,7 +168,7 @@ class ManualStrmCatalog:
             "basename": basename,
             "filename": filename,
             "storage": "local",
-            "library_name": "手动 STRM 目录",
+            "library_name": "本地整理目录",
             "relative_path": str(path.relative_to(root)).replace("\\", "/"),
             "target_label": f"{prefix} · {filename}" if media_type == "tv" else filename,
             "writable": True,

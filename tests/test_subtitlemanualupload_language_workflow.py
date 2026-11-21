@@ -298,14 +298,13 @@ def test_v3_emby_server_selection_round_trips(sup_modules):
 
 
 @pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)
-def test_v3_legacy_ranking_switch_round_trips(sup_modules):
+def test_v3_ignores_saved_legacy_ranking_switch(sup_modules):
     schema = sup_modules.load("config.config_schema")
     runtime = sup_modules.load("config.config_runtime")
-    assert schema.normalize_plugin_config({})["auto_subtitle_legacy_ranking"] is False
     owner = types.SimpleNamespace()
     runtime.apply_runtime_config(owner, schema.normalize_plugin_config({"auto_subtitle_legacy_ranking": True}))
     saved = runtime.build_save_config_payload(owner)
-    assert schema.normalize_plugin_config(saved)["auto_subtitle_legacy_ranking"] is True
+    assert "auto_subtitle_legacy_ranking" not in saved
 
 
 @pytest.mark.parametrize("sup_modules", ["plugins.v3"], indirect=True)

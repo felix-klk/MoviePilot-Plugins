@@ -330,7 +330,6 @@ const requiredLanguages = computed(() => {
               <p v-else-if="onlineAutoPreview.error" role="alert">{{ onlineAutoPreview.error }}</p>
               <template v-else>
                 <p v-if="!onlineAutoPreview.enabled">入库自动搜索未启用，以下为按当前配置预判。</p>
-                <p v-if="onlineAutoPreview.legacy_ranking">当前使用 1.2.34 排序。</p>
                 <div v-for="skipped in onlineAutoPreview.skipped" :key="skipped.target_id" class="online-auto-skipped">
                   <strong>{{ skipped.target }}</strong>
                   <span>{{ skipped.reason }}</span>
@@ -369,9 +368,7 @@ const requiredLanguages = computed(() => {
                         </p>
                         <p>
                           基础 {{ candidate.auto_rank.match }}
-                          <template v-if="!onlineAutoPreview.legacy_ranking">
-                            · 类型 {{ candidate.auto_rank.type_bonus >= 0 ? '+' : '' }}{{ candidate.auto_rank.type_bonus }}
-                          </template>
+                          · 类型 {{ candidate.auto_rank.type_bonus >= 0 ? '+' : '' }}{{ candidate.auto_rank.type_bonus }}
                           · 下载量 +{{ candidate.auto_rank.download_bonus }}
                           · 发布时效 +{{ candidate.auto_rank.time_bonus }} · 合计 {{ candidate.auto_rank.total }}
                         </p>

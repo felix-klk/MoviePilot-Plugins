@@ -1,5 +1,5 @@
 import { importShared } from './__federation_fn_import-JrT3xvdd.js';
-import Config, { d as defaultOnlineProviderIds, o as onlineResultLanguageFilterCategory, a as onlineLanguageItems, b as onlineProviderItems, c as onlineResultKey, i as isOnlineResultDownloadable, e as isForeignOnlineResult, p as providerName, f as providerPriority, g as onlineResultLanguagePriority, h as onlineResultIdentityPriority, _ as _export_sfc, u as unwrapResponse, j as errorMessage, k as createSubtitleManualUploadApi, s as seasonLabel, l as formatBytes, t as timelineMetaItems, m as compactTargetName, n as historyMediaStat, q as formatMediaType, r as mediaLabel, v as timelineResultText, w as mediaStat, x as onlineResultMeta, y as providerProgressText, z as providerProgressColor, A as buildOutputName, B as rarDependencyModeLabel } from './__federation_expose_Config-DiSyNBj3.js';
+import Config, { d as defaultOnlineProviderIds, o as onlineResultLanguageFilterCategory, a as onlineLanguageItems, b as onlineProviderItems, c as onlineResultKey, i as isOnlineResultDownloadable, e as isForeignOnlineResult, p as providerName, f as providerPriority, g as onlineResultLanguagePriority, h as onlineResultIdentityPriority, _ as _export_sfc, u as unwrapResponse, j as errorMessage, k as createSubtitleManualUploadApi, s as seasonLabel, l as formatBytes, t as timelineMetaItems, m as compactTargetName, n as historyMediaStat, q as formatMediaType, r as mediaLabel, v as timelineResultText, w as mediaStat, x as onlineResultMeta, y as providerProgressText, z as providerProgressColor, A as buildOutputName, B as rarDependencyModeLabel } from './__federation_expose_Config-DPOVWXvA.js';
 
 const INSTALL_HINT = '请先安装并启用';
 
@@ -4061,75 +4061,74 @@ const _hoisted_15$3 = {
   role: "alert"
 };
 const _hoisted_16$2 = { key: 0 };
-const _hoisted_17$2 = { key: 1 };
-const _hoisted_18$2 = { key: 0 };
-const _hoisted_19$2 = { class: "online-auto-choice" };
-const _hoisted_20$2 = {
+const _hoisted_17$2 = { key: 0 };
+const _hoisted_18$2 = { class: "online-auto-choice" };
+const _hoisted_19$2 = {
   key: 1,
   class: "online-auto-hidden"
 };
-const _hoisted_21$2 = { key: 1 };
-const _hoisted_22$1 = { key: 2 };
+const _hoisted_20$2 = { key: 1 };
+const _hoisted_21$2 = { key: 2 };
+const _hoisted_22$1 = { key: 0 };
 const _hoisted_23$1 = { key: 0 };
-const _hoisted_24$1 = { key: 0 };
-const _hoisted_25$1 = {
+const _hoisted_24$1 = {
   key: 0,
   class: "online-auto-badge"
 };
-const _hoisted_26$1 = { key: 1 };
-const _hoisted_27 = { key: 0 };
-const _hoisted_28 = ["datetime"];
-const _hoisted_29 = { key: 2 };
-const _hoisted_30 = { key: 1 };
-const _hoisted_31 = { key: 2 };
-const _hoisted_32 = {
+const _hoisted_25$1 = { key: 1 };
+const _hoisted_26$1 = { key: 0 };
+const _hoisted_27 = ["datetime"];
+const _hoisted_28 = { key: 2 };
+const _hoisted_29 = { key: 1 };
+const _hoisted_30 = { key: 2 };
+const _hoisted_31 = {
   key: 6,
   class: "online-loading"
 };
-const _hoisted_33 = {
+const _hoisted_32 = {
   key: 7,
   class: "online-result-list"
 };
-const _hoisted_34 = { class: "online-result-main" };
-const _hoisted_35 = { class: "online-result-title" };
-const _hoisted_36 = { class: "online-result-meta" };
-const _hoisted_37 = {
+const _hoisted_33 = { class: "online-result-main" };
+const _hoisted_34 = { class: "online-result-title" };
+const _hoisted_35 = { class: "online-result-meta" };
+const _hoisted_36 = {
   key: 0,
   class: "online-listing-metadata"
 };
-const _hoisted_38 = {
+const _hoisted_37 = {
   key: 1,
   class: "online-auto-badge"
 };
-const _hoisted_39 = {
+const _hoisted_38 = {
   key: 2,
   class: "online-listing-metadata"
 };
-const _hoisted_40 = ["datetime"];
-const _hoisted_41 = {
+const _hoisted_39 = ["datetime"];
+const _hoisted_40 = {
   key: 4,
   class: "online-manual-badge"
 };
-const _hoisted_42 = { key: 0 };
-const _hoisted_43 = {
+const _hoisted_41 = { key: 0 };
+const _hoisted_42 = {
   key: 1,
   class: "online-match-detail"
 };
-const _hoisted_44 = { class: "online-result-actions" };
-const _hoisted_45 = ["href", "aria-label"];
-const _hoisted_46 = {
+const _hoisted_43 = { class: "online-result-actions" };
+const _hoisted_44 = ["href", "aria-label"];
+const _hoisted_45 = {
   key: 8,
   class: "empty-state"
 };
-const _hoisted_47 = { class: "manual-links-panel" };
-const _hoisted_48 = { class: "manual-provider-head" };
-const _hoisted_49 = { class: "manual-keywords" };
-const _hoisted_50 = ["href"];
-const _hoisted_51 = {
+const _hoisted_46 = { class: "manual-links-panel" };
+const _hoisted_47 = { class: "manual-provider-head" };
+const _hoisted_48 = { class: "manual-keywords" };
+const _hoisted_49 = ["href"];
+const _hoisted_50 = {
   class: "online-selection-count",
   "aria-live": "polite"
 };
-const _hoisted_52 = { key: 0 };
+const _hoisted_51 = { key: 0 };
 
 const {computed: computed$4} = await importShared('vue');
 
@@ -4559,9 +4558,6 @@ return (_ctx, _cache) => {
                                   (!__props.onlineAutoPreview.enabled)
                                     ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_16$2, "入库自动搜索未启用，以下为按当前配置预判。"))
                                     : _createCommentVNode$9("", true),
-                                  (__props.onlineAutoPreview.legacy_ranking)
-                                    ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_17$2, "当前使用 1.2.34 排序。"))
-                                    : _createCommentVNode$9("", true),
                                   (_openBlock$9(true), _createElementBlock$9(_Fragment$7, null, _renderList$5(__props.onlineAutoPreview.skipped, (skipped) => {
                                     return (_openBlock$9(), _createElementBlock$9("div", {
                                       key: skipped.target_id,
@@ -4579,72 +4575,64 @@ return (_ctx, _cache) => {
                                       (plan.candidates.length)
                                         ? (_openBlock$9(), _createElementBlock$9(_Fragment$7, { key: 0 }, [
                                             (__props.onlineAutoPreview.plans.length > 1 || plan.scope === 'season')
-                                              ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_18$2, _toDisplayString$6(plan.target) + _toDisplayString$6(plan.scope === 'season' ? ' · 整季包' : ''), 1))
+                                              ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_17$2, _toDisplayString$6(plan.target) + _toDisplayString$6(plan.scope === 'season' ? ' · 整季包' : ''), 1))
                                               : _createCommentVNode$9("", true),
-                                            _createElementVNode$8("div", _hoisted_19$2, [
+                                            _createElementVNode$8("div", _hoisted_18$2, [
                                               _cache[36] || (_cache[36] = _createElementVNode$8("span", { class: "online-auto-badge" }, "首选候选", -1)),
                                               _createElementVNode$8("strong", null, _toDisplayString$6(plan.candidates[0].title), 1)
                                             ]),
                                             _createElementVNode$8("p", null, _toDisplayString$6(__props.providerName(plan.candidates[0].provider)) + " · " + _toDisplayString$6(plan.candidates[0].auto_rank.release) + " · " + _toDisplayString$6(plan.candidates[0].auto_rank.subtitle_type), 1),
                                             (!visibleResultKeys.value.has(__props.onlineResultKey(plan.candidates[0])))
-                                              ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_20$2, " 首选候选已被当前筛选隐藏。 "))
+                                              ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_19$2, " 首选候选已被当前筛选隐藏。 "))
                                               : _createCommentVNode$9("", true)
                                           ], 64))
-                                        : (_openBlock$9(), _createElementBlock$9("p", _hoisted_21$2, _toDisplayString$6(plan.target) + " · 当前这批结果没有符合自动入库条件的候选。", 1)),
+                                        : (_openBlock$9(), _createElementBlock$9("p", _hoisted_20$2, _toDisplayString$6(plan.target) + " · 当前这批结果没有符合自动入库条件的候选。", 1)),
                                       (plan.candidates.length || Object.keys(plan.rejections).length)
-                                        ? (_openBlock$9(), _createElementBlock$9("details", _hoisted_22$1, [
+                                        ? (_openBlock$9(), _createElementBlock$9("details", _hoisted_21$2, [
                                             _createElementVNode$8("summary", null, _toDisplayString$6(plan.candidates.length ? '查看匹配依据与备选顺序' : '查看筛除原因'), 1),
                                             _createElementVNode$8("p", null, [
                                               _createTextVNode$6("基础匹配分门槛 " + _toDisplayString$6(__props.onlineAutoPreview.min_score) + " 分", 1),
                                               (requiredLanguages.value)
-                                                ? (_openBlock$9(), _createElementBlock$9("span", _hoisted_23$1, " · 语言要求 " + _toDisplayString$6(requiredLanguages.value), 1))
+                                                ? (_openBlock$9(), _createElementBlock$9("span", _hoisted_22$1, " · 语言要求 " + _toDisplayString$6(requiredLanguages.value), 1))
                                                 : _createCommentVNode$9("", true)
                                             ]),
                                             (plan.candidates.length)
-                                              ? (_openBlock$9(), _createElementBlock$9("ol", _hoisted_24$1, [
+                                              ? (_openBlock$9(), _createElementBlock$9("ol", _hoisted_23$1, [
                                                   (_openBlock$9(true), _createElementBlock$9(_Fragment$7, null, _renderList$5(plan.candidates, (candidate) => {
                                                     return (_openBlock$9(), _createElementBlock$9("li", {
                                                       key: __props.onlineResultKey(candidate)
                                                     }, [
                                                       _createElementVNode$8("strong", null, _toDisplayString$6(candidate.title), 1),
                                                       (candidate.auto_rank.fallback)
-                                                        ? (_openBlock$9(), _createElementBlock$9("span", _hoisted_25$1, "跨站备选"))
+                                                        ? (_openBlock$9(), _createElementBlock$9("span", _hoisted_24$1, "跨站备选"))
                                                         : _createCommentVNode$9("", true),
                                                       _createElementVNode$8("p", null, _toDisplayString$6(candidate.auto_rank.release) + " · 身份" + _toDisplayString$6(identityLabels[candidate.auto_rank.identity_status] || '待确认') + " · " + _toDisplayString$6(__props.providerName(candidate.provider)) + "（优先级 " + _toDisplayString$6(candidate.auto_rank.provider_priority) + "） · " + _toDisplayString$6(candidate.auto_rank.subtitle_type) + " · 语言" + _toDisplayString$6(languageLabels[candidate.auto_rank.language_bucket] || '待解包确认'), 1),
-                                                      _createElementVNode$8("p", null, [
-                                                        _createTextVNode$6(" 基础 " + _toDisplayString$6(candidate.auto_rank.match) + " ", 1),
-                                                        (!__props.onlineAutoPreview.legacy_ranking)
-                                                          ? (_openBlock$9(), _createElementBlock$9(_Fragment$7, { key: 0 }, [
-                                                              _createTextVNode$6(" · 类型 " + _toDisplayString$6(candidate.auto_rank.type_bonus >= 0 ? '+' : '') + _toDisplayString$6(candidate.auto_rank.type_bonus), 1)
-                                                            ], 64))
-                                                          : _createCommentVNode$9("", true),
-                                                        _createTextVNode$6(" · 下载量 +" + _toDisplayString$6(candidate.auto_rank.download_bonus) + " · 发布时效 +" + _toDisplayString$6(candidate.auto_rank.time_bonus) + " · 合计 " + _toDisplayString$6(candidate.auto_rank.total), 1)
-                                                      ]),
+                                                      _createElementVNode$8("p", null, " 基础 " + _toDisplayString$6(candidate.auto_rank.match) + " · 类型 " + _toDisplayString$6(candidate.auto_rank.type_bonus >= 0 ? '+' : '') + _toDisplayString$6(candidate.auto_rank.type_bonus) + " · 下载量 +" + _toDisplayString$6(candidate.auto_rank.download_bonus) + " · 发布时效 +" + _toDisplayString$6(candidate.auto_rank.time_bonus) + " · 合计 " + _toDisplayString$6(candidate.auto_rank.total), 1),
                                                       (Number.isSafeInteger(candidate.auto_rank.downloads) || formatUploadTime(candidate.auto_rank.uploaded_at))
-                                                        ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_26$1, [
+                                                        ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_25$1, [
                                                             (Number.isSafeInteger(candidate.auto_rank.downloads))
-                                                              ? (_openBlock$9(), _createElementBlock$9("span", _hoisted_27, " 下载 " + _toDisplayString$6(_unref$2(downloadCountFormat).format(candidate.auto_rank.downloads)) + " 次 ", 1))
+                                                              ? (_openBlock$9(), _createElementBlock$9("span", _hoisted_26$1, " 下载 " + _toDisplayString$6(_unref$2(downloadCountFormat).format(candidate.auto_rank.downloads)) + " 次 ", 1))
                                                               : _createCommentVNode$9("", true),
                                                             (formatUploadTime(candidate.auto_rank.uploaded_at))
                                                               ? (_openBlock$9(), _createElementBlock$9("time", {
                                                                   key: 1,
                                                                   datetime: candidate.auto_rank.uploaded_at
-                                                                }, " 上传 " + _toDisplayString$6(formatUploadTime(candidate.auto_rank.uploaded_at)), 9, _hoisted_28))
+                                                                }, " 上传 " + _toDisplayString$6(formatUploadTime(candidate.auto_rank.uploaded_at)), 9, _hoisted_27))
                                                               : _createCommentVNode$9("", true)
                                                           ]))
                                                         : _createCommentVNode$9("", true),
                                                       (candidate.match_detail)
-                                                        ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_29, _toDisplayString$6(candidate.match_detail), 1))
+                                                        ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_28, _toDisplayString$6(candidate.match_detail), 1))
                                                         : _createCommentVNode$9("", true)
                                                     ]))
                                                   }), 128))
                                                 ]))
                                               : _createCommentVNode$9("", true),
                                             (plan.candidate_count > plan.candidates.length)
-                                              ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_30, " 本轮最多尝试上面 " + _toDisplayString$6(plan.candidates.length) + " 条，另有 " + _toDisplayString$6(plan.candidate_count - plan.candidates.length) + " 条符合条件。 ", 1))
+                                              ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_29, " 本轮最多尝试上面 " + _toDisplayString$6(plan.candidates.length) + " 条，另有 " + _toDisplayString$6(plan.candidate_count - plan.candidates.length) + " 条符合条件。 ", 1))
                                               : _createCommentVNode$9("", true),
                                             (Object.keys(plan.rejections).length)
-                                              ? (_openBlock$9(), _createElementBlock$9("ul", _hoisted_31, [
+                                              ? (_openBlock$9(), _createElementBlock$9("ul", _hoisted_30, [
                                                   (_openBlock$9(true), _createElementBlock$9(_Fragment$7, null, _renderList$5(plan.rejections, (count, reason) => {
                                                     return (_openBlock$9(), _createElementBlock$9("li", { key: reason }, _toDisplayString$6(reason) + " · " + _toDisplayString$6(count) + " 条", 1))
                                                   }), 128))
@@ -4658,10 +4646,10 @@ return (_ctx, _cache) => {
                         ]))
                       : _createCommentVNode$9("", true),
                     (__props.onlineSearching && !__props.filteredOnlineResults.length)
-                      ? (_openBlock$9(), _createElementBlock$9("div", _hoisted_32, _toDisplayString$6(__props.mobile ? '正在搜索字幕' : '正在从 API 搜索字幕，先返回的结果会先显示...'), 1))
+                      ? (_openBlock$9(), _createElementBlock$9("div", _hoisted_31, _toDisplayString$6(__props.mobile ? '正在搜索字幕' : '正在从 API 搜索字幕，先返回的结果会先显示...'), 1))
                       : _createCommentVNode$9("", true),
                     (__props.filteredOnlineResults.length)
-                      ? (_openBlock$9(), _createElementBlock$9("div", _hoisted_33, [
+                      ? (_openBlock$9(), _createElementBlock$9("div", _hoisted_32, [
                           (_openBlock$9(true), _createElementBlock$9(_Fragment$7, null, _renderList$5(__props.filteredOnlineResults, (item) => {
                             return (_openBlock$9(), _createElementBlock$9("div", {
                               key: __props.onlineResultKey(item),
@@ -4677,39 +4665,39 @@ return (_ctx, _cache) => {
                                 disabled: !__props.isOnlineResultDownloadable(item),
                                 "onUpdate:modelValue": value => _ctx.$emit('toggle-online-result', item, value)
                               }, null, 8, ["model-value", "disabled", "onUpdate:modelValue"]),
-                              _createElementVNode$8("div", _hoisted_34, [
-                                _createElementVNode$8("div", _hoisted_35, _toDisplayString$6(item.title), 1),
-                                _createElementVNode$8("div", _hoisted_36, [
+                              _createElementVNode$8("div", _hoisted_33, [
+                                _createElementVNode$8("div", _hoisted_34, _toDisplayString$6(item.title), 1),
+                                _createElementVNode$8("div", _hoisted_35, [
                                   _createElementVNode$8("span", null, _toDisplayString$6(__props.providerName(item.provider)), 1),
                                   _createElementVNode$8("span", null, _toDisplayString$6(__props.onlineResultMeta(item)), 1),
                                   (item.subtitle_type)
-                                    ? (_openBlock$9(), _createElementBlock$9("span", _hoisted_37, _toDisplayString$6(item.subtitle_type), 1))
+                                    ? (_openBlock$9(), _createElementBlock$9("span", _hoisted_36, _toDisplayString$6(item.subtitle_type), 1))
                                     : _createCommentVNode$9("", true),
                                   (autoPreferredKeys.value.has(__props.onlineResultKey(item)))
-                                    ? (_openBlock$9(), _createElementBlock$9("span", _hoisted_38, "自动首选"))
+                                    ? (_openBlock$9(), _createElementBlock$9("span", _hoisted_37, "自动首选"))
                                     : _createCommentVNode$9("", true),
                                   (Number.isSafeInteger(item.download_count) && item.download_count >= 0)
-                                    ? (_openBlock$9(), _createElementBlock$9("span", _hoisted_39, " 下载 " + _toDisplayString$6(_unref$2(downloadCountFormat).format(item.download_count)) + " 次 ", 1))
+                                    ? (_openBlock$9(), _createElementBlock$9("span", _hoisted_38, " 下载 " + _toDisplayString$6(_unref$2(downloadCountFormat).format(item.download_count)) + " 次 ", 1))
                                     : _createCommentVNode$9("", true),
                                   (formatUploadTime(item.uploaded_at))
                                     ? (_openBlock$9(), _createElementBlock$9("time", {
                                         key: 3,
                                         datetime: item.uploaded_at,
                                         class: "online-listing-metadata"
-                                      }, " 上传 " + _toDisplayString$6(formatUploadTime(item.uploaded_at)), 9, _hoisted_40))
+                                      }, " 上传 " + _toDisplayString$6(formatUploadTime(item.uploaded_at)), 9, _hoisted_39))
                                     : _createCommentVNode$9("", true),
                                   (!__props.isOnlineResultDownloadable(item))
-                                    ? (_openBlock$9(), _createElementBlock$9("span", _hoisted_41, " 需手动下载 "))
+                                    ? (_openBlock$9(), _createElementBlock$9("span", _hoisted_40, " 需手动下载 "))
                                     : _createCommentVNode$9("", true)
                                 ]),
                                 (item.note)
-                                  ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_42, _toDisplayString$6(item.note), 1))
+                                  ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_41, _toDisplayString$6(item.note), 1))
                                   : _createCommentVNode$9("", true),
                                 (item.match_detail)
-                                  ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_43, _toDisplayString$6(item.match_detail), 1))
+                                  ? (_openBlock$9(), _createElementBlock$9("p", _hoisted_42, _toDisplayString$6(item.match_detail), 1))
                                   : _createCommentVNode$9("", true)
                               ]),
-                              _createElementVNode$8("div", _hoisted_44, [
+                              _createElementVNode$8("div", _hoisted_43, [
                                 (item.page_url)
                                   ? (_openBlock$9(), _createElementBlock$9("a", {
                                       key: 0,
@@ -4718,17 +4706,17 @@ return (_ctx, _cache) => {
                                       target: "_blank",
                                       rel: "noopener noreferrer",
                                       "aria-label": `查看 ${item.title}（新标签页）`
-                                    }, " 查看 ", 8, _hoisted_45))
+                                    }, " 查看 ", 8, _hoisted_44))
                                   : _createCommentVNode$9("", true)
                               ])
                             ], 2))
                           }), 128))
                         ]))
                       : (!__props.onlineSearching)
-                        ? (_openBlock$9(), _createElementBlock$9("div", _hoisted_46, _toDisplayString$6(__props.hasOnlineResults ? '没有符合当前筛选条件的字幕。' : (__props.mobile ? '搜索无结果，请手动搜索' : '没有可自动下载的字幕结果。可以换关键词重试，或使用右侧手动搜索。')), 1))
+                        ? (_openBlock$9(), _createElementBlock$9("div", _hoisted_45, _toDisplayString$6(__props.hasOnlineResults ? '没有符合当前筛选条件的字幕。' : (__props.mobile ? '搜索无结果，请手动搜索' : '没有可自动下载的字幕结果。可以换关键词重试，或使用右侧手动搜索。')), 1))
                         : _createCommentVNode$9("", true)
                   ]),
-                  _createElementVNode$8("aside", _hoisted_47, [
+                  _createElementVNode$8("aside", _hoisted_46, [
                     _cache[38] || (_cache[38] = _createElementVNode$8("div", { class: "section-kicker" }, "手动搜索", -1)),
                     _cache[39] || (_cache[39] = _createElementVNode$8("h3", null, "跳转字幕站", -1)),
                     _cache[40] || (_cache[40] = _createElementVNode$8("p", null, "自动搜索失败或源站需要验证时，可打开链接下载字幕包后回到本页上传。", -1)),
@@ -4737,17 +4725,17 @@ return (_ctx, _cache) => {
                         key: provider.provider,
                         class: "manual-provider"
                       }, [
-                        _createElementVNode$8("div", _hoisted_48, [
+                        _createElementVNode$8("div", _hoisted_47, [
                           _createElementVNode$8("strong", null, _toDisplayString$6(provider.name), 1)
                         ]),
-                        _createElementVNode$8("div", _hoisted_49, [
+                        _createElementVNode$8("div", _hoisted_48, [
                           (_openBlock$9(true), _createElementBlock$9(_Fragment$7, null, _renderList$5(provider.links, (link) => {
                             return (_openBlock$9(), _createElementBlock$9("a", {
                               key: `${provider.provider}-${link.keyword}`,
                               href: link.url,
                               target: "_blank",
                               rel: "noopener noreferrer"
-                            }, _toDisplayString$6(link.keyword), 9, _hoisted_50))
+                            }, _toDisplayString$6(link.keyword), 9, _hoisted_49))
                           }), 128))
                         ])
                       ]))
@@ -4760,10 +4748,10 @@ return (_ctx, _cache) => {
             _createVNode$8(_component_VDivider),
             _createVNode$8(_component_VCardActions, { class: "online-download-actions" }, {
               default: _withCtx$7(() => [
-                _createElementVNode$8("span", _hoisted_51, [
+                _createElementVNode$8("span", _hoisted_50, [
                   _createTextVNode$6(" 已选 " + _toDisplayString$6(__props.selectedOnlineResults.length) + " 条", 1),
                   (hiddenSelectionCount.value)
-                    ? (_openBlock$9(), _createElementBlock$9("span", _hoisted_52, "（含隐藏的 " + _toDisplayString$6(hiddenSelectionCount.value) + " 条）", 1))
+                    ? (_openBlock$9(), _createElementBlock$9("span", _hoisted_51, "（含隐藏的 " + _toDisplayString$6(hiddenSelectionCount.value) + " 条）", 1))
                     : _createCommentVNode$9("", true)
                 ]),
                 _createVNode$8(_component_VSpacer),
@@ -4889,7 +4877,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const OnlineSubtitleDialog = /*#__PURE__*/_export_sfc(_sfc_main$9, [['__scopeId',"data-v-56dd5f20"]]);
+const OnlineSubtitleDialog = /*#__PURE__*/_export_sfc(_sfc_main$9, [['__scopeId',"data-v-1582cd5a"]]);
 
 const {onBeforeUnmount: onBeforeUnmount$1,onMounted: onMounted$2,ref: ref$7} = await importShared('vue');
 

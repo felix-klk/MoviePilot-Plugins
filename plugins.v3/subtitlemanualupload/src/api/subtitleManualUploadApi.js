@@ -60,6 +60,9 @@ export function createSubtitleManualUploadApi(api, pluginBase) {
     onlineStatus() {
       return get('/online_status')
     },
+    scanLocalDirectories() {
+      return post('/local_directories/scan', {})
+    },
     refreshIndex(payload = {}) {
       return post('/refresh_index', payload)
     },

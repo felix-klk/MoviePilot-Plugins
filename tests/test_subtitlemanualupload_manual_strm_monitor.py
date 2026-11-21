@@ -54,7 +54,7 @@ def make_owner(tmp_path: Path, strm: Path):
 
 
 def test_monitor_persists_signatures_and_only_requeues_changed_strm(tmp_path):
-    for version in ("plugins.v2", "plugins.v3"):
+    for version in ("plugins.v2",):
         root = tmp_path / version
         root.mkdir(parents=True)
         strm = root / "Movie.strm"
@@ -75,7 +75,7 @@ def test_monitor_persists_signatures_and_only_requeues_changed_strm(tmp_path):
 
 
 def test_monitor_tracks_nfo_subtitle_and_deleted_directory_events(tmp_path):
-    for version in ("plugins.v2", "plugins.v3"):
+    for version in ("plugins.v2",):
         owner, _ = make_owner(tmp_path / version, tmp_path / version / "Movie.strm")
         monitor = load_monitor(version)(owner, logger=types.SimpleNamespace(info=lambda *args: None, warning=lambda *args: None))
         deleted_dir = tmp_path / version / "deleted-directory"
@@ -90,6 +90,73 @@ def test_monitor_tracks_nfo_subtitle_and_deleted_directory_events(tmp_path):
         assert str(tmp_path / version / "Movie.nfo") in paths
         assert str(tmp_path / version / "Movie.chi.srt") in paths
         assert str(deleted_dir) in paths
+
+
+def test_v3_directory_baseline_stable_copy_and_subtitle_removal(tmp_path, monkeypatch):
+    root = tmp_path / "media"
+    nested = root / "Season 01"
+    nested.mkdir(parents=True)
+    hd = nested / "Show.S01E01.mkv"
+    four_k = nested / "Show.S01E01.2160p.mp4"
+    subtitle = nested / "Show.S01E01.2160p.zh-CN.srt"
+    hd.write_bytes(b"existing")
+    entries = lambda paths: [{"path": str(path)} for path in paths]
+    queued = []
+    owner, _ = make_owner(tmp_path, hd)
+    owner._manual_strm_paths = [str(root)]
+    owner.services.local_media_catalog = lambda: types.SimpleNamespace(
+        apply_manual_strm_changes=lambda paths: {
+            "changed_entries": entries(
+                Path(path) for path in paths if Path(path).suffix in {".mkv", ".mp4"}
+                and Path(path).is_file()
+            ),
+        },
+        manual_entries_for_paths=entries,
+    )
+    owner.services.auto_transfer = lambda: types.SimpleNamespace(
+        enqueue_missing_directory_entries=lambda batch: queued.extend(item["path"] for item in batch)
+    )
+    monitor = load_monitor("plugins.v3")(
+        owner, logger=types.SimpleNamespace(), video_exts={".strm", ".mkv", ".mp4"},
+    )
+    monkeypatch.setattr(monitor, "_running", lambda: True)
+
+    monitor._poll_root(root)
+    assert queued == []
+    four_k.write_bytes(b"copy starts")
+    monitor._poll_root(root)
+    assert queued == []
+    four_k.write_bytes(b"copy completed")
+    monitor._poll_root(root)
+    assert queued == []
+    monitor._poll_root(root)
+    assert queued == [str(four_k)]
+
+    subtitle.write_text("written by queue", encoding="utf-8")
+    monitor._poll_root(root)
+    monitor._poll_root(root)
+    assert queued == [str(four_k)]
+
+    detached = root.with_name("detached")
+    root.rename(detached)
+    monitor._poll_root(root)
+    assert monitor.wait_reason({"path": str(four_k)}) == "等待本地整理目录恢复"
+    assert monitor.status()["offline_roots"] == [str(root)]
+    assert monitor.request_scan()
+    assert not monitor.request_scan()
+    detached.rename(root)
+    monitor._poll_root(root)
+    assert queued == [str(four_k)]
+    monitor._poll_root(root)
+    assert set(queued[1:]) == {str(hd), str(four_k)}
+    assert not monitor.status()["scanning"]
+    assert not monitor.wait_reason({"path": str(four_k)})
+
+    subtitle.unlink()
+    monitor._poll_root(root)
+    monitor._poll_root(root)
+    assert queued.count(str(four_k)) == 3
+    assert queued.count(str(hd)) == 1
 
 
 def test_media_metadata_uses_moviepilot_match_cache_for_missing_identity():

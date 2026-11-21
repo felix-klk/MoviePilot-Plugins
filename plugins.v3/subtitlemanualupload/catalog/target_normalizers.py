@@ -98,6 +98,13 @@ def extract_episode_hint(
     return None
 
 
+def local_video_extensions(settings_obj: Any, stream_exts: Iterable[str]) -> set[str]:
+    return {
+        f".{str(ext).lower().lstrip('.')}"
+        for ext in (getattr(settings_obj, "RMT_MEDIAEXT", None) or ())
+    } | set(stream_exts)
+
+
 def is_local_video_path(
     storage: str,
     path: str,
@@ -110,12 +117,7 @@ def is_local_video_path(
     if normalize_text(storage) != "local" or not path:
         return False
     suffix = Path(path).suffix.lower()
-    configured_exts = getattr(settings_obj, "RMT_MEDIAEXT", set()) or set()
-    allowed_exts = {
-        ext.lower() if str(ext).startswith(".") else f".{str(ext).lower()}"
-        for ext in configured_exts
-    }
-    allowed_exts.update(stream_exts)
+    allowed_exts = local_video_extensions(settings_obj, stream_exts)
     if suffix and allowed_exts and suffix not in allowed_exts:
         return False
     if trust_transfer_history_paths:

@@ -1551,8 +1551,8 @@ def test_v3_online_auto_preview_uses_current_policy_without_downloading(tmp_path
 
     plugin._auto_subtitle_legacy_ranking = True
     result = preview()
-    assert result["legacy_ranking"] is True
-    assert [item["result_id"] for item in result["plans"][0]["candidates"]] == ["official", "ai"]
+    assert "legacy_ranking" not in result
+    assert [item["result_id"] for item in result["plans"][0]["candidates"]] == ["ai", "official"]
     plugin._auto_subtitle_legacy_ranking = False
 
     saved_results = body["results"]
@@ -4030,6 +4030,69 @@ def test_v3_auto_transfer_expiry_and_manual_clear_keep_pending_task(tmp_path, du
     assert set(task["id"] for task in restored_service.auto_transfer_queue_snapshot()["tasks"]) == {new_id, pending_id}
     assert restored_service.clear_auto_transfer_history() == 1
     assert [item["id"] for item in json.loads(state_path.read_text(encoding="utf-8"))["tasks"]] == [pending_id]
+
+
+def test_v3_directory_scan_checks_each_version_and_rechecks_after_mount_recovers(
+    tmp_path, durable_auto_transfer_queue, monkeypatch,
+):
+    new_queue, clock, _, _ = durable_auto_transfer_queue
+    media = tmp_path / "media"
+    media.mkdir()
+    subtitles = "1\n00:00:01,000 --> 00:00:02,000\n你好\nHello\n"
+
+    def configure(plugin, service):
+        plugin._enabled = True
+        plugin._manual_strm_enabled = True
+        plugin._manual_strm_paths = [str(media)]
+        plugin._auto_subtitle_language_priority = ["chi&eng"]
+        plugin._auto_check_emby_subtitles = False
+        plugin._auto_skip_chinese_media_on_transfer = False
+        plugin._auto_transfer_subtitle_strategy = "ai_source_only"
+        plugin._auto_transfer_queue_debounce_seconds = 0
+        service._time = clock
+        override_services(
+            plugin, auto_transfer=service,
+            media_metadata=types.SimpleNamespace(enrich_media=lambda entry: dict(entry)),
+        )
+
+    plugin, service, _ = new_queue()
+    configure(plugin, service)
+    hd, four_k = [
+        make_auto_entry(
+            media, filename=name, media_type="tv", season=1, episode=1, origin="manual_strm",
+        )
+        for name in ("Show.S01E01.mkv", "Show.S01E01.2160p.mkv")
+    ]
+    Path(hd["path"]).with_suffix(".zh-CN.srt").write_text(subtitles.replace("Hello\n", ""), encoding="utf-8")
+    Path(four_k["path"]).with_suffix(".中英双语.zh-CN.srt").write_text(subtitles, encoding="utf-8")
+    monitor = plugin.services.manual_strm_monitor()
+    monkeypatch.setattr(monitor, "_running", lambda: True)
+    monitor._poll_root(media)
+    assert not plugin._auto_transfer_tasks
+    assert api_endpoint(plugin, "/local_directories/scan")()["data"]["started"]
+    monitor._poll_root(media)
+    task_id, = plugin._auto_transfer_tasks
+    assert plugin._auto_transfer_tasks[task_id]["entry"]["path"] == hd["path"]
+    assert service.enqueue_transfer_auto_entries_with_outcomes([{**hd, "id": "transfer-id"}]) == ["already_active"]
+
+    detached = media.with_name("offline")
+    media.rename(detached)
+    batch, _ = service.claim_next_auto_transfer_batch()
+    service.process_transfer_auto_task_batch(batch)
+    assert service.claim_next_auto_transfer_batch() == ([], 30)
+    assert plugin._auto_transfer_tasks[task_id]["message"] == "等待本地整理目录恢复"
+
+    restored, resumed, _ = new_queue()
+    configure(restored, resumed)
+    assert resumed.claim_next_auto_transfer_batch() == ([], 30)
+    detached.rename(media)
+    Path(hd["path"]).with_suffix(".中英双语.zh-CN.srt").write_text(subtitles, encoding="utf-8")
+    monkeypatch.setattr(resumed, "auto_search_write_subtitle", lambda *args, **kwargs: pytest.fail("已有合格字幕"))
+    clock.now += 30
+    batch, _ = resumed.claim_next_auto_transfer_batch()
+    resumed.process_transfer_auto_task_batch(batch)
+    assert restored._auto_transfer_tasks[task_id]["status"] == "skipped"
+    assert "已有符合语言" in restored._auto_transfer_tasks[task_id]["message"]
 
 
 def test_v3_bilingual_followup_survives_restart_and_stops_after_matching(tmp_path, durable_auto_transfer_queue):

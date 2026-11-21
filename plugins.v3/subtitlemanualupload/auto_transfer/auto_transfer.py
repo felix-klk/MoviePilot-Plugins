@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..online_subtitles.catalog import AVAILABLE_ONLINE_PROVIDER_IDS
@@ -8,7 +9,6 @@ from ..online_subtitles.matcher import (
     AUTO_DOWNLOAD_ATTEMPT_LIMIT,
     AUTO_SEASON_ATTEMPT_LIMIT,
     _episode_from_text,
-    _safe_int,
     _season_matches_text,
     auto_download_attempts,
     rank_auto_download_candidates,
@@ -31,20 +31,11 @@ from ..matching.subtitle_language import (
 
 
 def _result_matches_preview_targets(
-    item: Dict[str, Any], targets: List[Dict[str, Any]], require_season_evidence: bool, *, legacy: bool,
+    item: Dict[str, Any], targets: List[Dict[str, Any]], require_season_evidence: bool,
 ) -> bool:
-    season, episode = _episode_from_text(item["title"]) or (0, 0)
-    season = item["season"] or season
-    has_season_evidence = not require_season_evidence or bool(season) or _season_matches_text(item["title"], targets)
-    if not legacy:
-        return has_season_evidence
-    episode = item["episode"] or episode
-    seasons = {_safe_int(target.get("season")) for target in targets} - {0}
-    if season and seasons and season not in seasons:
-        return False
-    if episode and not any(_safe_int(target.get("episode")) == episode for target in targets):
-        return False
-    return has_season_evidence
+    season, _ = _episode_from_text(item["title"]) or (0, 0)
+    return not require_season_evidence or bool(item["season"] or season) or _season_matches_text(item["title"], targets)
+
 
 
 @dataclass(frozen=True)
@@ -340,6 +331,28 @@ class AutoTransferService:
     def enqueue_transfer_auto_entries_with_outcomes(self, entries: List[Dict[str, Any]]) -> List[str]:
         return self._queue.enqueue_entries_with_outcomes(entries)
 
+    def enqueue_missing_directory_entries(self, entries: List[Dict[str, Any]]) -> None:
+        if not self.auto_search_providers():
+            return
+        owner = self._owner
+        missing = []
+        for entry in entries:
+            entry = {**entry, "_directory_auto_search": True}
+            target = self._target_from_entry(entry)
+            if not target.get("writable", True) or self._processor.target_skip_reason(entry, target):
+                continue
+            if getattr(owner, "_auto_check_emby_subtitles", False):
+                result = self._check_emby_subtitles_for_task({"entry": entry})
+                if result and result["status"] == "skipped":
+                    continue
+            media = owner.services.media_metadata().enrich_media(entry)
+            if media.get("tmdb_id"):
+                media["media_source"] = "themoviedb"
+                media["media_id"] = str(media["tmdb_id"])
+            missing.append(media)
+        if missing:
+            self.enqueue_transfer_auto_entries(missing)
+
     def handle_transfer_complete(self, event: Any) -> Dict[str, Any]:
         owner = self._owner
         event_data = getattr(event, "event_data", None) or {}
@@ -385,7 +398,8 @@ class AutoTransferService:
             entry.get("media_type") == "tv"
             and owner._safe_int(entry.get("episode"), 0) > 0
             and required_auto_languages(owner._auto_subtitle_language_priority) is not None
-            and owner._normalize_auto_transfer_subtitle_strategy(owner._auto_transfer_subtitle_strategy) != "ai_source_only"
+            and (entry.get("_directory_auto_search")
+                 or owner._normalize_auto_transfer_subtitle_strategy(owner._auto_transfer_subtitle_strategy) != "ai_source_only")
             and bool(self.auto_search_providers())
         )
 
@@ -448,7 +462,6 @@ class AutoTransferService:
         providers = self.auto_search_providers()
         priority = getattr(owner, "_auto_subtitle_language_priority", None)
         strict = bool(getattr(owner, "_auto_subtitle_language_strict", False))
-        legacy_ranking = getattr(owner, "_auto_subtitle_legacy_ranking", False)
         strategy = owner._normalize_auto_transfer_subtitle_strategy(owner._auto_transfer_subtitle_strategy)
         available = [item.to_dict() for item in results if item.provider in providers]
         skipped = []
@@ -487,17 +500,16 @@ class AutoTransferService:
             candidates = [
                 item for item in available
                 if targets[0].get("media_type") != "tv"
-                or _result_matches_preview_targets(item, targets, require_season_evidence, legacy=legacy_ranking)
+                or _result_matches_preview_targets(item, targets, require_season_evidence)
             ]
             if len(candidates) < len(available):
                 rejections["季集不匹配或未确认"] = len(available) - len(candidates)
             candidates = rank_auto_download_candidates(
                 candidates, targets, priority,
                 strict=strict, min_score=owner._auto_search_min_score, rejections=rejections,
-                legacy=legacy_ranking,
             )
             attempt_limit = AUTO_SEASON_ATTEMPT_LIMIT if season_scope else AUTO_DOWNLOAD_ATTEMPT_LIMIT
-            attempts = auto_download_attempts(candidates, attempt_limit, legacy=legacy_ranking)
+            attempts = auto_download_attempts(candidates, attempt_limit)
             label = targets[0]["label"]
             if len(targets) > 1:
                 label = f"第 {targets[0].get('season') or 0} 季 · {len(targets)} 个目标"
@@ -516,7 +528,6 @@ class AutoTransferService:
             "enabled": bool(owner.get_state() and owner._auto_search_on_transfer),
             "min_score": owner._auto_search_min_score,
             "required_languages": required_auto_languages(priority, strict=strict),
-            "legacy_ranking": legacy_ranking,
             "plans": plans,
             "skipped": skipped,
         }
@@ -631,7 +642,8 @@ class AutoTransferService:
         owner = self._owner
         entry = task["entry"]
         target = self._target_from_entry(entry)
-        if not target.get("is_stream") and owner._auto_transfer_subtitle_strategy == "ai_source_only":
+        if (not entry.get("_directory_auto_search") and not target.get("is_stream")
+                and owner._auto_transfer_subtitle_strategy == "ai_source_only"):
             return None
 
         required = required_auto_languages(
@@ -725,12 +737,30 @@ class AutoTransferService:
         )
         return None
 
+    def _defer_unavailable_directory(self, task: Dict[str, Any]) -> bool:
+        owner = self._owner
+        if not getattr(owner, "_manual_strm_enabled", False):
+            return False
+        reason = owner.services.manual_strm_monitor().wait_reason(task.get("entry") or {})
+        if not reason:
+            return False
+        owner._update_auto_transfer_task(
+            task["id"], status="pending", message=reason,
+            next_run_ts=self._time.time() + 30, directory_waiting=True,
+        )
+        return True
+
     def process_transfer_auto_task_batch(self, tasks: List[Dict[str, Any]]) -> None:
         owner = self._owner
         pending = []
         for task in tasks:
+            entry = task.get("entry") or {}
+            if self._defer_unavailable_directory(task):
+                continue
+            if entry.get("_directory_auto_search") and not owner.services.local_media_catalog().filter_existing_local_entries([entry]):
+                owner._update_auto_transfer_task(task["id"], status="skipped", message="本地整理目录目标已失效")
+                continue
             if task.get("bilingual_retry_since") is not None:
-                entry = task.get("entry") or {}
                 if not self.can_follow_up_bilingual_subtitle(entry):
                     owner._update_auto_transfer_task(task["id"], status="skipped", message="当前设置不适用双语补搜")
                     continue
@@ -793,6 +823,8 @@ class AutoTransferService:
                 "status": "failed",
                 "reason": "入库自动字幕任务没有返回结果",
             }
+            if result.get("status") not in {"written", "completed", "ai_submitted"} and self._defer_unavailable_directory(task):
+                continue
             if result.get("needs_online_retry") and self.can_follow_up_bilingual_subtitle(entry):
                 self._queue.defer_bilingual_followup(task, result)
                 self._logger.info("[SubtitleManualUpload] 已安排双语字幕补搜 target=%s reason=%s",

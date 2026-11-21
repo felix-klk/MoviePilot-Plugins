@@ -335,32 +335,51 @@ class LocalMediaCatalog:
         owner._invalidate_match_history_cache()
         return self.load_local_entries(force=True)
 
+    def manual_entries_for_paths(self, paths: Iterable[Path]) -> List[Dict[str, Any]]:
+        if not self._manual_strm_catalog or not getattr(self._owner, "_manual_strm_enabled", False):
+            return []
+        roots = self._owner._manual_strm_paths
+        return [
+            entry for path in paths
+            if (entry := self._manual_strm_catalog.entry_for_path(path, roots))
+        ]
+
     def apply_manual_strm_changes(self, paths: Iterable[str]) -> Dict[str, Any]:
-        """增量应用 STRM/字幕文件变化，不重扫用户配置的全部目录。"""
+        """增量应用视频、NFO 和外挂字幕文件变化。"""
         owner = self._owner
         snapshot = self._cache_snapshot()
         entries = list(snapshot)
         changed_paths = {owner._normalize_text(path) for path in paths if owner._normalize_text(path)}
-        affected_strm: set[str] = set()
+        video_exts = getattr(self._manual_strm_catalog, "video_exts", {".strm"})
+        affected_videos: set[str] = set()
         affected_dirs: set[Path] = set()
         removed_prefixes: set[str] = set()
         for raw_path in changed_paths:
             path = Path(raw_path)
             if path.is_dir():
                 try:
-                    affected_strm.update(str(item) for item in path.rglob("*.strm") if item.is_file())
+                    affected_videos.update(
+                        str(item) for item in path.rglob("*")
+                        if item.suffix.lower() in video_exts and item.is_file()
+                    )
                 except OSError:
                     continue
                 affected_dirs.add(path)
-            elif path.suffix.lower() == ".strm":
-                affected_strm.add(str(path))
+            elif path.suffix.lower() in video_exts:
+                affected_videos.add(str(path))
                 affected_dirs.add(path.parent)
             elif path.suffix.lower() in owner._subtitle_exts:
                 affected_dirs.add(path.parent)
             elif path.suffix.lower() == ".nfo":
                 affected_dirs.add(path.parent)
                 try:
-                    affected_strm.update(str(item) for item in path.parent.rglob("*.strm") if item.is_file())
+                    candidates = (path.parent.rglob("*") if path.name.lower() in {"tvshow.nfo", "season.nfo"}
+                                  else path.parent.iterdir())
+                    affected_videos.update(
+                        str(item) for item in candidates
+                        if item.suffix.lower() in video_exts and item.is_file()
+                        and (path.name.lower() in {"tvshow.nfo", "season.nfo"} or item.stem == path.stem)
+                    )
                 except OSError:
                     continue
             elif not path.exists() and not path.suffix:
@@ -379,27 +398,15 @@ class LocalMediaCatalog:
                 retained.append(item)
             entries = retained
 
-        if not affected_strm and not affected_dirs and not removed_prefixes:
-            return {"changed_entries": [], "removed": [], "changed_paths": sorted(changed_paths)}
-
-        changed_entries: List[Dict[str, Any]] = []
-        removed: List[str] = []
-        if self._manual_strm_catalog:
-            roots = getattr(owner, "_manual_strm_paths", [])
-            for strm_path in sorted(affected_strm):
-                entries = [item for item in entries if owner._normalize_text(item.get("path")) != strm_path]
-                path_obj = Path(strm_path)
-                if not path_obj.exists() or path_obj.suffix.lower() != ".strm":
-                    removed.append(strm_path)
-                    continue
-                match = self._manual_strm_catalog.entry_for_path(path_obj, roots)
-                if match and self._entry_source_is_enabled(match):
-                    entries.append(match)
-                    changed_entries.append(match)
-
+        changed_entries = self.manual_entries_for_paths(Path(path) for path in sorted(affected_videos))
+        removed = [path for path in sorted(affected_videos) if not Path(path).is_file()]
         for directory in affected_dirs:
             self.services_subtitle_inventory_invalidate(directory)
-        self._store_entries(entries, snapshot=snapshot)
+        if affected_videos or removed_prefixes:
+            entries = [item for item in entries if owner._normalize_text(item.get("path")) not in affected_videos]
+            self._store_entries([*entries, *changed_entries], snapshot=snapshot)
+        elif affected_dirs:
+            owner._invalidate_match_history_cache()
         return {
             "changed_entries": changed_entries,
             "removed": [*removed, *sorted(removed_prefixes)],

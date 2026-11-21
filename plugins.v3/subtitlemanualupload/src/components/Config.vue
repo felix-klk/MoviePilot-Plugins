@@ -19,8 +19,8 @@ const emit = defineEmits(['save', 'close'])
 const configError = ref('')
 const draggingAutoLanguage = ref('')
 const dropTargetAutoLanguage = ref('')
-const manualStrmPathPlaceholder = `/vol2/1000/raid/2/links2
-/vol1/1000/media-strm`
+const manualStrmPathPlaceholder = `E:\\test
+/media/test`
 const localConfig = ref({
   enabled: false,
   show_sidebar_nav: true,
@@ -40,7 +40,6 @@ const localConfig = ref({
   manual_strm_paths: '',
   auto_search_on_manual_strm: false,
   auto_multi_subtitle_mode: 'best',
-  auto_subtitle_legacy_ranking: false,
   auto_subtitle_language_priority: ['chi&eng', 'chi&jp', 'chi&kr', 'other_bilingual', 'chi', 'cht', 'eng'],
   auto_subtitle_language_strict: false,
   auto_subtitle_format_priority: ['.ass', '.srt', '.ssa', '.vtt'],
@@ -72,6 +71,9 @@ const embyScopeItems = [
 ]
 const embyScopeEnabled = computed(() => localConfig.value.auto_check_emby_subtitles || localConfig.value.emby_refresh_after_subtitle_write)
 const embyCustomScope = computed(() => embyScopeEnabled.value && localConfig.value.emby_query_libraries !== null)
+const directoryScanLoading = ref(false)
+const directoryScanNotice = ref('')
+const directoryScanError = ref('')
 const embyServers = ref([])
 const embyLibrariesLoading = ref(false)
 const embyServersLoaded = ref(false)
@@ -357,7 +359,6 @@ function normalizeConfig(input) {
       : 'best',
     auto_subtitle_language_priority: normalizeLanguages(input?.auto_subtitle_language_priority),
     auto_subtitle_language_strict: Boolean(input?.auto_subtitle_language_strict),
-    auto_subtitle_legacy_ranking: Boolean(input?.auto_subtitle_legacy_ranking),
     auto_subtitle_format_priority: normalizeList(
       input?.auto_subtitle_format_priority,
       autoFormatItems.map(item => item.value),
@@ -385,6 +386,25 @@ function normalizeConfig(input) {
       ? input.rar_dependency_mode
       : 'none',
     rar_tool_path: String(input?.rar_tool_path || '/usr/bin/unar').trim() || '/usr/bin/unar',
+  }
+}
+
+async function scanLocalDirectories() {
+  directoryScanLoading.value = true
+  directoryScanNotice.value = ''
+  directoryScanError.value = ''
+  try {
+    const pluginApi = createSubtitleManualUploadApi(props.api, () => `plugin/${props.pluginId}`)
+    const response = await pluginApi.scanLocalDirectories()
+    if (response?.success === false) throw new Error(response.message || '检查已有视频失败')
+    const result = unwrapResponse(response)
+    directoryScanNotice.value = result.started
+      ? '已开始检查。符合条件的目标会分批加入自动入库队列。'
+      : '上一次检查仍在进行。'
+  } catch (error) {
+    directoryScanError.value = error?.response?.data?.detail || error?.message || '检查已有视频失败'
+  } finally {
+    directoryScanLoading.value = false
   }
 }
 
@@ -572,19 +592,19 @@ onMounted(() => {
             />
             <VSwitch
               v-model="localConfig.manual_strm_enabled"
-              label="监控额外 STRM 目录"
+              label="监控本地整理目录"
               color="info"
-              hint="开启后展开目录配置，并实时监控 .strm、NFO 和同目录字幕变化。"
+              hint="递归监控视频、STRM、NFO 和同目录字幕。开启时建立基线。"
               persistent-hint
             />
             <VTextarea
               v-if="localConfig.manual_strm_enabled"
               v-model="localConfig.manual_strm_paths"
-              label="额外 STRM 本地目录"
+              label="本地整理目录"
               :placeholder="manualStrmPathPlaceholder"
               rows="3"
               auto-grow
-              hint="每行一个 MoviePilot 容器内可见的绝对路径；不读取 .strm 内容。"
+              hint="每行一个 MoviePilot 可见的绝对路径，例如 Windows 的 E:\test 或容器内的 /media/test。"
               persistent-hint
               variant="outlined"
               density="comfortable"
@@ -593,11 +613,23 @@ onMounted(() => {
             <VSwitch
               v-if="localConfig.manual_strm_enabled"
               v-model="localConfig.auto_search_on_manual_strm"
-              label="额外 STRM 实时变化后自动搜索字幕"
+              label="缺字幕时自动补搜"
               color="success"
-              hint="只处理新增或变更的 STRM，已处理且未变化的文件不会重复搜索。"
+              hint="视频稳定后或对应外挂移除时，按当前语言设置检查并补搜。"
               persistent-hint
             />
+            <div v-if="localConfig.manual_strm_enabled && props.api?.post" class="config-grid-wide">
+              <VBtn variant="tonal" :loading="directoryScanLoading" @click="scanLocalDirectories">
+                检查已有视频
+              </VBtn>
+              <p class="text-caption mt-2">使用已保存的目录和语言设置。目录离线时，恢复后继续。</p>
+              <VAlert v-if="directoryScanNotice" type="info" variant="tonal" class="mt-2" role="status">
+                {{ directoryScanNotice }}
+              </VAlert>
+              <VAlert v-if="directoryScanError" type="error" variant="tonal" class="mt-2">
+                {{ directoryScanError }}
+              </VAlert>
+            </div>
             <VSelect
               v-model="localConfig.auto_transfer_subtitle_strategy"
               :items="autoStrategyItems"
@@ -612,11 +644,6 @@ onMounted(() => {
               label="自动多字幕处理"
               variant="outlined"
               density="comfortable"
-              hide-details
-            />
-            <VSwitch
-              v-model="localConfig.auto_subtitle_legacy_ranking"
-              label="使用 1.2.34 自动字幕排序"
               hide-details
             />
             <VSelect

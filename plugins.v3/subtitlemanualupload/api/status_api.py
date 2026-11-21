@@ -14,6 +14,16 @@ class StatusApi:
     def __init__(self, owner: Any):
         self.owner = owner
 
+    def scan_local_directories(self) -> Dict[str, Any]:
+        monitor = self.owner.services.manual_strm_monitor()
+        status = monitor.status()
+        if not self.owner.get_state() or not status["running"]:
+            raise HTTPException(status_code=400, detail="请先保存并启用本地整理目录监控")
+        if not self.owner.services.auto_transfer().auto_search_providers():
+            raise HTTPException(status_code=400, detail="请先保存并启用至少一个在线字幕源")
+        started = monitor.request_scan()
+        return self.owner._ok({"started": started, "scanning": monitor.status()["scanning"]})
+
     def status(self) -> Dict[str, Any]:
         owner = self.owner
         services = owner.services
@@ -31,7 +41,7 @@ class StatusApi:
                 "auto_search_on_manual_strm": bool(owner._auto_search_on_manual_strm),
                 "auto_transfer_subtitle_strategy": owner._auto_transfer_subtitle_strategy,
                 "traditional_to_simplified": bool(owner._traditional_to_simplified),
-                "source": "MoviePilot 本地整理记录 + 额外 STRM 实时监控",
+                "source": "MoviePilot 本地整理记录 + 本地整理目录监控",
                 "index": local_media_catalog.cache_status(),
                 "manual_strm_monitor": services.manual_strm_monitor().status(),
                 "archive_support": {

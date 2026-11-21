@@ -185,14 +185,12 @@ class AutoTransferSeasonCache:
             targets=targets,
             scope="season",
         )
-        legacy_ranking = getattr(owner, "_auto_subtitle_legacy_ranking", False)
         candidates = rank_auto_download_candidates(
             search_result.get("results") or [],
             targets,
             getattr(owner, "_auto_subtitle_language_priority", None),
             strict=bool(getattr(owner, "_auto_subtitle_language_strict", False)),
             min_score=owner._auto_search_min_score,
-            legacy=legacy_ranking,
             logger=self._logger,
         )
         if not candidates:
@@ -206,7 +204,7 @@ class AutoTransferSeasonCache:
         last_reason = ""
         best_partial_result: Optional[Dict[str, Any]] = None
         for selected in auto_download_attempts(
-            candidates, AUTO_SEASON_ATTEMPT_LIMIT, legacy=legacy_ranking, logger=self._logger,
+            candidates, AUTO_SEASON_ATTEMPT_LIMIT, logger=self._logger,
         ):
             log_auto_download_candidate(self._logger, selected)
             session_id = owner._hash_text(f"auto-season|{datetime.now().isoformat()}|{entries[0].get('id')}")[:16]

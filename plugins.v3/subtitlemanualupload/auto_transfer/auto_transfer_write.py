@@ -167,7 +167,7 @@ class AutoTransferWriteStrategy:
             source_path = upload_map[item["upload_id"]]["stored_path"]
             if getattr(owner, "_auto_subtitle_language_strict", False) or is_chinese_language_suffix(item.get("language_suffix")) or is_bitmap_subtitle(source_path):
                 direct_items.append(item)
-            else:
+            elif not target_entry_map[owner._normalize_text(item.get("target_id"))].get("_directory_auto_search"):
                 foreign_items.append(item)
 
         written: List[Dict[str, Any]] = []
