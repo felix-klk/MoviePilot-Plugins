@@ -27,7 +27,7 @@
 
 | 插件 | V2 版本 | V3 版本 | 主要功能 |
 | --- | --- | --- | --- |
-| NEO字幕大师 | — | [1.0.0](plugins.v3/neosubtitlemaster/README.md) | 字幕搜索、智能调轴、Emby 检查和本地目录补搜 |
+| NEO字幕大师 | [0.1.0](plugins.v2/neosubtitlemaster/README.md) | [1.0.0](plugins.v3/neosubtitlemaster/README.md) | 字幕搜索、智能调轴、Emby 检查和本地目录补搜 |
 | 海拉鲁字幕大师 | 0.1.102 | 1.2.19 | 字幕搜索、下载、上传、匹配、改名、调轴、入库自动处理 |
 | CloudDrive控制助手 | 2.0.0 | 3.0.0 | 监控网盘与上传异常，支持外网播放保护 |
 | AI字幕生成(联动版) | 3.5.63 | 4.0.3 | 音轨识别、字幕提取、AI 翻译、任务队列、联动字幕匹配 |

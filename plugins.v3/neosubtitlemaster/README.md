@@ -14,6 +14,8 @@ NEO字幕大师使用自己的设置、索引和自动入库队列。首次安�
 
 同时使用 AI字幕生成(联动版)时，若由 NEO 负责入库自动补搜，可将 AutoSubv3 设为后备模式，由 NEO 发起需要的 AI 任务。
 
+已知问题、修复步骤和验收条件见 [NEO字幕大师修复方案](https://github.com/felix-klk/MoviePilot-Plugins/blob/main/docs/NEO%E5%AD%97%E5%B9%95%E5%A4%A7%E5%B8%88%E4%BF%AE%E5%A4%8D%E6%96%B9%E6%A1%88.md)。
+
 ## 许可与致谢
 
 基于 [ifsherlock 的海拉鲁字幕大师](https://github.com/ifsherlock/MoviePilot-Plugins) 延续开发，字幕匹配工作参考了 [ChineseSubFinder](https://github.com/ChineseSubFinder/ChineseSubFinder)。部分字幕源接入参考 [ChineseSubFinder-optimization](https://github.com/morningstar-ski/ChineseSubFinder-optimization)。按 [GPL-3.0](LICENSE) 发布，转换词库附带其原始许可证。

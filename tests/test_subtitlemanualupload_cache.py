@@ -95,7 +95,7 @@ def load_plugin_module(generation="plugins.v2", plugin_id="SubtitleManualUpload"
     for name, module in modules.items():
         sys.modules[name] = module
 
-    package_name = f"{plugin_id.lower()}_cache_testpkg"
+    package_name = f"{plugin_id.lower()}_{generation.rsplit('.', 1)[-1]}_cache_testpkg"
     for name in list(sys.modules):
         if name == package_name or name.startswith(f"{package_name}."):
             sys.modules.pop(name, None)
@@ -111,8 +111,9 @@ def load_plugin_module(generation="plugins.v2", plugin_id="SubtitleManualUpload"
     return module, FakeTransferHistory, FakeSiteOper
 
 
-def make_plugin(module):
-    plugin = module.SubtitleManualUpload.__new__(module.SubtitleManualUpload)
+def make_plugin(module, plugin_id="SubtitleManualUpload"):
+    plugin_class = getattr(module, plugin_id)
+    plugin = plugin_class.__new__(plugin_class)
     plugin._local_entries_cache = {"loaded_at": None, "entries": [], "media_count": 0, "persisted": False}
     plugin._entry_map = module.OrderedDict()
     plugin._media_index_cache = module.OrderedDict()
@@ -120,7 +121,7 @@ def make_plugin(module):
     plugin._auto_transfer_worker = None
     plugin._auto_transfer_stopping = False
     plugin._auto_season_package_cache = module.OrderedDict()
-    module.SubtitleManualUpload._embedded_subtitle_probe_cache = module.OrderedDict()
+    plugin_class._embedded_subtitle_probe_cache = module.OrderedDict()
     plugin._cache_refreshing = False
     plugin._cache_ttl_seconds = 1800
     plugin._cache_max_entries = 10
@@ -3945,16 +3946,21 @@ def auto_transfer_service_with(plugin, **methods):
     return service
 
 
-@pytest.fixture
-def durable_auto_transfer_queue(tmp_path):
-    module, _, _ = load_plugin_module("plugins.v3")
+@pytest.fixture(params=[
+    pytest.param(("plugins.v3", "SubtitleManualUpload"), id="legacy-v3"),
+    pytest.param(("plugins.v2", "NeoSubtitleMaster"), id="neo-v2"),
+    pytest.param(("plugins.v3", "NeoSubtitleMaster"), id="neo-v3"),
+])
+def durable_auto_transfer_queue(tmp_path, request):
+    generation, plugin_id = request.param
+    module, _, _ = load_plugin_module(generation, plugin_id)
     runtime = plugin_submodule(module, "config.config_runtime")
     clock = types.SimpleNamespace(now=1_799_999_000.0)
     clock.time = lambda: clock.now
     state_path = tmp_path / "plugin-data" / "auto_transfer_queue.json"
 
     def new_queue(resume=True):
-        plugin = make_plugin(module)
+        plugin = make_plugin(module, plugin_id)
         plugin.get_data_path = lambda: state_path.parent
         runtime.reset_runtime_state(plugin)
         service = plugin._auto_transfer_service()
