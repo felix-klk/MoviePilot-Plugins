@@ -74,16 +74,17 @@
   },
   "JavSubtitleAssistant": {
     "name": "JAV字幕助手",
-    "description": "扫描本地整理目录，从 Subtitle Cat 下载缺少的中文字幕。",
+    "description": "沿用海拉鲁的字幕匹配、队列和历史，扫描整理目录并按番号补中文字幕。",
     "labels": "字幕,JAV,Subtitle Cat",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "icon": "",
     "author": "felix-klk",
     "author_url": "https://github.com/felix-klk",
     "level": 1,
     "system_version": ">=3.0.0",
-    "release": false,
+    "release": true,
     "history": {
+      "v1.2.0": "沿用海拉鲁的完整界面与队列，按番号扫描本地整理目录。下载串行，Subtitle Cat 请求限速和限流暂停。",
       "v1.1.0": "基于海拉鲁字幕大师 V3 的 Subtitle Cat 实现，加入立即扫描、成功和失败明细、系统代理及整理目录番号回退。",
       "v1.0.0": "扫描整理后目录，识别现有中文字幕并按番号和分段从 Subtitle Cat 补齐。"
     }

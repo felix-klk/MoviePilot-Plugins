@@ -1,188 +1,109 @@
+import hashlib
 import json
-import shutil
-import subprocess
 import tempfile
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import app.plugins
 
 
-PROJECT = Path(__file__).resolve().parents[3]
-app.plugins.__path__.insert(0, str(PROJECT / "plugins.v3"))
+ROOT = Path(__file__).resolve().parents[3]
+app.plugins.__path__.insert(0, str(ROOT / "plugins.v3"))
 
-from app.plugins import javsubtitleassistant as plugin
-from app.plugins.javsubtitleassistant import media, subtitlecat
+from app.plugins.javsubtitleassistant import JavSubtitleAssistant
+from app.plugins.javsubtitleassistant.catalog.manual_strm import ManualStrmCatalog
+from app.plugins.javsubtitleassistant.matching.subtitle_language import (
+    auto_target_has_chinese_subtitle, required_auto_languages,
+)
+from app.plugins.javsubtitleassistant.online_subtitles import service
+from app.plugins.javsubtitleassistant.online_subtitles.keyword_builder import build_search_keywords
+from app.plugins.javsubtitleassistant.online_subtitles.providers import subtitlecat
+from app.plugins.javsubtitleassistant.online_subtitles.throttle import SerialThrottle
 
 
-CHINESE = "1\n00:00:00,100 --> 00:00:01,000\nHello\n你好，這裡有中文字幕。\n".encode()
-ENGLISH = b"1\n00:00:00,100 --> 00:00:01,000\nEnglish only\n"
+def catalog():
+    return ManualStrmCatalog(normalize_text=lambda value: str(value or "").strip(),
+                             safe_int=lambda value, default=0: int(value) if str(value).isdigit() else default,
+                             hash_text=lambda value: hashlib.sha256(value.encode()).hexdigest(),
+                             extract_episode_hint=lambda _: {}, meta_info_path=None, logger_warning=lambda *_: None)
 
 
-class JavSubtitleAssistantTests(unittest.TestCase):
-    def setUp(self):
-        # These unit tests use the real SDK base without starting unrelated host services.
-        chain = patch("app.sdk.plugin.base.PluginChain")
-        chain.start()
-        self.addCleanup(chain.stop)
+class JavForkTests(unittest.TestCase):
+    def test_release_has_its_own_federated_frontend(self):
+        index = json.loads((ROOT / "package.v3.json").read_bytes())
+        plugin = JavSubtitleAssistant
+        self.assertEqual(index[plugin.__name__]["version"], plugin.plugin_version)
+        self.assertEqual(plugin.plugin_config_prefix, "javsubtitleassistant_")
+        self.assertEqual(plugin.get_render_mode(), ("vue", "dist/assets"))
+        remote = ROOT / "plugins.v3/javsubtitleassistant/dist/assets/remoteEntry.js"
+        source = remote.read_text(encoding="utf-8")
+        for component in ("./Page", "./Config", "./AppPage"):
+            self.assertIn(component, source)
 
-    def test_market_identity_and_service_lifecycle(self):
-        source = json.loads((PROJECT / "package.v3.json").read_text(encoding="utf-8"))
-        instance = plugin.JavSubtitleAssistant()
-        metadata = source[type(instance).__name__]
-        self.assertEqual(metadata["name"], instance.plugin_name)
-        self.assertEqual(metadata["version"], instance.plugin_version)
-        self.assertEqual(next(iter(metadata["history"])), f"v{instance.plugin_version}")
-        self.assertEqual(instance.get_service(), [])
-        instance.init_plugin({"enabled": True, "folders": str(PROJECT)})
-        self.assertEqual(instance.get_service()[0]["id"], "JavSubtitleAssistant.Scan")
-        instance.stop_service()
-        self.assertEqual(instance.get_service(), [])
-
-    def test_jav_number_and_local_nfo(self):
-        self.assertEqual(list(media.jav_numbers("4k FC2 PPV 1234567 CD1")), ["FC2-1234567"])
-        self.assertEqual(list(media.jav_numbers("T28620.1080p")), ["T28-620"])
-        self.assertEqual(list(media.jav_numbers("ABC012")), ["ABC-012"])
-        self.assertEqual(list(media.jav_numbers("FC234")), ["FC-234"])
-        self.assertEqual(list(media.jav_numbers("100323_01")), ["100323-01"])
-        self.assertEqual(list(media.jav_numbers("HD.1080p.HEVC-265")), [])
-        with tempfile.TemporaryDirectory() as directory:
-            video = Path(directory) / "organizer title.mkv"
-            video.with_suffix(".nfo").write_text("<movie><num>ABC-013</num></movie>", encoding="utf-8")
-            self.assertEqual(media.video_number(video), "ABC-013")
-            video.with_suffix(".nfo").unlink()
+    def test_scanner_uses_local_video_and_number_for_catalog_and_search(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            video = root / "rendered movie.mkv"
             video.touch()
-            (video.parent / "movie.nfo").write_text("<movie><num>ABC-014</num></movie>", encoding="utf-8")
-            self.assertEqual(media.video_number(video), "ABC-014")
-            (video.parent / "different movie.mkv").touch()
-            self.assertEqual(media.video_number(video), "")
+            (root / "movie.nfo").write_text("<movie><title>Local title</title><num>ABC-013</num></movie>",
+                                           encoding="utf-8")
+            entry, = catalog().scan([str(root)])
+            self.assertEqual((entry["jav_number"], entry["path"]), ("ABC-013", str(video)))
+            self.assertIn("ABC-013", entry["title"])
+            self.assertEqual(build_search_keywords({}, [entry], "auto"), ["ABC-013", "ABC013"])
+            self.assertEqual(catalog().entry_for_path(video, [str(root)])["id"], entry["id"])
 
-    def test_external_chinese_bilingual_and_japanese(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            video = root / "ABC-001-CD1.mkv"
-            (root / "ABC-001-CD2.zh-CN.srt").write_bytes(CHINESE)
-            (root / "ABC-001-CD1.ja.srt").write_text(
-                "1\n00:00:01,000 --> 00:00:02,000\n今日は映画を見ています。\n", encoding="utf-8",
-            )
-            other_version = root / "ABC-001-CD1.4K.mkv"
-            other_version.touch()
-            (root / "ABC-001-CD1.4K.zh-CN.srt").write_bytes(CHINESE)
-            self.assertFalse(media.has_chinese_sidecar(video))
-            self.assertTrue(media.has_chinese_sidecar(other_version))
-            (root / "ABC-001-CD1-forced.srt").write_bytes(CHINESE)
-            self.assertTrue(media.has_chinese_sidecar(video))
+    def test_exact_number_and_part_from_subtitlecat(self):
+        query = """<table class="sub-table">
+            <tr><td><a href="/subs/1/ABC-1234-CD2.html">ABC-1234-CD2</a> (translated from Chinese)</td></tr>
+            <tr><td><a href="/subs/1/ABC-123-CD1.html">ABC-123-CD1</a> (translated from Chinese)</td></tr>
+            <tr><td><a href="/subs/1/ABC-123-CD2.html">ABC-123-CD2</a> (translated from Chinese)</td></tr>
+            </table>"""
+        client = SimpleNamespace(timeout=8, get_text=lambda url, **_: (200, query, url))
+        provider = subtitlecat.SubtitleCatProvider(client)
+        target = {"jav_number": "ABC-123", "basename": "ABC-123-CD2", "media_type": "movie", "title": "Local title"}
+        with patch.object(subtitlecat, "subtitlecat_gate", SerialThrottle(0)):
+            result, = provider.search_all(["ABC-123"], [target], "auto")
+        self.assertEqual((result.title, result.identity_status), ("ABC-123-CD2", "strong"))
 
-    def test_legacy_text_encodings_distinguish_japanese_from_chinese(self):
-        traditional = "你好，請問你知道這是什麼嗎？".encode("big5")
-        japanese = "これは日本語だけの字幕です。今日はいい天気です。".encode("cp932")
-        self.assertTrue(media.chinese_text(media.decode_subtitle(traditional)))
-        self.assertFalse(media.chinese_text(media.decode_subtitle(japanese)))
+    def test_any_chinese_stops_auto_processing_even_with_bilingual_preference(self):
+        inventory = SimpleNamespace(embedded_subtitle_tracks_for_target=lambda _: [{"language": "cht"}])
+        self.assertTrue(auto_target_has_chinese_subtitle({}, {}, subtitle_inventory=inventory,
+                                                        language_priority=["chi&eng"], strict=True))
+        self.assertTrue(auto_target_has_chinese_subtitle({}, {"subtitles": [{"language_suffix": "chi"}]},
+                                                        subtitle_inventory=inventory, language_priority=["chi&eng"]))
+        self.assertIn("chi", required_auto_languages(["chi&eng"]))
+        self.assertNotIn("eng", required_auto_languages(["eng"]))
 
-    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg is unavailable")
-    def test_real_embedded_subtitle_even_when_track_is_not_tagged_chinese(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            video = root / "ABC-001.mkv"
-            subtitle = root / "input.srt"
-            for text, expected in ((ENGLISH, False), (CHINESE, True)):
-                subtitle.write_bytes(text)
-                subprocess.run(
-                    ["ffmpeg", "-nostdin", "-v", "error", "-y", "-f", "lavfi",
-                     "-i", "color=black:s=16x16:r=1:d=2", "-i", str(subtitle),
-                     "-map", "0:v", "-map", "1:s", "-c:v", "mpeg4", "-c:s", "srt",
-                     "-metadata:s:s:0", "language=eng", str(video)],
-                    capture_output=True, timeout=15, check=True,
-                )
-                self.assertEqual(media.has_chinese_embedded(video, "ffprobe", "ffmpeg"), expected)
+    def test_shared_download_gate_serializes_all_callers_and_waits_after_finish(self):
+        events = []
+        def download(result, **_):
+            events.append(("start", time.monotonic()))
+            time.sleep(.02)
+            events.append(("end", time.monotonic()))
+            return "test.srt", b"content"
 
-    def test_subtitlecat_candidate_and_download_validation(self):
-        site = subtitlecat.SITE
-        detail = f"{site}/subs/10/ABC-123-CD2.html"
-        pages = {
-            f"{site}/index.php?search=ABC-123": b"""<table class="sub-table">
-              <tr><td><a href="subs/12/ABC-1234-CD2.html">ABC-1234-CD2</a></td></tr>
-              <tr><td><a href="subs/12/ABC-123-CD1.html">ABC-123-CD1</a></td></tr>
-              <tr><td><a href="https://example.org/subs/12/ABC-123-CD2.html">ABC-123-CD2</a></td></tr>
-              <tr><td><a href="subs/10/ABC-123-CD2.html">ABC-123-CD2</a> (translated from Japanese)</td></tr>
-              </table>""",
-            detail: b"""<a id="download_zh-CN" href="/subs/11/ABC-123-CD2-zh-CN.srt">Download</a>
-                        <a id="download_zh-TW" href="/subs/11/ABC-123-CD2-zh-TW.srt">Download</a>""",
-            f"{site}/subs/11/ABC-123-CD2-zh-CN.srt": b"<html>not a subtitle</html>",
-            f"{site}/subs/11/ABC-123-CD2-zh-TW.srt": CHINESE,
-        }
-        provider = subtitlecat.SubtitleCatProvider()
-        with patch.object(provider, "_fetch", side_effect=lambda url, *args: pages[url]):
-            self.assertEqual(
-                provider.search_and_download("ABC-123", Path("ABC-123-CD2.mkv")),
-                ("zh-TW", CHINESE),
-            )
+        original = service.OnlineSubtitleSearchService.__new__(service.OnlineSubtitleSearchService)
+        original.providers = {"subtitlecat": SimpleNamespace(download=download)}
+        original.fetcher = SimpleNamespace(close=lambda: None)
+        with patch.object(service, "download_gate", SerialThrottle(.04)), ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(original.download, [{"provider": "subtitlecat"}]) for _ in range(2)]
+            for future in futures:
+                future.result(timeout=5)
+        self.assertEqual([event for event, _ in events], ["start", "end", "start", "end"])
+        self.assertGreaterEqual(events[2][1] - events[1][1], .035)
 
-    def test_scan_resumes_batch_and_does_not_download_for_existing_chinese(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for index in range(1, 4):
-                (root / f"ABC-00{index}.strm").write_text("file:///unused/test.mkv", encoding="utf-8")
-            chinese = root / "ABC-001.eng.srt"
-            chinese.write_bytes(CHINESE)
-            (root / "ABC-002.eng.srt").write_bytes(ENGLISH)
-            state = {}
-            instance = plugin.JavSubtitleAssistant()
-            instance.MAX_SEARCHES = 1
-            instance.init_plugin({"enabled": True, "folders": str(root)})
-            with (patch.object(instance, "get_data", side_effect=state.get),
-                  patch.object(instance, "save_data", side_effect=state.__setitem__),
-                  patch.object(plugin.SubtitleCatProvider, "search_and_download", return_value=("zh-CN", CHINESE)) as search):
-                service = instance.get_service()[0]
-                service["func"]()
-                service["func"]()
-                state.clear()
-                service["func"]()
-                self.assertEqual([call.args[0] for call in search.call_args_list], ["ABC-002", "ABC-003"])
-            self.assertEqual(chinese.read_bytes(), CHINESE)
-            self.assertEqual((root / "ABC-002.eng.srt").read_bytes(), ENGLISH)
-            self.assertEqual((root / "ABC-002.zh-CN.srt").read_bytes(), CHINESE)
-            self.assertEqual((root / "ABC-003.zh-CN.srt").read_bytes(), CHINESE)
-            self.assertFalse((root / "ABC-001.zh-CN.srt").exists())
-            self.assertIsNone(media.write_subtitle(root / "ABC-002.strm", "zh-CN", b"replacement"))
-            self.assertEqual((root / "ABC-002.zh-CN.srt").read_bytes(), CHINESE)
-
-    def test_settings_register_immediate_scan_and_report_missing_directory(self):
-        directory = Path(tempfile.gettempdir()) / "javsubtitle-test-unavailable-root"
-        instance = plugin.JavSubtitleAssistant()
-        state = {}
-        with (patch.object(plugin.scheduler_sdk, "add_plugin_once_job", return_value=True) as add,
-              patch.object(instance, "update_config") as config,
-              patch.object(instance, "get_data", side_effect=state.get),
-              patch.object(instance, "save_data", side_effect=state.__setitem__)):
-            instance.init_plugin({"enabled": True, "folders": str(directory), "onlyonce": True})
-            plugin_id, job, callback, _ = add.call_args.args
-            self.assertEqual((plugin_id, job), ("JavSubtitleAssistant", "scan_once"))
-            self.assertFalse(config.call_args.args[0]["onlyonce"])
-            self.assertEqual(instance.get_page()[0]["props"]["title"], "扫描中")
-            callback()
-            self.assertEqual(state["last_scan"]["failed"], 1)
-            self.assertEqual(instance.get_page()[1]["content"][0]["props"]["title"], str(directory))
-
-    def test_manual_scan_retries_cached_misses(self):
-        with tempfile.TemporaryDirectory() as directory:
-            video = Path(directory) / "ABC-016.strm"
-            video.touch()
-            instance = plugin.JavSubtitleAssistant()
-            instance.init_plugin({"enabled": True, "folders": directory})
-            state = {}
-            with (patch.object(instance, "get_data", side_effect=state.get),
-                  patch.object(instance, "save_data", side_effect=state.__setitem__),
-                  patch.object(plugin.SubtitleCatProvider, "search_and_download",
-                               side_effect=[None, ("zh-CN", CHINESE)]) as search):
-                instance.scan()
-                instance.scan()
-                self.assertEqual(search.call_count, 1)
-                self.assertEqual(state["last_scan"]["cached"], 1)
-                instance.scan_now()
-            self.assertEqual(search.call_count, 2)
-            self.assertEqual(state["last_scan"]["saved"], 1)
+    def test_site_backoff_prevents_requests_during_cooldown(self):
+        gate = SerialThrottle(0)
+        with gate.slot():
+            gate.back_off(429, "1200")
+        with self.assertRaisesRegex(ValueError, "暂停请求"):
+            with gate.slot():
+                self.fail("a cooldown request was admitted")
 
 
 if __name__ == "__main__":

@@ -1,302 +1,409 @@
-"""MoviePilot V3 entry point for the JAV Subtitle Assistant."""
+from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
-from datetime import datetime
-from itertools import chain, islice
+import subprocess
+import sys
+import threading
+import time
+from collections import OrderedDict
+from datetime import datetime, timedelta
 from pathlib import Path
-from stat import S_ISREG
-from subprocess import SubprocessError
-from threading import Event, Lock
-from time import monotonic, time
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from apscheduler.triggers.cron import CronTrigger
-from app.sdk import scheduler as scheduler_sdk
+from fastapi import HTTPException, Request
+from starlette.datastructures import UploadFile
+
 from app.sdk.config import settings
+from app.sdk.media import MetaInfoPath
 from app.sdk.logging import logger
-from app.sdk.plugin import _PluginBase
+from app.plugins import _PluginBase
 
-from .media import SAMPLE, VIDEOS, has_chinese_embedded, has_chinese_sidecar, video_number, write_subtitle
-from .subtitlecat import SubtitleCatProvider
+try:
+    from app.sdk.plugins import PluginManager
+except Exception:
+    PluginManager = None
 
+try:
+    from app.chain.tmdb import TmdbChain
+except Exception:
+    TmdbChain = None
 
-# Form rows follow the GPL-3.0 configuration layout in 海拉鲁字幕大师 V3.
-def _col(component: str, props: dict, md: int = 12) -> dict:
-    return {"component": "VCol", "props": {"cols": 12, "md": md},
-            "content": [{"component": component, "props": props}]}
+try:
+    from app.schemas.types import MediaType
+except Exception:
+    class _NoopMediaType:
+        MOVIE = "movie"
+        TV = "tv"
 
+    MediaType = _NoopMediaType
 
-def _row(*columns: dict) -> dict:
-    return {"component": "VRow", "content": list(columns)}
+try:
+    from app.sdk.events import eventmanager, Event as MPEvent
+    from app.schemas.types import EventType
+except Exception:
+    class _NoopEventManager:
+        @staticmethod
+        def register(_event_type):
+            def decorator(func):
+                return func
+
+            return decorator
+
+    class _NoopEventType:
+        TransferComplete = "transfer.complete"
+
+    eventmanager = _NoopEventManager()
+    MPEvent = Any
+    EventType = _NoopEventType
+
+from .matching.subtitle_formats import SUBTITLE_EXTS
+from .online.online_subtitle import (
+    OnlineSubtitleSearchService,
+    build_search_keywords,
+    check_online_rate_limit,
+    extract_title_aliases,
+)
+from .config.config_schema import (
+    AUTO_MULTI_SUBTITLE_MODES,
+    AUTO_TRANSFER_SUBTITLE_STRATEGIES,
+    AUTO_TRANSFER_SUBTITLE_STRATEGY_ALIASES,
+    AVAILABLE_ONLINE_PROVIDER_IDS,
+    DEFAULT_ASSRT_API_URL,
+    DEFAULT_ENGINE,
+    DEFAULT_ONLINE_PROVIDER_IDS,
+    DEFAULT_OPENSUBTITLES_API_URL,
+    DEFAULT_PROVIDER_ROOTS,
+    DEFAULT_RAR_TOOL_PATH,
+    MANUAL_ONLINE_PROVIDER_IDS,
+    RAR_DEPENDENCY_MODES,
+    build_config_form,
+    host_from_url,
+    normalize_auto_multi_subtitle_mode,
+    normalize_auto_transfer_subtitle_strategy,
+    normalize_online_site_urls,
+    normalize_plugin_config,
+    normalize_provider_ids,
+    normalize_rar_dependency_mode,
+    normalize_root_url,
+    normalize_timeline_max_offset,
+    normalize_timeline_min_offset,
+    normalize_timeline_vad_mode,
+)
+from .config.config_runtime import (
+    apply_runtime_config,
+    build_save_config_payload,
+    reset_runtime_state,
+    sync_class_runtime_config,
+)
+from .runtime.runtime_helpers import (
+    apply_tmdb_detail as runtime_apply_tmdb_detail,
+    brief_ids as runtime_brief_ids,
+    cache_loaded_at as runtime_cache_loaded_at,
+    decode_preview_bytes as runtime_decode_preview_bytes,
+    entry_filesystem_signature as runtime_entry_filesystem_signature,
+    entry_matches_keyword as runtime_entry_matches_keyword,
+    entry_path_is_valid as runtime_entry_path_is_valid,
+    extract_episode_hint as runtime_extract_episode_hint,
+    hash_text as runtime_hash_text,
+    is_stream_path as runtime_is_stream_path,
+    is_upload_file as runtime_is_upload_file,
+    json_clone as runtime_json_clone,
+    media_type_text as runtime_media_type_text,
+    normalize_text as runtime_normalize_text,
+    ok_response,
+    poster_url as runtime_poster_url,
+    safe_int as runtime_safe_int,
+    timestamp_iso as runtime_timestamp_iso,
+    tmdb_aliases as runtime_tmdb_aliases,
+    tmdb_detail_payload as runtime_tmdb_detail_payload,
+)
+from .matching.subtitle_language import (
+    DEFAULT_AUTO_FORMAT_PRIORITY,
+    DEFAULT_AUTO_LANGUAGE_PRIORITY,
+    LANGUAGE_SUFFIX_ALIASES,
+    auto_language_bucket,
+    auto_subtitle_sort_key,
+    detect_language_profile,
+    is_chinese_language_suffix,
+    language_suffix_from_filename,
+    normalize_auto_format_priority,
+    normalize_auto_language_key,
+    normalize_auto_language_priority,
+    normalize_language_suffix,
+)
+from .integrations.autosub_bridge import AutoSubBridge, autosub_task_summary as bridge_autosub_task_summary
+from .matching.subtitle_history import SubtitleHistory
+from .matching.subtitle_writer import (
+    SubtitleWriter,
+    backup_subtitle_if_needed as writer_backup_subtitle_if_needed,
+    build_destination_name as writer_build_destination_name,
+    build_write_operations as writer_build_write_operations,
+    subtitle_backup_path as writer_subtitle_backup_path,
+    timeline_rejection_message as writer_timeline_rejection_message,
+    timeline_result_blocks_auto_write as writer_timeline_result_blocks_auto_write,
+)
+from .timeline.timeline_fixer import TimelineFixResult, check_timeline_fixer_dependencies, fix_subtitle_timeline
+from .matching.tongwen import convert_subtitle_file_to_simplified
+from .catalog.target_resolver import (
+    LocalMediaCatalog,
+    MediaTargetResolver,
+    SubtitleInventory,
+)
+from .timeline.timeline_tasks import timeline_task_summary
+from .auto_transfer import AutoTransferService
+from .runtime.service_registry import JavSubtitleAssistantServices
+from .api.routes import build_api_routes
+from .runtime.shell_helpers import install_shell_helpers
 
 
 class JavSubtitleAssistant(_PluginBase):
     plugin_name = "JAV字幕助手"
-    plugin_desc = "扫描本地整理目录，从 Subtitle Cat 下载缺少的中文字幕。"
+    plugin_desc = "沿用海拉鲁的字幕匹配、队列和历史，扫描整理目录并按番号补中文字幕。"
     plugin_icon = ""
-    plugin_version = "1.1.0"
-    plugin_author = "felix-klk"
-    author_url = "https://github.com/felix-klk"
+    plugin_version = "1.2.0"
+    plugin_author = "ifsherlock"
+    author_url = "https://github.com/ifsherlock"
     plugin_config_prefix = "javsubtitleassistant_"
-    plugin_order = 50
+    plugin_order = 48
     auth_level = 1
 
-    DEFAULTS = {"enabled": False, "folders": "", "cron": "0 * * * *",
-                "onlyonce": False, "online_use_proxy": False}
-    MANUAL_JOB = "scan_once"
-    MAX_SEARCHES = 40
-    MAX_CHECKS = 100
-    MAX_CACHE = 8000
-    SCAN_BUDGET_SECONDS = 180
+    _enabled = False
+    _show_sidebar_nav = True
+    _rar_dependency_mode = "none"
+    _rar_tool_path = DEFAULT_RAR_TOOL_PATH
+    _default_online_provider_ids = ["subtitlecat"]
+    _available_online_provider_ids = list(AVAILABLE_ONLINE_PROVIDER_IDS)
+    _manual_online_provider_ids = list(MANUAL_ONLINE_PROVIDER_IDS)
+    _online_provider_ids = list(DEFAULT_ONLINE_PROVIDER_IDS)
+    _online_engine = DEFAULT_ENGINE
+    _online_use_proxy = False
+    _online_site_urls = dict(DEFAULT_PROVIDER_ROOTS)
+    _online_rate_records: Dict[str, List[float]] = {}
+    _online_rate_limit_per_minute = 5
+    _auto_transfer_queue_debounce_seconds = 3
+    _transfer_auto_dedupe_seconds = 300
+    _transfer_auto_recent: Dict[str, float] = {}
+    _transfer_auto_lock = threading.Lock()
+    _auto_transfer_tasks: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+    _auto_transfer_worker: Optional[threading.Thread] = None
+    _auto_transfer_stopping = False
+    _auto_season_package_cache: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+    _embedded_subtitle_probe_cache: "OrderedDict[str, List[Dict[str, Any]]]" = OrderedDict()
+    _embedded_subtitle_probe_cache_max_size = 500
+    _embedded_subtitle_text_codecs = {"subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text"}
+    _embedded_subtitle_image_codecs = {"hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle", "xsub", "dvb_teletext", "eia_608"}
+    _subdl_api_key = ""
+    _subhd_bypass_url = ""
+    _subtitlecat_include_translations = False
+    _assrt_api_key = ""
+    _assrt_api_url = DEFAULT_ASSRT_API_URL
+    _opensubtitles_api_key = ""
+    _opensubtitles_api_url = DEFAULT_OPENSUBTITLES_API_URL
+    _opensubtitles_username = ""
+    _opensubtitles_password = ""
+    _ai_link_enabled = True
+    _traditional_to_simplified = False
+    _auto_search_on_transfer = False
+    _auto_check_emby_subtitles = False
+    _emby_library_servers: list[str] = []
+    _emby_query_libraries = None
+    _emby_subtitle_path_mappings = ""
+    _auto_skip_chinese_media_on_transfer = True
+    _auto_transfer_subtitle_strategy = "online_then_ai_source"
+    _auto_search_min_score = 20
+    _auto_subtitle_legacy_ranking = False
+    _trust_transfer_history_paths = False
+    _manual_strm_enabled = False
+    _manual_strm_paths = []
+    _auto_search_on_manual_strm = False
+    _manual_strm_watch_debounce_seconds = 2
+    _manual_strm_monitor = None
+    _timeline_max_offset_seconds = 120
+    _timeline_min_offset_seconds = 0.2
+    _timeline_vad_mode = "webrtc"
+    _timeline_allow_risky_offset = False
+    _cache_ttl_seconds = 1800
+    _entry_map_max_size = 2000
+    _media_index_cache_max_keys = 20
+    _subtitle_directory_cache = OrderedDict()
+    _subtitle_directory_cache_max_size = 1000
+    _subtitle_directory_cache_ttl_seconds = 900
+    _match_history_cache_ttl_seconds = 86400
+    _match_history_validation_interval_seconds = 300
+    _timeline_task_ttl_seconds = 86400
+    _rar_dependency_status: Dict[str, Any] = {
+        "mode": "none",
+        "state": "idle",
+        "message": "",
+        "checked_at": "",
+    }
+    _entry_map: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+    _media_index_cache: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+    _cache_refreshing = False
+    _cache_refresh_started_at = ""
+    _cache_refresh_completed_at = ""
+    _cache_refresh_error = ""
+    _local_entries_cache: Dict[str, Any] = {
+        "loaded_at": None,
+        "entries": [],
+        "media_count": 0,
+        "persisted": False,
+    }
+    _match_history_cache: Dict[str, Any] = {
+        "version": 3,
+        "loaded_at": None,
+        "validated_at": None,
+        "signature": "",
+        "items": [],
+        "entry_count": 0,
+        "persisted": False,
+    }
+    _match_history_generation = 0
+    _match_history_refreshing = False
+    _match_history_refresh_started_at = ""
+    _match_history_refresh_completed_at = ""
+    _match_history_refresh_error = ""
+    _match_history_refresh_lock = threading.Lock()
+    _match_history_build_lock = threading.Lock()
+    _timeline_tasks: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+    _tmdb_detail_cache: Dict[str, Dict[str, Any]] = {}
 
-    def __init__(self):
-        super().__init__()
-        self._folders = ()
-        self._trigger = None
-        self._stopped = Event()
-        self._stopped.set()
-        self._scan_lock = Lock()
-        self._once_scheduled = False
-        self._configuration_error = ""
-        self._use_proxy = False
+    _subtitle_exts = SUBTITLE_EXTS
+    _archive_exts = {".zip", ".rar", ".7z"}
+    _rar_exts = {".rar"}
+    _sevenzip_exts = {".7z"}
+    _rar_tools = ("unar", "/usr/bin/unar")
+    _sevenzip_tools = ("unar", "/usr/bin/unar")
+    _rar_python_package = "rarfile"
+    _rar_dependency_modes = set(RAR_DEPENDENCY_MODES)
+    _auto_transfer_subtitle_strategies = set(AUTO_TRANSFER_SUBTITLE_STRATEGIES)
+    _auto_multi_subtitle_modes = set(AUTO_MULTI_SUBTITLE_MODES)
+    _default_auto_language_priority = list(DEFAULT_AUTO_LANGUAGE_PRIORITY)
+    _default_auto_format_priority = list(DEFAULT_AUTO_FORMAT_PRIORITY)
+    _auto_transfer_subtitle_strategy_aliases = dict(AUTO_TRANSFER_SUBTITLE_STRATEGY_ALIASES)
+    _chinese_media_language_codes = {"zh", "cn", "zho", "cmn", "yue"}
+    _chinese_media_country_codes = {"cn", "hk", "tw", "sg"}
+    _chinese_media_region_names = {
+        "china",
+        "hong kong",
+        "taiwan",
+        "singapore",
+        "中国",
+        "大陆",
+        "香港",
+        "台湾",
+        "新加坡",
+    }
+    _chinese_media_category_pattern = re.compile(r"华语|国产|大陆|内地|香港|台湾|港剧|台剧|港片|台片|港台|中国")
+    _stream_exts = {".strm"}
+    _default_session_hours = 24
+    _language_suffix_aliases = dict(LANGUAGE_SUFFIX_ALIASES)
 
-    def init_plugin(self, config: dict | None = None) -> None:
-        """Read local paths and validate the schedule before exposing it to MoviePilot."""
-        self.stop_service()
-        values = self.DEFAULTS | (config or {})
-        self._configuration_error = ""
-        self._trigger = None
-        if not values["enabled"]:
-            return
-        folders = dict.fromkeys(Path(line.strip()) for line in str(values["folders"]).splitlines()
-                                if line.strip())
-        self._folders = tuple(folder for folder in folders if folder.is_absolute())
-        if not self._folders or len(self._folders) != len(folders):
-            self._configuration_error = "请填写 MoviePilot 可访问的绝对目录，每行一个。"
-            logger.warning(f"JAV字幕助手：{self._configuration_error}")
-            return
-        try:
-            self._trigger = CronTrigger.from_crontab(str(values["cron"]), timezone=ZoneInfo(settings.TZ))
-        except (ValueError, ZoneInfoNotFoundError) as error:
-            self._configuration_error = f"定时表达式或时区无效。{error}"
-            logger.warning(f"JAV字幕助手：{self._configuration_error}")
-            return
-        self._use_proxy = bool(values["online_use_proxy"])
-        self._stopped = Event()
-        if values["onlyonce"]:
-            add = getattr(scheduler_sdk, "add_plugin_once_job", None)
-            if add and add(type(self).__name__, self.MANUAL_JOB, self.scan_now, "JAV字幕助手立即扫描", delay_seconds=3):
-                self._once_scheduled = True
-                values["onlyonce"] = False
-                self.update_config(values)
-            else:
-                self._configuration_error = "立即扫描未能加入调度，请从「服务」运行扫描任务。"
+    def init_plugin(self, config: dict = None):
+        config = dict(config or {})
+        # Keep the configured directories and proxy when upgrading from JAV 1.1.
+        if "folders" in config and "manual_strm_paths" not in config:
+            config["online_proxy_migrated"] = True
+            config["manual_strm_paths"] = config["folders"]
+            config["manual_strm_enabled"] = bool(config["folders"])
+            config["auto_search_on_manual_strm"] = bool(config["folders"])
+        normalized_config = normalize_plugin_config(
+            config,
+            subtitle_exts=self._subtitle_exts,
+            default_auto_language_priority=self._default_auto_language_priority,
+            default_auto_format_priority=self._default_auto_format_priority,
+            available_provider_ids=self._available_online_provider_ids,
+            default_provider_ids=self._default_online_provider_ids,
+        )
+        apply_runtime_config(self, normalized_config)
+        if (config or {}).get("opensubtitles_username") and "@" in self._normalize_text((config or {}).get("opensubtitles_username")):
+            logger.warning("[JavSubtitleAssistant] OpenSubtitles 用户名疑似邮箱，已忽略下载认证用户名")
+        sync_class_runtime_config(type(self), self)
+        reset_runtime_state(self)
+        self.services.local_media_catalog().restore_persisted_local_cache()
+        self.services.history().restore_persisted_match_history_cache()
+        self._save_config()
+        self._prepare_rar_dependency()
+        self.services.upload_session().cleanup_old_sessions()
+        self.services.auto_transfer().restore(resume=self.get_state())
+        self.services.manual_strm_monitor().start()
 
     def get_state(self) -> bool:
-        return not self._stopped.is_set()
+        return bool(self._enabled)
 
     @staticmethod
-    def get_command() -> list:
+    def get_command() -> List[Dict[str, Any]]:
         return []
 
-    def get_api(self) -> list:
+    def get_actions(self) -> List[Dict[str, Any]]:
+        from .automation.workflow_actions import build_actions
+
+        return build_actions(self)
+
+    def get_agent_tools(self) -> List[type]:
+        from .automation.agent_tools import get_agent_tools
+
+        return get_agent_tools()
+
+    @staticmethod
+    def get_render_mode() -> Tuple[str, str]:
+        return "vue", "dist/assets"
+
+    def get_api(self) -> List[Dict[str, Any]]:
+        return build_api_routes(self)
+
+    def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
+        return build_config_form(
+            default_auto_language_priority=self._default_auto_language_priority,
+            default_auto_format_priority=self._default_auto_format_priority,
+            default_online_provider_ids=self._default_online_provider_ids,
+        )
+
+    def get_page(self) -> List[dict]:
         return []
 
-    def get_form(self) -> tuple[list, dict]:
-        return [{"component": "VForm", "content": [
-            _row(_col("VSwitch", {"model": "enabled", "label": "启用插件"}, 6),
-                 _col("VSwitch", {"model": "onlyonce", "label": "保存后立即扫描"}, 6)),
-            _row(_col("VTextarea", {
-                "model": "folders", "label": "转移后的本地目录", "rows": 3,
-                "hint": "填写 MoviePilot 内能访问的绝对路径，每行一个。", "persistent-hint": True,
-            })),
-            _row(_col("VTextField", {"model": "cron", "label": "定时扫描（Cron）"}, 6),
-                 _col("VSwitch", {"model": "online_use_proxy", "label": "Subtitle Cat 使用 MoviePilot 系统代理"}, 6)),
-        ]}], self.DEFAULTS.copy()
-
-    def get_page(self) -> list[dict]:
-        """Show the scan outcome without requiring access to server logs."""
-        if self._scan_lock.locked() or self._once_scheduled:
-            title, message, level = "扫描中", "扫描完成后，重新打开详情查看结果。", "info"
-        elif self._configuration_error:
-            title, message, level = "设置需要检查", self._configuration_error, "warning"
-        elif not self.get_state():
-            title, message, level = "插件未启用", "在设置里填写目录，勾选「启用插件」和「保存后立即扫描」。", "info"
-        else:
-            report = self.get_data("last_scan")
-            if isinstance(report, dict):
-                title = f"最近一次扫描 · {report['finished']}"
-                message = (
-                    f"发现 {report['videos']} 个视频，已有中文 {report['existing']}，"
-                    f"未识别番号 {report['unidentified']}，联网 {report['searched']}，"
-                    f"写入 {report['saved']}，未找到 {report['missing']}，"
-                    f"暂缓 {report['cached']}，失败 {report['failed']}。"
-                )
-                level = "warning" if report["failed"] else "success"
-                return [
-                    {"component": "VAlert", "props": {
-                        "title": title, "text": message, "type": level, "variant": "tonal",
-                    }},
-                    {"component": "VList", "content": [
-                        {"component": "VListItem", "props": {"title": item[0], "subtitle": item[1]}}
-                        for item in report["details"]
-                    ]},
-                ]
-            title, message, level = "尚未扫描", "在设置里勾选「保存后立即扫描」，或者从服务列表运行。", "info"
-        return [{"component": "VAlert", "props": {
-            "title": title, "text": message, "type": level, "variant": "tonal",
-        }}]
-
-    def get_service(self) -> list[dict]:
-        """Register the scan using MoviePilot's scheduler."""
-        if not self.get_state():
+    def get_sidebar_nav(self) -> List[Dict[str, Any]]:
+        if not self.get_state() or not self._show_sidebar_nav:
             return []
-        return [{
-            "id": "JavSubtitleAssistant.Scan",
-            "name": "JAV字幕助手 · 扫描本地目录",
-            "trigger": self._trigger,
-            "func": self.scan,
-            "kwargs": {},
-        }]
-
-    def stop_service(self) -> None:
-        self._stopped.set()
-        if self._once_scheduled:
-            remove = getattr(scheduler_sdk, "remove_plugin_once_job", None)
-            if remove:
-                remove(type(self).__name__, self.MANUAL_JOB)
-            self._once_scheduled = False
-
-    def _videos(self, folders: tuple[Path, ...], stopped: Event, on_error):
-        """Walk the configured folders without following nested directory symlinks."""
-        seen = set()
-        for folder in folders:
-            try:
-                root = folder.resolve(strict=True)
-                if not root.is_dir():
-                    raise NotADirectoryError(str(folder))
-            except (OSError, RuntimeError) as error:
-                on_error(str(folder), error)
-                continue
-            for directory, subdirs, files in os.walk(
-                    root, followlinks=False, onerror=lambda error: on_error(error.filename or str(root), error)):
-                if stopped.is_set():
-                    return
-                subdirs.sort()
-                for name in sorted(files):
-                    video = Path(directory) / name
-                    if video.suffix.lower() not in VIDEOS or SAMPLE.search(video.stem):
-                        continue
-                    if video not in seen:
-                        seen.add(video)
-                        yield video
-
-    def scan_now(self) -> None:
-        """Retry eligible files when requested from the settings page."""
-        self._once_scheduled = False
-        self.scan(force=True)
-
-    def scan(self, *, force: bool = False) -> None:
-        """Scan one batch and download at most one Chinese subtitle per video."""
-        stopped, folders = self._stopped, self._folders
-        if stopped.is_set() or not self._scan_lock.acquire(blocking=False):
-            return
-        try:
-            self._configuration_error = ""
-            now = time()
-            deadline = monotonic() + self.SCAN_BUDGET_SECONDS
-            report = dict.fromkeys(("videos", "existing", "unidentified", "searched",
-                                    "saved", "missing", "cached", "failed"), 0)
-            details = []
-
-            def add_detail(name: str, reason: str) -> None:
-                if len(details) < 15:
-                    details.append([name, reason])
-
-            def log_failure(name: str, error: Exception) -> None:
-                report["failed"] += 1
-                add_detail(name, str(error))
-                logger.warning(f"JAV字幕助手：{name}，{error}")
-
-            state = self.get_data("scan_state")
-            if not isinstance(state, dict):
-                state = {}
-            stored = state.get("checked")
-            cache = {
-                key: record for key, record in (stored.items() if isinstance(stored, dict) else ())
-                if isinstance(record, list) and len(record) == 3
-                and isinstance(record[2], (int, float)) and record[2] > now
+        return [
+            {
+                "nav_key": "main",
+                "title": "JAV字幕助手",
+                "icon": "mdi-file-upload-outline",
+                "section": "organize",
+                "permission": "manage",
+                "order": 48,
             }
-            ffprobe, ffmpeg = shutil.which("ffprobe"), shutil.which("ffmpeg")
-            if not ffprobe:
-                logger.warning("JAV字幕助手：找不到 ffprobe，将跳过无法检查内嵌字幕的视频")
-            videos = list(self._videos(folders, stopped, log_failure))
-            report["videos"] = len(videos)
-            provider = SubtitleCatProvider(use_proxy=self._use_proxy)
-            cursor = state.get("cursor")
-            start = next((index + 1 for index, video in enumerate(videos) if str(video) == cursor), 0)
-            checked = 0
-            last = ""
-            for video in chain(islice(videos, start, None), islice(videos, start)):
-                if (stopped.is_set() or monotonic() >= deadline or report["searched"] >= self.MAX_SEARCHES
-                        or checked >= self.MAX_CHECKS):
-                    break
-                last = str(video)
-                try:
-                    number = video_number(video)
-                    if not number:
-                        report["unidentified"] += 1
-                        add_detail(video.name, "未识别番号")
-                        continue
-                    stat = video.stat()
-                    if not S_ISREG(stat.st_mode):
-                        continue
-                    stamp = [stat.st_size, stat.st_mtime_ns]
-                    key = os.path.normcase(str(video))
-                    if not force and stamp == cache.get(key, [])[:2]:
-                        report["cached"] += 1
-                        continue
-                except OSError as error:
-                    log_failure(video.name, error)
-                    continue
-                try:
-                    checked += 1
-                    existing = has_chinese_sidecar(video)
-                    if not existing and video.suffix.lower() != ".strm":
-                        if not ffprobe:
-                            raise OSError("ffprobe 不可用，无法确认内嵌字幕")
-                        existing = has_chinese_embedded(video, ffprobe, ffmpeg)
-                    if existing:
-                        report["existing"] += 1
-                    else:
-                        report["searched"] += 1
-                        result = provider.search_and_download(number, video)
-                        if stopped.is_set():
-                            break
-                        current = video.stat()
-                        if stamp != [current.st_size, current.st_mtime_ns]:
-                            continue
-                        if not result:
-                            report["missing"] += 1
-                            add_detail(video.name, f"{number} · Subtitle Cat 暂无匹配中文字幕")
-                        elif has_chinese_sidecar(video):
-                            report["existing"] += 1
-                        elif not stopped.is_set():
-                            destination = write_subtitle(video, *result)
-                            if destination:
-                                logger.info(f"JAV字幕助手：已保存 {destination.name}")
-                                report["saved"] += 1
-                                add_detail(video.name, f"已保存 {destination.name}")
-                    cache[key] = [*stamp, now + 86400]
-                except (OSError, ValueError, SubprocessError) as error:
-                    log_failure(video.name, error)
-                    cache[key] = [*stamp, now + 3600]
-            if not stopped.is_set():
-                records = sorted(cache.items(), key=lambda item: item[1][2])[-self.MAX_CACHE:]
-                self.save_data("scan_state", {"checked": dict(records), "cursor": last})
-                self.save_data("last_scan", {**report, "details": details,
-                    "finished": datetime.now(ZoneInfo(settings.TZ)).strftime("%Y-%m-%d %H:%M:%S")})
-            logger.info(f"JAV字幕助手：扫描结束，联网 {report['searched']}，写入 {report['saved']}，失败 {report['failed']}")
-        finally:
-            self._scan_lock.release()
+        ]
+
+    @property
+    def services(self) -> JavSubtitleAssistantServices:
+        registry = getattr(self, "_services_registry", None)
+        if registry is None:
+            registry = JavSubtitleAssistantServices(self)
+            self._services_registry = registry
+        return registry
+
+    def stop_service(self):
+        self.services.manual_strm_monitor().stop()
+        self.services.auto_transfer().stop()
+
+    @eventmanager.register(EventType.TransferComplete)
+    def listen_transfer_complete(self, event: MPEvent):
+        if not self.get_state() or not self._auto_search_on_transfer:
+            return
+        self.services.auto_transfer().handle_transfer_complete(event)
+
+    def _save_config(self) -> None:
+        self.update_config(build_save_config_payload(self))
+
+
+install_shell_helpers(
+    JavSubtitleAssistant,
+    upload_file_type=UploadFile,
+    http_exception=HTTPException,
+    settings_obj=settings,
+)
