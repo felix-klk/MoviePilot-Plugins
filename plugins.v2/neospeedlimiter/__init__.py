@@ -1,0 +1,1501 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Based on Shurelol's SpeedLimiter 2.3.3 in jxxghp/MoviePilot-Plugins.
+
+import ipaddress
+import math
+import os
+import selectors
+import stat
+import subprocess
+import threading
+import time
+from datetime import datetime, timezone
+from typing import List, Tuple, Dict, Any, Optional
+
+from app.core.event import eventmanager, Event
+from app.helper.downloader import DownloaderHelper
+from app.helper.mediaserver import MediaServerHelper
+from app.log import logger
+from app.plugins import _PluginBase
+from app.schemas import NotificationType, WebhookEventInfo, ServiceInfo
+from app.schemas.types import EventType
+from app.utils.ip import IpUtils
+
+
+class NeoSpeedLimiter(_PluginBase):
+    """根据外网媒体播放状态动态调整下载器限速。"""
+
+    # 插件名称
+    plugin_name = "NEO播放限速"
+    # 插件描述
+    plugin_desc = "外网播放时按带宽调整下载器限速。无播放时可在 qBittorrent 下载任务达到 3 个后临时解除下载限速。"
+    # 插件图标
+    plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/Librespeed_A.png"
+    # 插件版本
+    plugin_version = "2.0.0"
+    # 插件作者
+    plugin_author = "felix-klk"
+    # 作者主页
+    author_url = "https://github.com/felix-klk"
+    # 插件配置项ID前缀
+    plugin_config_prefix = "neospeedlimiter_"
+    # 加载顺序
+    plugin_order = 11
+    # 可使用的用户级别
+    auth_level = 1
+
+    # 私有属性
+    _scheduler = None
+    _enabled: bool = False
+    _notify: bool = False
+    _interval: int = 60
+    # Jellyfin 客户端通常会持续上报播放进度；超过该时间未上报的残留会话视为脏数据。
+    _jellyfin_session_timeout: int = 120
+    _downloader: list = []
+    _play_up_speed: float = 0
+    _play_down_speed: float = 0
+    _noplay_up_speed: float = 0
+    _noplay_down_speed: float = 0
+    _bandwidth: float = 0
+    _allocation_ratio: str = ""
+    _auto_limit: bool = False
+    _limit_enabled: bool = False
+    # 不限速地址
+    _unlimited_ips = {}
+    # 当前限速状态
+    _current_state = ""
+    _exclude_path = ""
+
+    def __init__(self):
+        """隔离实例状态，串行处理轮询、Webhook 和停用。"""
+        super().__init__()
+        self._lock = threading.RLock()
+        self._original = {}
+        self._applied = {}
+        self._qb_bulk_download = False
+        self._qb_bulk_limits = {}
+        self._last_playing = None
+        self._playback_started = None
+        self._session_positions = {}
+        self._recovering = False
+        self._last_raise = 0
+        self._recovery_step = 256
+        self._unlimited_ips = {}
+        self._downloader = []
+        self._caps = {}
+        self._allocation_mode = "ratio"
+        self._headroom = 0
+        self._overhead = 1.25
+        self._recovery_delay = 30
+        self._stopping = False
+        self._segment_prediction = False
+        self._media_paths = ""
+        self._probe_cache = {}
+        self._probe_pending = False
+        self._probe_generation = 0
+        self._probe_cancel = threading.Event()
+        self._probe_process_lock = threading.Lock()
+        self._probe_process = None
+        self._probe_checked = {}
+        self._probe_signatures = {}
+        self._budget_log = None
+
+    def init_plugin(self, config: dict = None):
+        """串行更新配置，保留未恢复的快照供失败重试。"""
+        with self._lock:
+            self._configure(config)
+
+    def _configure(self, config: dict = None):
+        """读取限速和分配设置。"""
+        self._original = self._original or self.get_data("original_limits") or {}
+        self._applied = self._applied or self.get_data("applied_limits") or {}
+        self._qb_bulk_limits = self._qb_bulk_limits or self.get_data("qb_bulk_limits") or {}
+        self._downloader = list(dict.fromkeys(self._downloader + list(self._original)))
+        self.stop_service()
+        self._stopping = False
+        self._probe_cancel = threading.Event()
+        self._caps = {}
+        config = config or {}
+        self._segment_prediction = bool(config.get("segment_prediction"))
+        self._media_paths = config.get("media_paths") or ""
+        self._enabled = bool(config.get("enabled"))
+        self._qb_bulk_download = bool(config.get("qb_bulk_download"))
+        self._allocation_mode = config.get("allocation_mode") or "ratio"
+        self._interval = max(3, int(config.get("interval") or 60))
+        self._headroom = max(0, float(config.get("headroom") or 0)) * 1000000
+        self._overhead = max(1, float(config.get("overhead") or 1.25))
+        self._recovery_delay = max(0, int(config.get("recovery_delay", 30)))
+        self._recovery_step = max(1, min(4096, int(config.get("recovery_step") or 256)))
+        for line in (config.get("downloader_limits") or "").splitlines():
+            if not line.strip():
+                continue
+            name, sep, raw = line.rpartition("=")
+            try:
+                value = float(raw) if sep else -1
+            except ValueError:
+                value = -1
+            if not name.strip() or not math.isfinite(value) or value < 1:
+                self._enabled = False
+                logger.error("下载器上传上限格式错误，应为 名称=KB/s，且不小于1")
+                return
+            self._caps[name.strip()] = value
+
+        # 读取配置
+        if config:
+            self._enabled = bool(config.get("enabled"))
+            self._notify = config.get("notify")
+            self._play_up_speed = float(config.get("play_up_speed")) if config.get("play_up_speed") else 0
+            self._play_down_speed = float(config.get("play_down_speed")) if config.get("play_down_speed") else 0
+            self._noplay_up_speed = float(config.get("noplay_up_speed")) if config.get("noplay_up_speed") else 0
+            self._noplay_down_speed = float(config.get("noplay_down_speed")) if config.get("noplay_down_speed") else 0
+            self._current_state = f"U:{self._noplay_up_speed},D:{self._noplay_down_speed}"
+            self._exclude_path = config.get("exclude_path")
+
+            try:
+                # 总带宽
+                self._bandwidth = int(float(config.get("bandwidth") or 0)) * 1000000
+                # 自动限速开关
+                if self._bandwidth > 0:
+                    self._auto_limit = True
+                else:
+                    self._auto_limit = False
+            except Exception as e:
+                logger.error(f"智能限速上行带宽设置错误：{str(e)}")
+                self._bandwidth = 0
+
+            # 限速服务开关
+            self._limit_enabled = True if (self._play_up_speed
+                                           or self._play_down_speed
+                                           or self._auto_limit) else False
+            self._allocation_ratio = config.get("allocation_ratio") or ""
+            # 不限速地址
+            self._unlimited_ips["ipv4"] = config.get("ipv4") or ""
+            self._unlimited_ips["ipv6"] = config.get("ipv6") or ""
+
+            self._downloader = config.get("downloader") or []
+            if set(self._caps) - set(self._downloader):
+                self._enabled = False
+                logger.error("上传上限中有未选择的下载器")
+            self._limit_enabled = self._limit_enabled or bool(self._caps)
+
+    def get_state(self) -> bool:
+        """返回插件是否已启用。"""
+        return self._enabled
+
+    @staticmethod
+    def get_command() -> List[Dict[str, Any]]:
+        """返回插件命令定义；当前插件未注册命令。"""
+        pass
+
+    def get_api(self) -> List[Dict[str, Any]]:
+        """返回插件 API 定义；当前插件未暴露 API。"""
+        pass
+
+    def get_service(self) -> List[Dict[str, Any]]:
+        """
+        注册插件公共服务
+        [{
+            "id": "服务ID",
+            "name": "服务名称",
+            "trigger": "触发器：cron/interval/date/CronTrigger.from_crontab()",
+            "func": self.xxx,
+            "kwargs": {} # 定时器参数
+        }]
+        """
+        if self._enabled and (self._limit_enabled or self._qb_bulk_download or self._qb_bulk_limits):
+            return [
+                {
+                    "id": "NeoSpeedLimiter",
+                    "name": "NEO播放限速检查服务",
+                    "trigger": "interval",
+                    "func": self.check_playing_sessions,
+                    "kwargs": {"seconds": self._interval}
+                }
+            ]
+        return []
+
+    def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
+        """返回播放限速配置表单及默认值。"""
+        return [
+            {
+                'component': 'VForm',
+                'content': [
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'enabled',
+                                            'label': '启用插件',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'notify',
+                                            'label': '发送通知',
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSelect',
+                                        'props': {
+                                            'multiple': True,
+                                            'chips': True,
+                                            'clearable': True,
+                                            'model': 'downloader',
+                                            'label': '下载器',
+                                            'items': [{"title": config.name, "value": config.name}
+                                                      for config in DownloaderHelper().get_configs().values()]
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'play_up_speed',
+                                            'label': '播放限速（上传）',
+                                            'placeholder': 'KB/s'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'play_down_speed',
+                                            'label': '播放限速（下载）',
+                                            'placeholder': 'KB/s'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'noplay_up_speed',
+                                            'label': '未播放限速（上传）',
+                                            'placeholder': 'KB/s'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'noplay_down_speed',
+                                            'label': '未播放限速（下载）',
+                                            'placeholder': 'KB/s'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'bandwidth',
+                                            'label': '智能限速上行带宽',
+                                            'placeholder': 'Mbps'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSelect',
+                                        'props': {
+                                            'model': 'allocation_ratio',
+                                            'label': '智能限速分配比例',
+                                            'items': [
+                                                {'title': '平均', 'value': ''},
+                                                {'title': '1：9', 'value': '1:9'},
+                                                {'title': '2：8', 'value': '2:8'},
+                                                {'title': '3：7', 'value': '3:7'},
+                                                {'title': '4：6', 'value': '4:6'},
+                                                {'title': '6：4', 'value': '6:4'},
+                                                {'title': '7：3', 'value': '7:3'},
+                                                {'title': '8：2', 'value': '8:2'},
+                                                {'title': '9：1', 'value': '9:1'},
+                                            ]
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'ipv4',
+                                            'label': '不限速地址范围（ipv4）',
+                                            'placeholder': '留空默认不限速内网ipv4'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'ipv6',
+                                            'label': '不限速地址范围（ipv6）',
+                                            'placeholder': '留空默认不限速内网ipv6'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'exclude_path',
+                                            'label': '不限速路径',
+                                            'placeholder': '包含该路径的媒体不限速,多个请换行'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        ] + self._allocation_form(), {
+            "enabled": False,
+            "qb_bulk_download": False,
+            "recovery_step": 256,
+            "segment_prediction": False,
+            "media_paths": "",
+            "allocation_mode": "ratio",
+            "downloader_limits": "",
+            "interval": 60,
+            "headroom": 0,
+            "overhead": 1.25,
+            "recovery_delay": 30,
+            "notify": True,
+            "downloader": [],
+            "play_up_speed": None,
+            "play_down_speed": None,
+            "noplay_up_speed": None,
+            "noplay_down_speed": None,
+            "bandwidth": None,
+            "allocation_ratio": "",
+            "ipv4": "",
+            "ipv6": "",
+            "exclude_path": ""
+        }
+
+    @staticmethod
+    def _allocation_form() -> list:
+        """追加带宽分配和恢复设置，沿用插件表单组件。"""
+        fields = [
+            ("VSwitch", "qb_bulk_download", "无播放且 qB 下载任务达到 3 个时不限速", {}),
+            ("VSelect", "allocation_mode", "分配方式", {"items": [
+                {"title": "按比例", "value": "ratio"},
+                {"title": "按下载器顺序", "value": "priority"}]}),
+            ("VTextField", "interval", "检查间隔（秒）", {"type": "number", "min": 3}),
+            ("VTextField", "headroom", "预留带宽（Mbps）", {"type": "number", "min": 0}),
+            ("VTextField", "overhead", "播放带宽系数", {"type": "number", "min": 1, "step": .05}),
+            ("VSwitch", "segment_prediction", "按播放片段预留", {}),
+            ("VTextarea", "media_paths", "媒体路径映射", {"placeholder": "媒体服务器路径=MP路径", "rows": 2}),
+            ("VTextField", "recovery_step", "每次恢复上传（KB/s）", {"type": "number", "min": 1, "max": 4096}),
+            ("VTextField", "recovery_delay", "停止后等待（秒）", {"type": "number", "min": 0}),
+            ("VTextarea", "downloader_limits", "下载器上传上限（KB/s）", {
+                "placeholder": "下载器名称=3000", "rows": 2}),
+        ]
+        return [{"component": "VRow", "content": [
+            {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [
+                {"component": component, "props": {"model": model, "label": label, **props}}]}
+            for component, model, label, props in fields]}]
+
+    def get_page(self) -> List[dict]:
+        """返回插件详情页；当前插件未提供详情页。"""
+        pass
+
+    @property
+    def service_infos(self) -> Optional[Dict[str, ServiceInfo]]:
+        """
+        服务信息
+        """
+        if not self._downloader:
+            logger.warning("尚未配置下载器，请检查配置")
+            return None
+
+        services = DownloaderHelper().get_services(name_filters=self._downloader)
+        if not services:
+            logger.warning("获取下载器实例失败，请检查配置")
+            return None
+
+        active_services = {}
+        for service_name, service_info in services.items():
+            if service_info.instance.is_inactive():
+                logger.warning(f"下载器 {service_name} 未连接，请检查配置")
+            else:
+                active_services[service_name] = service_info
+
+        if not active_services:
+            logger.warning("没有已连接的下载器，请检查配置")
+            return None
+
+        return active_services
+
+    @eventmanager.register(EventType.WebhookMessage)
+    def check_playing_sessions(self, event: Event = None):
+        """避免轮询和 Webhook 同时写入不同的限速。"""
+        if not self._lock.acquire(blocking=False):
+            return
+        try:
+            if not self._stopping:
+                self._check_playing_sessions(event)
+        finally:
+            self._lock.release()
+
+    def _check_playing_sessions(self, event: Event = None):
+        """
+        检查播放会话；Webhook 仅用于加速触发，定时轮询始终作为兼容兜底。
+        """
+        if not self._enabled:
+            return
+        if event:
+            event_data: WebhookEventInfo = event.event_data
+            if event_data.event not in [
+                "playback.start",
+                "PlaybackStart",
+                "media.play",
+                "media.stop",
+                "PlaybackStop",
+                "playback.stop", "playback.pause", "playback.unpause",
+                "PlaybackPause", "PlaybackUnpause", "media.pause", "media.resume"
+            ]:
+                return
+        services = self.service_infos or {}
+        if not services:
+            return
+        try:
+            playback = self._playback_status()
+        except Exception as e:
+            logger.warning(f"获取播放状态失败：{e}")
+            playback = None
+        if playback is None:
+            if self._qb_bulk_limits:
+                self.__set_limiter(services, None, 0, 0)
+            return
+
+        block_bulk, has_remote_playback, total_bit_rate = playback
+        now = time.monotonic()
+        if has_remote_playback:
+            if self._last_playing is None or now - self._last_playing > self._recovery_delay + self._interval:
+                self._playback_started = now
+            self._last_playing = now
+            self._recovering = True
+            # 刚开播或缺少码率时先让出带宽，避免缓存不足反过来低估需求。
+            if self._auto_limit and (not total_bit_rate or now - self._playback_started < 15):
+                total_bit_rate = max(total_bit_rate, self._bandwidth)
+            logger.debug(f"外网播放总比特率：{total_bit_rate}")
+            play_up_speed = self.__calc_limit(total_bit_rate) if self._auto_limit else self._play_up_speed
+            self.__set_limiter(services, "播放", play_up_speed, self._play_down_speed)
+        elif self._last_playing is None or now - self._last_playing >= self._recovery_delay:
+            # 暂停或换集保留限速一段时间，再逐步恢复。
+            self.__set_limiter(services, "未播放", self._noplay_up_speed, self._noplay_down_speed,
+                               allow_bulk=not block_bulk)
+
+    def _playback_status(self) -> Optional[Tuple[bool, bool, float]]:
+        """返回批量下载是否应让出带宽、外网播放状态和总码率。"""
+        # 播放状态与比特率必须分开统计，避免 Jellyfin 未返回比特率时误判为未播放。
+        has_playback = False
+        has_remote_playback = False
+        total_bit_rate = 0
+        helper = MediaServerHelper()
+        media_servers = helper.get_services()
+        if not media_servers:
+            return None
+        check_bulk = self._qb_bulk_download or self._qb_bulk_limits
+        all_servers_checked = not check_bulk or set(helper.get_configs()) <= set(media_servers)
+        # 查询所有媒体服务器状态
+        for server, service in media_servers.items():
+            # 查询播放中会话
+            playing_sessions = []
+            if service.type == "emby":
+                req_url = "[HOST]emby/Sessions?api_key=[APIKEY]"
+                try:
+                    res = service.instance.get_data(req_url)
+                    if not res or res.status_code != 200:
+                        return
+                    if res.status_code == 200:
+                        sessions = res.json()
+                        if not isinstance(sessions, list):
+                            return None
+                        for session in sessions:
+                            if session.get("NowPlayingItem") and not session.get("PlayState", {}).get("IsPaused"):
+                                has_playback |= self.__is_video_item(session["NowPlayingItem"])
+                                if not self.__path_excluded(session.get("NowPlayingItem").get("Path")):
+                                    playing_sessions.append(session)
+
+                except Exception as e:
+                    logger.error(f"获取Emby播放会话失败：{str(e)}")
+                    return
+                # 计算有效比特率
+                for session in playing_sessions:
+                    # 设置了不限速范围则判断session ip是否在不限速范围内
+                    if self._unlimited_ips["ipv4"] or self._unlimited_ips["ipv6"]:
+                        if not self.__allow_access(self._unlimited_ips, session.get("RemoteEndPoint")) \
+                                and session.get("NowPlayingItem", {}).get("MediaType") == "Video":
+                            has_remote_playback = True
+                            self._note_playback(server, session)
+                            total_bit_rate += self._playback_bitrate(session) or self._bandwidth
+                    # 未设置不限速范围，则默认不限速内网ip
+                    elif not IpUtils.is_private_ip(session.get("RemoteEndPoint")) \
+                            and session.get("NowPlayingItem", {}).get("MediaType") == "Video":
+                        has_remote_playback = True
+                        self._note_playback(server, session)
+                        total_bit_rate += self._playback_bitrate(session) or self._bandwidth
+            elif service.type == "jellyfin":
+                req_url = (f"[HOST]Sessions?api_key=[APIKEY]&"
+                           f"activeWithinSeconds={self._jellyfin_session_timeout}")
+                try:
+                    res = service.instance.get_data(req_url)
+                    if not res or res.status_code != 200:
+                        return
+                    if res.status_code == 200:
+                        payload = res.json()
+                        if not isinstance(payload, list) and not (
+                            isinstance(payload, dict) and isinstance(self.__get_compatible_value(
+                                payload, "Items", "items", "Sessions", "sessions", "Data", "data"
+                            ), list)
+                        ):
+                            return None
+                        sessions = self.__extract_jellyfin_sessions(payload)
+                        for session in sessions:
+                            item = self.__jellyfin_playing_item(session)
+                            if item is None:
+                                continue
+                            has_playback = True
+                            bit_rate = self.__jellyfin_session_bitrate(session, item)
+                            if bit_rate is None:
+                                continue
+                            has_remote_playback = True
+                            self._note_playback(server, session)
+                            total_bit_rate += bit_rate or self._bandwidth
+                except Exception as e:
+                    logger.error(f"获取Jellyfin播放会话失败：{str(e)}")
+                    return
+            elif service.type == "plex":
+                _plex = service.instance.get_plex()
+                if not _plex:
+                    all_servers_checked = False
+                if _plex:
+                    sessions = _plex.sessions()
+                    for session in sessions:
+                        paused = getattr(session.player, "state", None) == "paused"
+                        has_playback |= session.TAG == "Video" and not paused
+                        if paused and self._qb_bulk_download:
+                            continue
+                        bitrate = sum([m.bitrate or 0 for m in session.media])
+                        playing_sessions.append({
+                            "type": session.TAG,
+                            "bitrate": bitrate,
+                            "address": session.player.address
+                        })
+                    # 计算有效比特率
+                    for session in playing_sessions:
+                        # 设置了不限速范围则判断session ip是否在不限速范围内
+                        if self._unlimited_ips["ipv4"] or self._unlimited_ips["ipv6"]:
+                            if not self.__allow_access(self._unlimited_ips, session.get("address")) \
+                                    and session.get("type") == "Video":
+                                has_remote_playback = True
+                                total_bit_rate += int(session.get("bitrate") or 0) * 1000
+                        # 未设置不限速范围，则默认不限速内网ip
+                        elif not IpUtils.is_private_ip(session.get("address")) \
+                                and session.get("type") == "Video":
+                            has_remote_playback = True
+                            total_bit_rate += int(session.get("bitrate") or 0) * 1000
+
+            else:
+                all_servers_checked = False
+
+        return has_playback or not all_servers_checked, has_remote_playback, total_bit_rate
+
+    @staticmethod
+    def segment_rate(buckets: list, offset: float) -> float:
+        """按未来一分钟内的30秒窗口预留，覆盖片段峰值。"""
+        start = max(0, int(offset))
+        if start + 60 > len(buckets):
+            return 0
+        return max(sum(buckets[i:i + 30]) * 8 / 30
+                   for i in range(start, start + 31))
+
+    def _mapped_media_path(self, path: str) -> Optional[str]:
+        if not isinstance(path, str) or not os.path.isabs(path):
+            return None
+        mappings = []
+        for line in self._media_paths.splitlines():
+            source, sep, target = line.partition("=")
+            if sep and os.path.isabs(source.strip()) and os.path.isabs(target.strip()):
+                mappings.append((source.strip().rstrip("/"), target.strip().rstrip("/")))
+        for source, target in sorted(mappings, key=lambda row: len(row[0]), reverse=True):
+            if path == source or path.startswith(source + "/"):
+                return target + path[len(source):]
+        return path
+
+    def _read_probe(self, command: list, consume, cancel, deadline=None):
+        """逐行处理输出，限制时间、输出量，并允许停用时中止。"""
+        with self._probe_process_lock:
+            if cancel.is_set():
+                raise ValueError("探测已取消")
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            self._probe_process = process
+        deadline = deadline or time.monotonic() + 20
+        pending = b""
+        received = 0
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                while True:
+                    if cancel.is_set():
+                        raise ValueError("探测已取消")
+                    if time.monotonic() >= deadline:
+                        raise subprocess.TimeoutExpired(command[0], 20)
+                    if not selector.select(.25):
+                        continue
+                    chunk = os.read(process.stdout.fileno(), 65536)
+                    if not chunk:
+                        if pending:
+                            consume(pending.decode("utf-8", errors="replace"))
+                        break
+                    received += len(chunk)
+                    if received > 16 * 1024 * 1024:
+                        raise ValueError("探测输出超过16MiB")
+                    pending += chunk
+                    lines = pending.split(b"\n")
+                    pending = lines.pop()
+                    if len(pending) > 65536:
+                        raise ValueError("探测输出行过长")
+                    for line in lines:
+                        consume(line.decode("utf-8", errors="replace"))
+            if process.wait(timeout=1):
+                raise ValueError("ffprobe探测失败")
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=1)
+            process.stdout.close()
+            with self._probe_process_lock:
+                if self._probe_process is process:
+                    self._probe_process = None
+
+    def _probe_segment(self, path: str, start: int, duration: float, cancel=None) -> list:
+        """读取本地文件压缩包，统一到播放器使用的相对时间轴。"""
+        cancel = cancel or self._probe_cancel
+        deadline = time.monotonic() + 20
+        origin = []
+        self._read_probe([
+            "ffprobe", "-v", "error", "-protocol_whitelist", "file",
+            "-show_entries", "format=start_time", "-of", "default=nw=1:nk=1", path,
+        ], origin.append, cancel, deadline)
+        timestamp_origin = float(origin[0])
+        if not math.isfinite(timestamp_origin):
+            raise ValueError("媒体起始时间无效")
+        buckets = [0] * 120
+        first_timestamp = float("inf")
+        last_timestamp = float("-inf")
+
+        def packet(line):
+            nonlocal first_timestamp, last_timestamp
+            values = dict(part.split("=", 1) for part in line.split("|") if "=" in part)
+            try:
+                timestamp = float(values["pts_time"]) - timestamp_origin
+                size = int(values["size"])
+                index = math.floor(timestamp - start)
+                if 0 <= index < 120 and size >= 0:
+                    buckets[index] += size
+                    first_timestamp = min(first_timestamp, timestamp)
+                    last_timestamp = max(last_timestamp, timestamp)
+            except (KeyError, ValueError, OverflowError):
+                return
+
+        self._read_probe([
+            "ffprobe", "-v", "error", "-protocol_whitelist", "file",
+            "-read_intervals", f"{start + timestamp_origin}%+120",
+            "-show_packets", "-show_entries", "packet=pts_time,size",
+            "-of", "compact=p=0:nk=0", path,
+        ], packet, cancel, deadline)
+        if not math.isfinite(last_timestamp) or first_timestamp > start + 2:
+            raise ValueError("片段起始数据不完整")
+        covered = min(120, math.floor(last_timestamp - start) + 1)
+        if duration <= start + covered:
+            covered = 120
+        return buckets[:covered]
+
+    def _playback_bitrate(self, session: dict) -> float:
+        item = session.get("NowPlayingItem") or {}
+        fallback = self.__get_jellyfin_bitrate(session, item)
+        state = session.get("PlayState") or {}
+        # 转码、未知传输方式和不可读文件沿用媒体服务器码率。
+        if (not self._segment_prediction or not self._auto_limit
+                or session.get("TranscodingInfo")
+                or state.get("PlayMethod") not in ("DirectPlay", "DirectStream")):
+            return fallback
+        try:
+            position = float(state["PositionTicks"]) / 10000000
+            duration = float(item.get("RunTimeTicks") or 0) / 10000000
+            path = self._mapped_media_path(item.get("Path"))
+            if (not path or not math.isfinite(position) or not math.isfinite(duration)
+                    or position < 0 or duration <= 0):
+                return fallback
+            start = int(position // 30) * 30
+            key = (path, start)
+            cached = self._probe_cache.get(key)
+            estimate = fallback
+            # 新区间尚未扫描完时，复用仍覆盖未来一分钟的相邻区间。
+            candidates = sorted((k for k in self._probe_cache
+                                 if k[0] == path and k[1] <= position),
+                                key=lambda k: k[1], reverse=True)
+            for candidate in candidates:
+                rate = self.segment_rate(self._probe_cache[candidate], position - candidate[1])
+                if rate:
+                    estimate = rate * 1.15 / self._overhead
+                    break
+            fresh = time.monotonic() - self._probe_checked.get(key, 0) < 30
+            if (cached is not None and fresh) or self._probe_pending:
+                return estimate
+            self._probe_pending = True
+            generation = self._probe_generation
+            cancel = self._probe_cancel
+            def probe():
+                signature = None
+                try:
+                    info = os.stat(path)
+                    if not stat.S_ISREG(info.st_mode) or cancel.is_set():
+                        raise ValueError("媒体文件不可读")
+                    signature = (info.st_size, info.st_mtime_ns)
+                    buckets = self._probe_segment(path, start, duration, cancel)
+                except (OSError, ValueError, IndexError, subprocess.SubprocessError) as error:
+                    logger.info(f"片段探测回退，位置{start}秒：{type(error).__name__}")
+                    buckets = []
+                with self._lock:
+                    if generation != self._probe_generation:
+                        return
+                    self._probe_pending = False
+                    if self._probe_signatures.get(path) != signature:
+                        for old in list(self._probe_cache):
+                            if old[0] == path:
+                                self._probe_cache.pop(old)
+                                self._probe_checked.pop(old, None)
+                    self._probe_signatures[path] = signature
+                    self._probe_cache[key] = buckets
+                    self._probe_checked[key] = time.monotonic()
+                    if buckets:
+                        logger.info(f"片段探测完成，位置{start}秒，预计码率{self.segment_rate(buckets, 0) / 1000000:.1f}Mbps")
+                    while len(self._probe_cache) > 32:
+                        old = next(iter(self._probe_cache))
+                        self._probe_cache.pop(old)
+                        self._probe_checked.pop(old, None)
+                    self._probe_signatures = {k[0]: self._probe_signatures.get(k[0]) for k in self._probe_cache}
+            threading.Thread(target=probe, name="playback-bitrate", daemon=True).start()
+            return estimate
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        return fallback
+
+    def _note_playback(self, server: str, session: dict):
+        """新会话、恢复播放或明显跳转时重新预留缓存带宽。"""
+        state = self.__get_compatible_value(session, "PlayState", "playState") or {}
+        item = self.__get_compatible_value(session, "NowPlayingItem", "nowPlayingItem") or {}
+        key = (server, session.get("Id") or session.get("DeviceId") or session.get("RemoteEndPoint"),
+               item.get("Id") or item.get("Path"))
+        position = self.__get_compatible_value(state, "PositionTicks", "positionTicks")
+        now = time.monotonic()
+        previous = self._session_positions.get(key)
+        if position is not None:
+            position = float(position) / 10000000
+        if (previous is None or now - previous[0] > self._interval * 2.5
+                or (position is not None and previous[1] is not None
+                    and abs(position - previous[1] - (now - previous[0])) > 10)):
+            self._playback_started = now
+        self._session_positions[key] = (now, position)
+        self._session_positions = {k: v for k, v in self._session_positions.items() if now - v[0] < 300}
+
+    @staticmethod
+    def __get_compatible_value(data: dict, *keys: str) -> Any:
+        """按候选字段名读取 Jellyfin 数据，兼容 PascalCase 与 camelCase 序列化。"""
+        if not isinstance(data, dict):
+            return None
+        for key in keys:
+            if key in data:
+                return data.get(key)
+        return None
+
+    @classmethod
+    def __extract_jellyfin_sessions(cls, payload: Any) -> List[dict]:
+        """从列表或常见包装对象中提取 Jellyfin 会话列表。"""
+        if isinstance(payload, list):
+            return [session for session in payload if isinstance(session, dict)]
+        if not isinstance(payload, dict):
+            return []
+        sessions = cls.__get_compatible_value(payload, "Items", "items", "Sessions", "sessions", "Data", "data")
+        if not isinstance(sessions, list):
+            return []
+        return [session for session in sessions if isinstance(session, dict)]
+
+    @staticmethod
+    def __parse_jellyfin_datetime(value: Any) -> Optional[datetime]:
+        """解析 Jellyfin 的 ISO 时间，无法识别时返回空以保留旧版本兼容。"""
+        if not isinstance(value, str) or not value.strip():
+            return None
+        normalized = value.strip()
+        if normalized.endswith("Z"):
+            normalized = f"{normalized[:-1]}+00:00"
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    @staticmethod
+    def __as_bool(value: Any) -> bool:
+        """兼容布尔值及字符串形式的 Jellyfin 状态字段。"""
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    @staticmethod
+    def __normalize_remote_ip(remote_endpoint: Any) -> str:
+        """去除 Jellyfin 远端地址中的端口和 IPv6 方括号。"""
+        if not isinstance(remote_endpoint, str):
+            return ""
+        endpoint = remote_endpoint.strip()
+        if not endpoint:
+            return ""
+        try:
+            return str(ipaddress.ip_address(endpoint.split("%", 1)[0]))
+        except ValueError:
+            pass
+        if endpoint.startswith("[") and "]" in endpoint:
+            endpoint = endpoint[1:endpoint.index("]")]
+        elif endpoint.count(":") == 1 and "." in endpoint:
+            endpoint = endpoint.rsplit(":", 1)[0]
+        try:
+            return str(ipaddress.ip_address(endpoint.split("%", 1)[0]))
+        except ValueError:
+            return ""
+
+    @classmethod
+    def __is_video_item(cls, item: dict) -> bool:
+        """判断 Jellyfin 当前媒体是否为视频，兼容字符串与枚举数值。"""
+        media_type = cls.__get_compatible_value(item, "MediaType", "mediaType")
+        if isinstance(media_type, str):
+            normalized = media_type.strip().lower()
+            if normalized in {"video", "1"}:
+                return True
+            if normalized:
+                return False
+        elif media_type is not None:
+            return media_type == 1
+        item_type = cls.__get_compatible_value(item, "Type", "type")
+        return str(item_type or "").lower() in {"movie", "episode", "video", "trailer", "musicvideo"}
+
+    @staticmethod
+    def __coerce_bitrate(value: Any) -> int:
+        """把 Jellyfin 不同层级返回的比特率安全转换为非负整数。"""
+        try:
+            return max(0, int(float(value or 0)))
+        except (TypeError, ValueError):
+            return 0
+
+    @classmethod
+    def __sum_media_stream_bitrate(cls, streams: Any) -> int:
+        """汇总音视频流比特率，忽略字幕等非传输码率字段。"""
+        if not isinstance(streams, list):
+            return 0
+        total = 0
+        for stream in streams:
+            if not isinstance(stream, dict):
+                continue
+            stream_type = cls.__get_compatible_value(stream, "Type", "type")
+            if stream_type is not None and str(stream_type).lower() not in {"video", "audio", "0", "1"}:
+                continue
+            total += cls.__coerce_bitrate(
+                cls.__get_compatible_value(stream, "BitRate", "bitRate", "Bitrate", "bitrate")
+            )
+        return total
+
+    @classmethod
+    def __get_jellyfin_bitrate(cls, session: dict, item: dict) -> int:
+        """按转码信息、媒体源和媒体流的优先级提取当前播放比特率。"""
+        transcoding = cls.__get_compatible_value(session, "TranscodingInfo", "transcodingInfo")
+        if isinstance(transcoding, dict):
+            bit_rate = cls.__coerce_bitrate(
+                cls.__get_compatible_value(transcoding, "Bitrate", "bitrate", "BitRate", "bitRate")
+            )
+            if bit_rate:
+                return bit_rate
+
+        bit_rate = cls.__coerce_bitrate(
+            cls.__get_compatible_value(item, "Bitrate", "bitrate", "BitRate", "bitRate")
+        )
+        if bit_rate:
+            return bit_rate
+
+        play_state = cls.__get_compatible_value(session, "PlayState", "playState") or {}
+        media_source_id = cls.__get_compatible_value(play_state, "MediaSourceId", "mediaSourceId")
+        media_sources = cls.__get_compatible_value(item, "MediaSources", "mediaSources") or []
+        if isinstance(media_sources, list):
+            selected_sources = [source for source in media_sources if isinstance(source, dict)]
+            if media_source_id:
+                selected_sources.sort(
+                    key=lambda source: cls.__get_compatible_value(source, "Id", "id") != media_source_id
+                )
+            for source in selected_sources:
+                bit_rate = cls.__coerce_bitrate(
+                    cls.__get_compatible_value(source, "Bitrate", "bitrate", "BitRate", "bitRate")
+                )
+                if bit_rate:
+                    return bit_rate
+                bit_rate = cls.__sum_media_stream_bitrate(
+                    cls.__get_compatible_value(source, "MediaStreams", "mediaStreams")
+                )
+                if bit_rate:
+                    return bit_rate
+
+        return cls.__sum_media_stream_bitrate(
+            cls.__get_compatible_value(item, "MediaStreams", "mediaStreams")
+        )
+
+    def __jellyfin_playing_item(self, session: dict) -> Optional[dict]:
+        """识别正在播放的视频，忽略暂停和残留会话。"""
+        item = self.__get_compatible_value(session, "NowPlayingItem", "nowPlayingItem", "Item", "item")
+        if not isinstance(item, dict):
+            return None
+
+        is_active = self.__get_compatible_value(session, "IsActive", "isActive")
+        if is_active is not None and not self.__as_bool(is_active):
+            return None
+
+        play_state = self.__get_compatible_value(session, "PlayState", "playState") or {}
+        if self.__as_bool(self.__get_compatible_value(play_state, "IsPaused", "isPaused")):
+            return None
+
+        last_check_in_value = self.__get_compatible_value(
+            session, "LastPlaybackCheckIn", "lastPlaybackCheckIn"
+        ) or self.__get_compatible_value(session, "LastActivityDate", "lastActivityDate")
+        last_check_in = self.__parse_jellyfin_datetime(last_check_in_value)
+        if last_check_in:
+            elapsed = (datetime.now(timezone.utc) - last_check_in).total_seconds()
+            if elapsed > self._jellyfin_session_timeout:
+                logger.debug(f"忽略超过 {self._jellyfin_session_timeout} 秒未上报的 Jellyfin 残留会话")
+                return None
+
+        if not self.__is_video_item(item):
+            return None
+        return item
+
+    def __jellyfin_session_bitrate(self, session: dict, item: Optional[dict] = None) -> Optional[int]:
+        """返回 Jellyfin 外网视频播放的比特率。"""
+        item = item if item is not None else self.__jellyfin_playing_item(session)
+        if item is None:
+            return None
+        if self.__path_excluded(self.__get_compatible_value(item, "Path", "path")):
+            return None
+
+        remote_ip = self.__normalize_remote_ip(
+            self.__get_compatible_value(
+                session, "RemoteEndPoint", "remoteEndPoint", "RemoteEndpoint", "remoteEndpoint"
+            )
+        )
+        if not remote_ip:
+            logger.debug("Jellyfin 播放会话缺少有效远端地址，跳过限速")
+            return None
+        if self._unlimited_ips.get("ipv4") or self._unlimited_ips.get("ipv6"):
+            if self.__allow_access(self._unlimited_ips, remote_ip):
+                return None
+        elif IpUtils.is_private_ip(remote_ip):
+            return None
+
+        bit_rate = self.__get_jellyfin_bitrate(session, item)
+        if not bit_rate:
+            logger.debug("检测到 Jellyfin 外网视频播放，但当前会话未提供可用比特率")
+        return bit_rate
+
+    def __path_excluded(self, path: Optional[str]) -> bool:
+        """
+        判断是否在不限速路径内
+        """
+        if not self._exclude_path or not path:
+            return False
+        exclude_paths = [exclude_path.strip() for exclude_path in self._exclude_path.splitlines()
+                         if exclude_path.strip()]
+        for exclude_path in exclude_paths:
+            if exclude_path in path:
+                logger.info(f"{path} 在不限速路径：{exclude_path} 内，跳过限速")
+                return True
+        return False
+    
+    def __calc_limit(self, total_bit_rate: float) -> float:
+        """扣除播放预算及预留带宽，返回 KiB/s；零预算也不能写成不限速。"""
+        demand = total_bit_rate * self._overhead
+        budget = max(0, (self._bandwidth - demand - self._headroom) / 8192)
+        stamp = (round(demand / 1000000), round(budget / 256))
+        if stamp != self._budget_log:
+            logger.info(f"播放预留{demand / 1000000:.1f}Mbps，下载器可用上传{budget:.0f}KiB/s")
+            self._budget_log = stamp
+        return budget
+
+    @staticmethod
+    def allocate_uploads(budget: float, ceilings: list, weights: list = None, priority: bool = False) -> list:
+        """在字节预算内分配额度；按顺序时先满足靠前的下载器。"""
+        if not ceilings:
+            return []
+        # 每个下载器至少1字节/s；调用方负责转换到其最小有效单位。
+        floors = [min(10240, cap) for cap in ceilings]
+        if budget < sum(floors):
+            floors = [min(1024, cap) for cap in ceilings]
+        remaining = max(0, budget - sum(floors))
+        result = list(floors)
+        if priority:
+            for i, cap in enumerate(ceilings):
+                extra = min(remaining, cap - result[i])
+                result[i] += extra
+                remaining -= extra
+            return result
+        weights = weights or [1] * len(ceilings)
+        result = [0] * len(ceilings)
+        active = set(range(len(ceilings)))
+        remaining = max(budget, sum(floors))
+        while active:
+            total = sum(weights[i] for i in active)
+            shares = {i: remaining * weights[i] / total for i in active}
+            fixed = {i: min(ceilings[i], max(floors[i], shares[i])) for i in active
+                     if shares[i] < floors[i] or shares[i] >= ceilings[i]}
+            if not fixed:
+                for i, value in shares.items():
+                    result[i] = value
+                break
+            for i, value in fixed.items():
+                result[i] = value
+                remaining -= value
+                active.remove(i)
+        return result
+
+    @staticmethod
+    def _read_limits(service) -> dict:
+        """读取实际启用的限速，失败时抛错，不将失败解释为不限速。"""
+        if service.type == "qbittorrent":
+            transfer = service.instance.qbc.transfer
+            down, up = transfer.download_limit, transfer.upload_limit
+            unit = 1024
+        elif service.type == "transmission":
+            session = service.instance.trc.get_session()
+            down = session.speed_limit_down if session.speed_limit_down_enabled else 0
+            up = session.speed_limit_up if session.speed_limit_up_enabled else 0
+            unit = 1000
+        else:
+            raise ValueError("不支持的下载器")
+        if down is None or up is None or min(down, up) < 0:
+            raise ValueError("下载器未返回有效限速")
+        # qB 原生单位是字节/s；TR 原生单位是十进制 KB/s。
+        return {"download": down / 1024 if unit == 1024 else down,
+                "upload": up / 1024 if unit == 1024 else up}
+
+    @staticmethod
+    def _write_limits(service, down: Optional[float], up: Optional[float]):
+        """按下载器原生单位写入并读回确认，空值表示保留原值。"""
+        if service.type == "qbittorrent":
+            if up is not None:
+                service.instance.qbc.transfer.upload_limit = int(up * 1024)
+            if down is not None:
+                service.instance.qbc.transfer.download_limit = int(down * 1024)
+        else:
+            args = {}
+            if up is not None:
+                args.update(speed_limit_up=int(up), speed_limit_up_enabled=bool(up))
+            if down is not None:
+                args.update(speed_limit_down=int(down), speed_limit_down_enabled=bool(down))
+            service.instance.trc.set_session(**args)
+        actual = NeoSpeedLimiter._read_limits(service)
+        if up is not None and abs(actual["upload"] - up) > 1:
+            raise RuntimeError("下载器未应用上传限速")
+        if down is not None and abs(actual["download"] - down) > 1:
+            raise RuntimeError("下载器未应用限速")
+        return actual
+
+    def _save_qb_bulk_limits(self, name: str, backup: Optional[dict]):
+        limits = dict(self._qb_bulk_limits)
+        if backup is None:
+            limits.pop(name, None)
+        else:
+            limits[name] = backup
+        self.save_data("qb_bulk_limits", limits)
+        self._qb_bulk_limits = limits
+
+    @staticmethod
+    def _write_qb_download_caps(qbc, limits: dict):
+        qbc.app_set_preferences(prefs=limits)
+        actual = qbc.app_preferences()
+        if any(actual.get(key) != value for key, value in limits.items()):
+            raise RuntimeError("qB 未应用下载限速")
+
+    def _update_qb_bulk(self, name: str, service: ServiceInfo, allow_bulk: bool,
+                        finish: bool = False) -> bool:
+        """处理当前批次及下载限速，返回本轮是否由批量下载控制。"""
+        saved = self._qb_bulk_limits.get(name)
+        finished = finish or not self._qb_bulk_download
+        count = None
+        if allow_bulk and not finished:
+            try:
+                torrents = service.instance.get_downloading_torrents()
+                if torrents is not None:
+                    states = {"allocating", "checkingDL", "downloading", "forcedDL", "forcedMetaDL",
+                              "metaDL", "queuedDL", "stalledDL"}
+                    count = sum(torrent["state"] in states for torrent in torrents)
+            except Exception:
+                pass
+            if count is None:
+                logger.warning(f"获取 qB 下载器 {name} 的下载任务失败")
+            elif count == 0:
+                finished = True
+
+        qbc = service.instance.qbc
+        if count and (saved is not None or count >= 3):
+            prefs = qbc.app_preferences()
+            # 独立保存两套下载限速，避免 qB 定时切换备用限速时丢失原值。
+            active_caps = {}
+            for key in ("dl_limit", "alt_dl_limit"):
+                value = prefs[key]
+                if type(value) is not int or value < 0:
+                    raise ValueError("qB 下载限速无效")
+                if value:
+                    active_caps[key] = value
+            backup = {**(saved or {}), **active_caps}
+            if backup != saved:
+                self._save_qb_bulk_limits(name, backup)
+            if active_caps:
+                self._write_qb_download_caps(qbc, dict.fromkeys(active_caps, 0))
+                logger.info(f"{name} 批量下载，临时解除下载限速")
+            return True
+
+        if saved:
+            prefs = qbc.app_preferences()
+            restore = {key: value for key, value in saved.items() if prefs[key] == 0}
+            if restore:
+                self._write_qb_download_caps(qbc, restore)
+                logger.info(f"{name} 恢复批量下载前的下载限速")
+        if saved is not None and (saved or finished):
+            self._save_qb_bulk_limits(name, None if finished else {})
+        return False
+
+    def _upload_targets(self, valid: list, ceilings: list, units: list,
+                        limit_type: str, upload_limit: float) -> dict:
+        """应用原有的上传预算分配规则。"""
+        if len(valid) != len(self._downloader):
+            logger.warning("下载器状态不完整，暂不重新分配带宽")
+            return {}
+        if self._auto_limit and limit_type == "播放":
+            weights = None
+            if self._allocation_ratio and self._allocation_mode != "priority":
+                try:
+                    ratios = [int(x) for x in self._allocation_ratio.split(":")]
+                    if len(ratios) != len(self._downloader) or min(ratios) <= 0:
+                        raise ValueError()
+                    weights = [ratios[self._downloader.index(name)] for name in valid]
+                except ValueError:
+                    logger.error("分配比例与下载器数量不匹配")
+                    return {}
+            targets = self.allocate_uploads(upload_limit * 1024, ceilings, weights,
+                                            self._allocation_mode == "priority")
+        else:
+            targets = []
+            for name, cap, unit in zip(valid, ceilings, units):
+                if limit_type == "未播放":
+                    value = self._caps.get(name, upload_limit or self._original[name]["upload"])
+                else:
+                    value = min(upload_limit, cap / unit) if upload_limit else self._caps.get(name, self._original[name]["upload"])
+                targets.append(value * unit)
+        speed_limits = {name: int(target / unit) for name, target, unit in zip(valid, targets, units)}
+        if limit_type == "播放" and self._auto_limit:
+            return {name: max(1, up) for name, up in speed_limits.items()}
+        return speed_limits
+
+    def __set_limiter(self, services: Dict[str, ServiceInfo], limit_type: Optional[str],
+                      upload_limit: float, download_limit: float, allow_bulk: bool = False):
+        """逐个确认限速写入，下载量判断独立于上传带宽分配。"""
+        regular = limit_type is not None and (self._limit_enabled or not self._qb_bulk_download)
+        actual_limits = {}
+        ceilings, units = [], []
+        for name in self._downloader:
+            service = services.get(name)
+            if not service:
+                continue
+            bulk_policy = service.type == "qbittorrent" and (
+                name in self._qb_bulk_limits or (limit_type == "未播放" and self._qb_bulk_download))
+            if not regular and not bulk_policy:
+                continue
+            try:
+                actual = self._read_limits(service)
+                if name not in self._original:
+                    original = {**self._original, name: actual}
+                    self.save_data("original_limits", original)
+                    self._original = original
+                cap = self._caps.get(name, self._original[name]["upload"] or self._noplay_up_speed)
+                unit = 1000 if service.type == "transmission" else 1024
+                # 没有原始上限时以本轮总预算作为该下载器的上限。
+                ceilings.append(cap * unit if cap else max(upload_limit * 1024, 1024))
+                units.append(unit)
+                actual_limits[name] = actual
+            except Exception:
+                logger.warning(f"读取下载器 {name} 限速失败，保持当前设置")
+        if not actual_limits:
+            return
+        targets = self._upload_targets(list(actual_limits), ceilings, units, limit_type, upload_limit) if regular else {}
+        can_raise = time.monotonic() - self._last_raise >= self._interval * .9
+        raised = False
+        all_restored = bool(targets)
+        for name, actual in actual_limits.items():
+            service = services[name]
+            up = targets.get(name)
+            down = (download_limit or None) if up is not None else None
+            previous = self._applied.get(name, {})
+            previous_up = previous.get("upload")
+            if up is not None and previous_up and self._recovering and (up == 0 or up > previous_up):
+                unlimited = up == 0
+                unit = 1000 if service.type == "transmission" else 1024
+                ceiling = up or self._bandwidth / 8 / unit
+                next_up = min(ceiling, previous_up + self._recovery_step) if can_raise else previous_up
+                up = 0 if unlimited and next_up >= ceiling else int(next_up)
+                raised |= up == 0 or up > previous_up
+            all_restored &= targets.get(name) == up
+            try:
+                if service.type == "qbittorrent" and (self._qb_bulk_download or name in self._qb_bulk_limits):
+                    down = download_limit or None
+                    had_backup = bool(self._qb_bulk_limits.get(name))
+                    try:
+                        if self._update_qb_bulk(name, service, allow_bulk):
+                            down = None
+                        elif had_backup:
+                            actual = self._read_limits(service)
+                    except Exception:
+                        logger.warning(f"修改 {name} 的批量下载限速失败，下轮重试")
+                        if limit_type != "播放":
+                            down = None
+                if down is not None and abs(actual["download"] - down) < 1:
+                    down = None
+                if up is not None and abs(actual["upload"] - up) < 1:
+                    up = None
+                if up is not None or down is not None:
+                    desired = dict(previous)
+                    if up is not None:
+                        desired["upload"] = up
+                    if down is not None:
+                        desired["download"] = down
+                    applied = {**self._applied, name: desired}
+                    self.save_data("applied_limits", applied)
+                    self._applied = applied
+                    self._write_limits(service, down, up)
+                changes = []
+                if up is not None:
+                    changes.append(f"上传限速：{up} KB/s")
+                if down is not None:
+                    changes.append(f"下载限速：{down:g} KB/s" if down else "下载不限速")
+                if changes:
+                    detail = "，".join(changes)
+                    logger.info(f"{name} {limit_type or ''}{detail}")
+                    if self._notify:
+                        self.post_message(mtype=NotificationType.MediaServer, title="【NEO播放限速】",
+                                          text=f"{name} {detail}")
+            except Exception:
+                logger.warning(f"设置下载器 {name} 限速失败，下轮重试")
+        if raised:
+            self._last_raise = time.monotonic()
+        if limit_type == "未播放" and all_restored:
+            self._recovering = False
+
+    @staticmethod
+    def __allow_access(allow_ips: dict, ip: str) -> bool:
+        """
+        判断IP是否合法
+        :param allow_ips: 充许的IP范围 {"ipv4":, "ipv6":}
+        :param ip: 需要检查的ip
+        """
+        if not allow_ips:
+            return True
+        try:
+            normalized_ip = NeoSpeedLimiter.__normalize_remote_ip(ip)
+            if not normalized_ip:
+                return False
+            ipaddr = ipaddress.ip_address(normalized_ip)
+            if ipaddr.version == 4:
+                if not allow_ips.get('ipv4'):
+                    return True
+                allow_ipv4s = allow_ips.get('ipv4').split(",")
+                for allow_ipv4 in allow_ipv4s:
+                    if allow_ipv4.strip() and ipaddr in ipaddress.ip_network(allow_ipv4.strip(), strict=False):
+                        return True
+            elif ipaddr.ipv4_mapped:
+                if not allow_ips.get('ipv4'):
+                    return True
+                allow_ipv4s = allow_ips.get('ipv4').split(",")
+                for allow_ipv4 in allow_ipv4s:
+                    if allow_ipv4.strip() and ipaddr.ipv4_mapped in ipaddress.ip_network(allow_ipv4.strip(), strict=False):
+                        return True
+            else:
+                if not allow_ips.get('ipv6'):
+                    return True
+                allow_ipv6s = allow_ips.get('ipv6').split(",")
+                for allow_ipv6 in allow_ipv6s:
+                    if allow_ipv6.strip() and ipaddr in ipaddress.ip_network(allow_ipv6.strip(), strict=False):
+                        return True
+        except (TypeError, ValueError) as err:
+            logger.debug(f"解析不限速地址失败：{str(err)}")
+            return False
+        return False
+
+    def stop_service(self):
+        """恢复本插件修改的限速；保留失败项，供重载后继续恢复。"""
+        with self._lock:
+            self._stopping = True
+            self._probe_cancel.set()
+            with self._probe_process_lock:
+                process = self._probe_process
+                if process is not None and process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=1)
+            self._probe_generation += 1
+            self._probe_pending = False
+            self._probe_cache.clear()
+            self._probe_checked.clear()
+            self._probe_signatures.clear()
+            services = self.service_infos if self._downloader else {}
+            for name in list(self._original):
+                if name not in (services or {}):
+                    continue
+                try:
+                    if name in self._qb_bulk_limits and services[name].type == "qbittorrent":
+                        self._update_qb_bulk(name, services[name], allow_bulk=False, finish=True)
+                    actual = self._read_limits(services[name])
+                    applied = self._applied.get(name, {})
+                    original = self._original[name]
+                    # 不覆盖用户在插件之外修改的设置。
+                    up = None
+                    down = None
+                    if applied.get("upload") is not None and abs(actual["upload"] - applied["upload"]) < 1:
+                        up = original["upload"]
+                    if applied.get("download") is not None:
+                        diff = abs(actual["download"] - applied["download"])
+                        if diff < 1:
+                            down = original["download"]
+                    if up is not None or down is not None:
+                        self._write_limits(services[name], down, up)
+                    self._original.pop(name)
+                    self._applied.pop(name, None)
+                except Exception:
+                    logger.warning(f"恢复下载器 {name} 限速失败，保留恢复记录")
+            self.save_data("original_limits", self._original)
+            self.save_data("applied_limits", self._applied)

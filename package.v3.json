@@ -1,4 +1,19 @@
 {
+  "NeoSpeedLimiter": {
+    "name": "NEO播放限速",
+    "description": "外网播放时按带宽调整下载器限速。无播放时可在 qBittorrent 下载任务达到 3 个后临时解除下载限速。",
+    "labels": "网络,下载器",
+    "version": "3.0.0",
+    "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/Librespeed_A.png",
+    "author": "felix-klk",
+    "author_url": "https://github.com/felix-klk",
+    "level": 1,
+    "system_version": ">=3.0.0",
+    "release": true,
+    "history": {
+      "v3.0.0": "NEO播放限速首次发布，适配 MoviePilot V3。保留播放限速，支持无播放时 qB 下载任务达到 3 个临时解除下载限速，队列清空后自动恢复。"
+    }
+  },
   "NeoSubtitleMaster": {
     "name": "NEO字幕大师",
     "description": "支持字幕搜索、上传、智能调轴、Emby 字幕检查和本地目录缺字幕补搜。",
