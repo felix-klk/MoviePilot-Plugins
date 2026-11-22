@@ -185,6 +185,40 @@ class JavForkTests(unittest.TestCase):
         self.assertIn("chi", required_auto_languages(["chi&eng"]))
         self.assertNotIn("eng", required_auto_languages(["eng"]))
 
+    def test_only_a_trailing_c_marker_skips_before_probing(self):
+        checked = []
+        inventory = SimpleNamespace(embedded_subtitle_tracks_for_target=lambda entry: checked.append(entry) or [])
+        for marked in (
+            {"filename": "JUFE-626-破解-C.mp4"},
+            {"path": "/library/JUFE-626.1080p-c.MKV"},
+            {"basename": "JUFE-626.1080p-c"},
+        ):
+            with self.subTest(marked=marked):
+                self.assertTrue(auto_target_has_chinese_subtitle(marked, {}, subtitle_inventory=inventory))
+                self.assertTrue(auto_target_has_chinese_subtitle({}, marked, subtitle_inventory=inventory))
+        self.assertEqual(checked, [])
+        for name in (
+            "JUFE-626-破解-C-1080p.mp4",
+            "JUFE-626-破解-C2.mp4",
+            "/library-C/JUFE-626.mp4",
+            "JUFE-626.mp4",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(auto_target_has_chinese_subtitle({}, {"path": name}, subtitle_inventory=inventory))
+        self.assertEqual(len(checked), 4)
+
+    def test_marked_video_skips_auto_search_and_optional_emby_check(self):
+        entry = {"filename": "JUFE-626-破解-C.mp4", "path": "/local/JUFE-626-破解-C.mp4"}
+        plugin = JavSubtitleAssistant.__new__(JavSubtitleAssistant)
+        runner = plugin.services.auto_transfer()
+        with (
+            patch.object(runner, "_target_from_entry", return_value={"path": entry["path"]}),
+            patch.object(plugin.services, "online_subtitles", side_effect=AssertionError("unexpected online search")),
+            patch.object(plugin.services, "emby_refresh", side_effect=AssertionError("unexpected Emby access")),
+        ):
+            self.assertEqual(runner.auto_process_transfer_entry(entry)["status"], "skipped")
+            self.assertEqual(runner._check_emby_subtitles_for_task({"entry": entry})["status"], "skipped")
+
     def test_shared_download_gate_serializes_all_callers_and_waits_after_finish(self):
         events = []
         def download(result, **_):

@@ -338,11 +338,19 @@ def is_chinese_language_suffix(suffix: Any) -> bool:
     return any(part in {"chi", "cht"} for part in normalize_language_suffix(suffix).split("&"))
 
 
+def _has_chinese_subtitle_filename_marker(target: Dict[str, Any]) -> bool:
+    name = normalize_text(target.get("filename") or target.get("path"))
+    stem = Path(name).stem if name else normalize_text(target.get("basename"))
+    return stem.lower().endswith("-c")
+
+
 def target_has_chinese_subtitle(
     target: Dict[str, Any],
     *,
     is_chinese_language_suffix_func: Callable[[Any], bool] = is_chinese_language_suffix,
 ) -> bool:
+    if _has_chinese_subtitle_filename_marker(target):
+        return True
     subtitles = target.get("subtitles") or []
     if any(
         is_chinese_language_suffix_func((item or {}).get("language_suffix") or (item or {}).get("language"))
@@ -368,7 +376,9 @@ def auto_target_has_chinese_subtitle(
     language_priority: Optional[List[str]] = None,
     strict: bool = False,
 ) -> bool:
-    if target_has_chinese_subtitle(target, is_chinese_language_suffix_func=is_chinese_language_suffix_func):
+    if _has_chinese_subtitle_filename_marker(entry) or target_has_chinese_subtitle(
+        target, is_chinese_language_suffix_func=is_chinese_language_suffix_func,
+    ):
         return True
     embedded_subtitles = subtitle_inventory.embedded_subtitle_tracks_for_target(entry)
     if embedded_subtitles:

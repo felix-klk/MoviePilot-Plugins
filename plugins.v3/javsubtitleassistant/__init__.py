@@ -160,7 +160,7 @@ class JavSubtitleAssistant(_PluginBase):
     plugin_name = "JAV字幕助手"
     plugin_desc = "沿用海拉鲁的字幕匹配、队列和历史，扫描整理目录并按番号补中文字幕。"
     plugin_icon = ""
-    plugin_version = "1.2.2"
+    plugin_version = "1.2.3"
     plugin_author = "felix-klk"
     author_url = "https://github.com/felix-klk"
     plugin_config_prefix = "javsubtitleassistant_"
