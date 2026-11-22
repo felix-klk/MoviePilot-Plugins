@@ -59,6 +59,17 @@ def video_number(video: Path) -> str:
     return ""
 
 
+def jav_movie_fields(entry: dict, *, label_field: str = "target_label") -> dict:
+    """Correct season and label fields carried over by older catalog and queue snapshots."""
+    if not entry.get("jav_number"):
+        return {}
+    fields = {"media_type": "movie", "season": 0, "episode": 0}
+    filename = str(entry.get("filename") or "") or Path(str(entry.get("path") or "")).name
+    if filename:
+        fields[label_field] = filename
+    return fields
+
+
 def release_part(name: str) -> int | None:
     """Match explicit split markers used in organized and Subtitle Cat filenames."""
     if match := PART.search(name):

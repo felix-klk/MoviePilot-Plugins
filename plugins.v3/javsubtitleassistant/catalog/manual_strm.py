@@ -19,17 +19,13 @@ class ManualStrmCatalog:
         normalize_text: Callable[[Any], str],
         safe_int: Callable[[Any, int], int],
         hash_text: Callable[[str], str],
-        extract_episode_hint: Callable[[str], Optional[Dict[str, int]]],
         meta_info_path: Optional[Callable[[Path], Any]],
-        build_media_key: Optional[Callable[[Any, Any], str]] = None,
         logger_warning: Callable[..., None],
     ) -> None:
         self._normalize_text = normalize_text
         self._safe_int = safe_int
         self._hash_text = hash_text
-        self._extract_episode_hint = extract_episode_hint
         self._meta_info_path = meta_info_path
-        self._build_media_key = build_media_key
         self._logger_warning = logger_warning
 
     def scan(self, roots: Iterable[str], *, max_entries: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -105,22 +101,13 @@ class ManualStrmCatalog:
         nfo = self._read_nfo(root, path)
         meta = self._path_meta(path)
         path_identity = self._path_identity(root, path)
-        hint = self._extract_episode_hint(path.name) or {}
-        root_tag = self._normalize_text(nfo.get("root_tag")).lower()
-        media_type = "tv" if root_tag in {"tvshow", "episodedetails", "season"} else ""
-        media_type = media_type or ("tv" if meta.get("is_tv") else "")
-        media_type = media_type or ("tv" if hint.get("season") or hint.get("episode") else "movie")
         title = self._normalize_text(nfo.get("title") or nfo.get("showtitle"))
         title = title or self._normalize_text(meta.get("title"))
-        title = title or self._title_from_path(path, media_type)
+        title = title or self._title_from_path(path)
         title = self._clean_path_title(title)
         if number not in title.upper():
             title = f"{number} · {title}" if title else number
         year = self._normalize_text(nfo.get("year") or meta.get("year"))
-        season = self._safe_int(nfo.get("season"), 0) or self._safe_int(meta.get("season"), 0) or self._safe_int(hint.get("season"), 0)
-        episode = self._safe_int(nfo.get("episode"), 0) or self._safe_int(meta.get("episode"), 0) or self._safe_int(hint.get("episode"), 0)
-        if media_type == "tv" and episode and not season:
-            season = 1
 
         source = self._normalize_media_source(
             nfo.get("media_source") or meta.get("media_source") or path_identity.get("media_source")
@@ -139,15 +126,8 @@ class ManualStrmCatalog:
         elif not source and douban_id:
             source, media_id = "douban", douban_id
         identity_confidence = "nfo" if media_id else ("path" if title else "unresolved")
-        identity_key = f"{source}:{media_id}" if source and media_id else f"{media_type}|{title}|{year}"
-        media_key = (
-            self._build_media_key(source, media_id)
-            if self._build_media_key and source and media_id
-            else ""
-        ) or self._hash_text(identity_key)
         filename = path.name
         basename = path.stem
-        prefix = f"S{season:02d}E{episode:02d}" if media_type == "tv" and season and episode else basename
         try:
             modified_at = path.stat().st_mtime
         except OSError:
@@ -169,15 +149,15 @@ class ManualStrmCatalog:
             "media_id": media_id,
             "tmdb_id": self._safe_int(tmdb_id or (media_id if source == "themoviedb" else 0), 0),
             "douban_id": douban_id or (media_id if source == "douban" else ""),
-            "season": season,
-            "episode": episode,
+            "season": 0,
+            "episode": 0,
             "path": str(path),
             "basename": basename,
             "filename": filename,
             "storage": "local",
             "library_name": "本地整理目录",
             "relative_path": str(path.relative_to(root)).replace("\\", "/"),
-            "target_label": f"{prefix} · {filename}" if media_type == "tv" else filename,
+            "target_label": filename,
             "writable": True,
             "date": modified_at_iso,
             "identity_confidence": identity_confidence,
@@ -189,7 +169,6 @@ class ManualStrmCatalog:
             return {}
         try:
             meta = self._meta_info_path(path)
-            type_value = self._normalize_text(getattr(getattr(meta, "type", None), "value", getattr(meta, "type", "")))
             media_source = self._normalize_media_source(getattr(meta, "media_source", ""))
             media_id = self._normalize_text(getattr(meta, "media_id", ""))
             tmdb_id = self._normalize_text(getattr(meta, "tmdbid", None) or getattr(meta, "tmdb_id", None))
@@ -201,9 +180,6 @@ class ManualStrmCatalog:
             return {
                 "title": self._normalize_text(getattr(meta, "name", "")) or self._normalize_text(getattr(meta, "title", "")),
                 "year": self._normalize_text(getattr(meta, "year", "")),
-                "season": self._safe_int(getattr(meta, "begin_season", None) or getattr(meta, "season", None), 0),
-                "episode": self._safe_int(getattr(meta, "begin_episode", None) or getattr(meta, "episode", None), 0),
-                "is_tv": type_value.lower() in {"tv", "电视剧", "series"},
                 "media_source": media_source,
                 "media_id": media_id,
                 "tmdb_id": tmdb_id,
@@ -310,7 +286,7 @@ class ManualStrmCatalog:
         text = re.sub(r"(?i)\s*\{\s*media_source\s*=.*?media_id\s*=.*?\}\s*", "", text).strip()
         return re.sub(r"\s*[（(]\d{4}[）)]\s*$", "", text).strip()
 
-    def _title_from_path(self, path: Path, media_type: str) -> str:
+    def _title_from_path(self, path: Path) -> str:
         candidates = [path.parent.name, path.parent.parent.name]
         for value in candidates:
             text = self._clean_path_title(value)

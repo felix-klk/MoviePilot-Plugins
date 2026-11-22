@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from starlette.concurrency import run_in_threadpool
 
-from ..jav import VIDEOS
+from ..jav import VIDEOS, jav_movie_fields
 from .local_artwork import local_poster_thumbnail
 
 
@@ -207,6 +207,8 @@ class LocalMediaCatalog:
         if not loaded_at or not isinstance(entries, list):
             return False
         valid_entries = self.filter_existing_local_entries([entry for entry in entries if isinstance(entry, dict)])
+        for entry in valid_entries:
+            entry.update(jav_movie_fields(entry))
         media_count = len({entry.get("media_key") for entry in valid_entries if entry.get("media_key")})
         owner._local_entries_cache = {
             "version": LOCAL_CACHE_VERSION,

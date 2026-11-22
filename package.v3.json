@@ -97,7 +97,7 @@
     "name": "JAV字幕助手",
     "description": "扫描本地整理目录，按番号从 SubtitleCat 搜索并补中文字幕。",
     "labels": "字幕,JAV,Subtitle Cat",
-    "version": "1.2.3",
+    "version": "1.2.4",
     "icon": "",
     "author": "felix-klk",
     "author_url": "https://github.com/felix-klk",
@@ -105,6 +105,7 @@
     "system_version": ">=3.0.0",
     "release": true,
     "history": {
+      "v1.2.4": "番号资源统一按独立电影处理，修正历史队列中误显示的季集编号。",
       "v1.2.3": "视频文件名以 -C 或 -c 结尾时，自动补全视为已有中文字幕并跳过。",
       "v1.2.2": "资源卡片和匹配历史优先显示本地整理目录里的海报。",
       "v1.2.1": "只保留 SubtitleCat，修复单视频番号搜索。已有中文就跳过，缺中文只补一份。作者更新为 felix-klk。",

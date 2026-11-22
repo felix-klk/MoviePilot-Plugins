@@ -1,5 +1,7 @@
 import asyncio
 from base64 import b64decode
+from collections import OrderedDict
+from datetime import datetime
 import hashlib
 import json
 import tempfile
@@ -14,12 +16,16 @@ from unittest.mock import patch
 from PIL import Image
 
 import app.plugins
+from app.sdk.media import MetaInfoPath
 
 
 ROOT = Path(__file__).resolve().parents[3]
 app.plugins.__path__.insert(0, str(ROOT / "plugins.v3"))
 
 from app.plugins.javsubtitleassistant import JavSubtitleAssistant
+from app.plugins.javsubtitleassistant.auto_transfer.auto_transfer_models import build_auto_transfer_task, public_auto_transfer_task
+from app.plugins.javsubtitleassistant.catalog.local_media_catalog import LOCAL_CACHE_VERSION
+from app.plugins.javsubtitleassistant.matching.subtitle_history import MATCH_HISTORY_CACHE_VERSION
 from app.plugins.javsubtitleassistant.api.catalog_api import CatalogApi
 from app.plugins.javsubtitleassistant.catalog.local_artwork import local_poster_thumbnail
 from app.plugins.javsubtitleassistant.catalog.manual_strm import ManualStrmCatalog
@@ -34,11 +40,11 @@ from app.plugins.javsubtitleassistant.online_subtitles.providers import subtitle
 from app.plugins.javsubtitleassistant.online_subtitles.throttle import SerialThrottle
 
 
-def catalog():
+def catalog(meta_info_path=None):
     return ManualStrmCatalog(normalize_text=lambda value: str(value or "").strip(),
                              safe_int=lambda value, default=0: int(value) if str(value).isdigit() else default,
                              hash_text=lambda value: hashlib.sha256(value.encode()).hexdigest(),
-                             extract_episode_hint=lambda _: {}, meta_info_path=None, logger_warning=lambda *_: None)
+                             meta_info_path=meta_info_path, logger_warning=lambda *_: None)
 
 
 class JavForkTests(unittest.TestCase):
@@ -67,6 +73,70 @@ class JavForkTests(unittest.TestCase):
             self.assertIn("ABC-013", entry["title"])
             self.assertEqual(build_search_keywords({}, [entry], "auto"), ["ABC-013", "ABC013"])
             self.assertEqual(catalog().entry_for_path(video, [str(root)])["id"], entry["id"])
+
+    def test_dal_number_stays_a_movie_with_moviepilot_filename_parser(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name).resolve()
+            video = root / "DAL-013.mp4"
+            video.touch()
+            scanner = catalog(lambda path: MetaInfoPath(path, force_video=True))
+            entry, = scanner.scan([str(root)])
+            self.assertEqual(
+                (entry["jav_number"], entry["media_type"], entry["season"], entry["episode"], entry["target_label"]),
+                ("DAL-013", "movie", 0, 0, video.name),
+            )
+            self.assertEqual(build_search_keywords({}, [entry], "movie"), ["DAL-013", "DAL013"])
+
+    def test_legacy_s01e13_is_removed_from_saved_movie_entries_and_completed_queue_task(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name).resolve()
+            video = root / "DAL-013.mp4"
+            video.touch()
+            entry, = catalog().scan([str(root)])
+            entry.update(season=1, episode=13, target_label=f"S01E13 · {video.name}")
+            now = time.time()
+            now_iso = datetime.fromtimestamp(now).isoformat()
+            plugin = JavSubtitleAssistant.__new__(JavSubtitleAssistant)
+            plugin._manual_strm_enabled = True
+            plugin._manual_strm_paths = [str(root)]
+            plugin._local_entries_cache = {}
+            plugin._entry_map = OrderedDict()
+            plugin._auto_transfer_tasks = OrderedDict()
+            with patch.object(plugin, "get_data_path", return_value=root):
+                local = plugin.services.local_media_catalog()
+                local.local_cache_file().write_text(json.dumps({
+                    "version": LOCAL_CACHE_VERSION, "complete": True, "loaded_at": now_iso, "entries": [entry],
+                }), encoding="utf-8")
+                self.assertTrue(local.restore_persisted_local_cache())
+                restored_entry, = local.load_local_entries()
+                self.assertEqual((restored_entry["season"], restored_entry["episode"], restored_entry["target_label"]),
+                                 (0, 0, video.name))
+
+                history = plugin.services.history()
+                target = {key: entry[key] for key in ("id", "path", "jav_number", "media_type", "season", "episode")}
+                target["label"] = entry["target_label"]
+                history.match_history_cache_file().write_text(json.dumps({
+                    "version": MATCH_HISTORY_CACHE_VERSION, "loaded_at": now_iso, "items": [{"targets": [target]}],
+                }), encoding="utf-8")
+                self.assertTrue(history.restore_persisted_match_history_cache())
+                restored_target = plugin._match_history_cache["items"][0]["targets"][0]
+                self.assertEqual((restored_target["season"], restored_target["episode"], restored_target["label"]),
+                                 (0, 0, video.name))
+
+                queue = plugin.services.auto_transfer()._queue
+                task = build_auto_transfer_task(
+                    task_id="previous-job", entry_key="previous-entry", group_key="previous-group",
+                    entry=entry, now=now, safe_int=plugin._safe_int,
+                )
+                task.update(status="completed", active=False, result={"status": "written"})
+                queue._state_file().write_text(json.dumps({"version": 1, "tasks": [task]}), encoding="utf-8")
+                queue._load_locked()
+                restored_task = plugin._auto_transfer_tasks["previous-job"]
+                public = public_auto_transfer_task(restored_task, timestamp_iso=plugin._timestamp_iso)
+                self.assertEqual((public["status"], public["target_label"], public["season"], public["episode"]),
+                                 ("completed", video.name, 0, 0))
+                self.assertEqual(public["result"], {"status": "written"})
+                self.assertEqual(restored_task["entry"]["target_label"], video.name)
 
     def test_local_artwork_reaches_paginated_catalog_and_reads_replaced_images(self):
         with tempfile.TemporaryDirectory() as name:

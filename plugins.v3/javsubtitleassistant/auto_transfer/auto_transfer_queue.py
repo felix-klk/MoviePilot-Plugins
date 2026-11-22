@@ -6,6 +6,7 @@ from math import isfinite
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from ..jav import jav_movie_fields
 from .auto_transfer_models import (
     AUTO_TRANSFER_ACTIVE_STATUSES,
     AUTO_TRANSFER_PUBLIC_STATUSES,
@@ -77,6 +78,10 @@ class AutoTransferQueue:
                 timestamps_valid = False
             if not timestamps_valid:
                 continue
+            entry = task["entry"]
+            movie = jav_movie_fields(entry)
+            entry.update(movie)
+            task.update(movie)
             task["active"] = status in AUTO_TRANSFER_ACTIVE_STATUSES
             self._owner._auto_transfer_tasks[task_id] = task
 

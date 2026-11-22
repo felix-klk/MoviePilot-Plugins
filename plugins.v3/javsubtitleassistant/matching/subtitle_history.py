@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..catalog.local_artwork import local_poster_thumbnail
+from ..jav import jav_movie_fields
 from typing import Any, Dict, List, Tuple
 
 from .subtitle_formats import is_bitmap_subtitle
@@ -113,7 +114,10 @@ class SubtitleHistory:
             "persisted": True,
         }
         for item in owner._match_history_cache["items"]:
-            self._target_entry_cache.remember([target for target in item.get("targets") or [] if isinstance(target, dict)])
+            targets = [target for target in item.get("targets") or [] if isinstance(target, dict)]
+            for target in targets:
+                target.update(jav_movie_fields(target, label_field="label"))
+            self._target_entry_cache.remember(targets)
         self._logger.info(
             "[JavSubtitleAssistant] 已恢复匹配历史缓存 items=%s",
             len(owner._match_history_cache["items"]),
