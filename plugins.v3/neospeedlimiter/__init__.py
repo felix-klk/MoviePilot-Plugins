@@ -27,11 +27,11 @@ class NeoSpeedLimiter(_PluginBase):
     # 插件名称
     plugin_name = "NEO播放限速"
     # 插件描述
-    plugin_desc = "外网播放时按带宽调整下载器限速。无播放时可在 qBittorrent 下载任务达到 3 个后临时解除下载限速。"
+    plugin_desc = "外网播放时按带宽调整下载器限速。无播放时可在 qBittorrent 下载任务达到 3 个后临时解除上传限速。"
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/Librespeed_A.png"
     # 插件版本
-    plugin_version = "3.0.0"
+    plugin_version = "3.0.1"
     # 插件作者
     plugin_author = "felix-klk"
     # 作者主页
@@ -73,6 +73,7 @@ class NeoSpeedLimiter(_PluginBase):
         self._applied = {}
         self._qb_bulk_download = False
         self._qb_bulk_limits = {}
+        self._legacy_qb_download_limits = {}
         self._last_playing = None
         self._playback_started = None
         self._session_positions = {}
@@ -103,13 +104,22 @@ class NeoSpeedLimiter(_PluginBase):
         """串行更新配置，保留未恢复的快照供失败重试。"""
         with self._lock:
             self._configure(config)
+            if self._enabled:
+                bulk = "已启用" if self._qb_bulk_download else "未启用"
+                logger.info(f"NEO播放限速已启用，每 {self._interval} 秒检查，共配置 "
+                            f"{len(self._downloader)} 台下载器，qB 批量下载时解除上传限速{bulk}")
+            else:
+                logger.info("NEO播放限速已加载，当前未启用")
 
     def _configure(self, config: dict = None):
         """读取限速和分配设置。"""
         self._original = self._original or self.get_data("original_limits") or {}
         self._applied = self._applied or self.get_data("applied_limits") or {}
-        self._qb_bulk_limits = self._qb_bulk_limits or self.get_data("qb_bulk_limits") or {}
-        self._downloader = list(dict.fromkeys(self._downloader + list(self._original)))
+        self._qb_bulk_limits = self._qb_bulk_limits or self.get_data("qb_bulk_upload_limits") or {}
+        self._legacy_qb_download_limits = self._legacy_qb_download_limits or self.get_data("qb_bulk_limits") or {}
+        self._downloader = list(dict.fromkeys([
+            *self._downloader, *self._original, *self._qb_bulk_limits, *self._legacy_qb_download_limits
+        ]))
         self.stop_service()
         self._stopping = False
         self._probe_cancel = threading.Event()
@@ -201,7 +211,9 @@ class NeoSpeedLimiter(_PluginBase):
             "kwargs": {} # 定时器参数
         }]
         """
-        if self._enabled and (self._limit_enabled or self._qb_bulk_download or self._qb_bulk_limits):
+        if self._enabled and (
+            self._limit_enabled or self._qb_bulk_download or self._qb_bulk_limits or self._legacy_qb_download_limits
+        ):
             return [
                 {
                     "id": "NeoSpeedLimiter",
@@ -495,7 +507,7 @@ class NeoSpeedLimiter(_PluginBase):
     def _allocation_form() -> list:
         """追加带宽分配和恢复设置，沿用插件表单组件。"""
         fields = [
-            ("VSwitch", "qb_bulk_download", "无播放且 qB 下载任务达到 3 个时不限速", {}),
+            ("VSwitch", "qb_bulk_download", "无播放且 qB 下载任务达到 3 个时解除上传限速", {}),
             ("VSelect", "allocation_mode", "分配方式", {"items": [
                 {"title": "按比例", "value": "ratio"},
                 {"title": "按下载器顺序", "value": "priority"}]}),
@@ -583,7 +595,7 @@ class NeoSpeedLimiter(_PluginBase):
             logger.warning(f"获取播放状态失败：{e}")
             playback = None
         if playback is None:
-            if self._qb_bulk_limits:
+            if self._qb_bulk_limits or self._legacy_qb_download_limits:
                 self.__set_limiter(services, None, 0, 0)
             return
 
@@ -1232,19 +1244,41 @@ class NeoSpeedLimiter(_PluginBase):
             limits.pop(name, None)
         else:
             limits[name] = backup
-        self.save_data("qb_bulk_limits", limits)
+        self.save_data("qb_bulk_upload_limits", limits)
         self._qb_bulk_limits = limits
 
     @staticmethod
-    def _write_qb_download_caps(qbc, limits: dict):
+    def _write_qb_caps(qbc, limits: dict):
         qbc.app_set_preferences(prefs=limits)
         actual = qbc.app_preferences()
         if any(actual.get(key) != value for key, value in limits.items()):
-            raise RuntimeError("qB 未应用下载限速")
+            raise RuntimeError("qB 未应用限速")
+
+    def _restore_qb_caps(self, qbc, saved: Optional[dict]) -> bool:
+        if not saved:
+            return False
+        prefs = qbc.app_preferences()
+        restore = {key: value for key, value in saved.items() if prefs[key] == 0}
+        if restore:
+            self._write_qb_caps(qbc, restore)
+        return bool(restore)
+
+    def _restore_legacy_qb_download(self, name: str, service: ServiceInfo) -> bool:
+        """退出旧版本的下载限速解除状态，再启用上传限速策略。"""
+        if name not in self._legacy_qb_download_limits:
+            return False
+        limits = dict(self._legacy_qb_download_limits)
+        saved = limits.pop(name)
+        restored = self._restore_qb_caps(service.instance.qbc, saved)
+        self.save_data("qb_bulk_limits", limits)
+        self._legacy_qb_download_limits = limits
+        if restored:
+            logger.info(f"{name} 恢复旧版批量下载修改的下载限速")
+        return restored
 
     def _update_qb_bulk(self, name: str, service: ServiceInfo, allow_bulk: bool,
                         finish: bool = False) -> bool:
-        """处理当前批次及下载限速，返回本轮是否由批量下载控制。"""
+        """处理当前批次的上传限速，返回本轮是否由批量下载控制。"""
         saved = self._qb_bulk_limits.get(name)
         finished = finish or not self._qb_bulk_download
         count = None
@@ -1265,28 +1299,24 @@ class NeoSpeedLimiter(_PluginBase):
         qbc = service.instance.qbc
         if count and (saved is not None or count >= 3):
             prefs = qbc.app_preferences()
-            # 独立保存两套下载限速，避免 qB 定时切换备用限速时丢失原值。
+            # 独立保存两套上传限速，避免 qB 定时切换备用限速时丢失原值。
             active_caps = {}
-            for key in ("dl_limit", "alt_dl_limit"):
+            for key in ("up_limit", "alt_up_limit"):
                 value = prefs[key]
                 if type(value) is not int or value < 0:
-                    raise ValueError("qB 下载限速无效")
+                    raise ValueError("qB 上传限速无效")
                 if value:
                     active_caps[key] = value
             backup = {**(saved or {}), **active_caps}
             if backup != saved:
                 self._save_qb_bulk_limits(name, backup)
             if active_caps:
-                self._write_qb_download_caps(qbc, dict.fromkeys(active_caps, 0))
-                logger.info(f"{name} 批量下载，临时解除下载限速")
+                self._write_qb_caps(qbc, dict.fromkeys(active_caps, 0))
+                logger.info(f"{name} 批量下载，临时解除上传限速")
             return True
 
-        if saved:
-            prefs = qbc.app_preferences()
-            restore = {key: value for key, value in saved.items() if prefs[key] == 0}
-            if restore:
-                self._write_qb_download_caps(qbc, restore)
-                logger.info(f"{name} 恢复批量下载前的下载限速")
+        if self._restore_qb_caps(qbc, saved):
+            logger.info(f"{name} 恢复批量下载前的上传限速")
         if saved is not None and (saved or finished):
             self._save_qb_bulk_limits(name, None if finished else {})
         return False
@@ -1334,7 +1364,8 @@ class NeoSpeedLimiter(_PluginBase):
             if not service:
                 continue
             bulk_policy = service.type == "qbittorrent" and (
-                name in self._qb_bulk_limits or (limit_type == "未播放" and self._qb_bulk_download))
+                name in self._qb_bulk_limits or name in self._legacy_qb_download_limits
+                or (limit_type == "未播放" and self._qb_bulk_download))
             if not regular and not bulk_policy:
                 continue
             try:
@@ -1362,28 +1393,38 @@ class NeoSpeedLimiter(_PluginBase):
             up = targets.get(name)
             down = (download_limit or None) if up is not None else None
             previous = self._applied.get(name, {})
-            previous_up = previous.get("upload")
-            if up is not None and previous_up and self._recovering and (up == 0 or up > previous_up):
-                unlimited = up == 0
-                unit = 1000 if service.type == "transmission" else 1024
-                ceiling = up or self._bandwidth / 8 / unit
-                next_up = min(ceiling, previous_up + self._recovery_step) if can_raise else previous_up
-                up = 0 if unlimited and next_up >= ceiling else int(next_up)
-                raised |= up == 0 or up > previous_up
-            all_restored &= targets.get(name) == up
             try:
-                if service.type == "qbittorrent" and (self._qb_bulk_download or name in self._qb_bulk_limits):
-                    down = download_limit or None
-                    had_backup = bool(self._qb_bulk_limits.get(name))
+                had_backup = False
+                if service.type == "qbittorrent":
                     try:
-                        if self._update_qb_bulk(name, service, allow_bulk):
-                            down = None
-                        elif had_backup:
+                        if self._restore_legacy_qb_download(name, service):
                             actual = self._read_limits(service)
                     except Exception:
-                        logger.warning(f"修改 {name} 的批量下载限速失败，下轮重试")
-                        if limit_type != "播放":
-                            down = None
+                        logger.warning(f"恢复 {name} 的旧版批量下载限速失败，下轮重试")
+                    if self._qb_bulk_download or name in self._qb_bulk_limits:
+                        if not regular and limit_type == "未播放":
+                            up = upload_limit or None
+                        had_backup = bool(self._qb_bulk_limits.get(name))
+                        can_boost = allow_bulk and name not in self._legacy_qb_download_limits
+                        try:
+                            if self._update_qb_bulk(name, service, can_boost):
+                                up = None
+                            elif had_backup:
+                                actual = self._read_limits(service)
+                        except Exception:
+                            logger.warning(f"修改 {name} 的批量下载上传限速失败，下轮重试")
+                            if can_boost:
+                                up = None
+                previous_up = previous.get("upload")
+                if (up is not None and previous_up and self._recovering and not had_backup
+                        and (up == 0 or up > previous_up)):
+                    unlimited = up == 0
+                    unit = 1000 if service.type == "transmission" else 1024
+                    ceiling = up or self._bandwidth / 8 / unit
+                    next_up = min(ceiling, previous_up + self._recovery_step) if can_raise else previous_up
+                    up = 0 if unlimited and next_up >= ceiling else int(next_up)
+                    raised |= up == 0 or up > previous_up
+                    all_restored &= targets.get(name) == up
                 if down is not None and abs(actual["download"] - down) < 1:
                     down = None
                 if up is not None and abs(actual["upload"] - up) < 1:
@@ -1472,12 +1513,18 @@ class NeoSpeedLimiter(_PluginBase):
             self._probe_checked.clear()
             self._probe_signatures.clear()
             services = self.service_infos if self._downloader else {}
-            for name in list(self._original):
+            restore_names = dict.fromkeys([*self._original, *self._qb_bulk_limits, *self._legacy_qb_download_limits])
+            for name in restore_names:
                 if name not in (services or {}):
                     continue
                 try:
-                    if name in self._qb_bulk_limits and services[name].type == "qbittorrent":
-                        self._update_qb_bulk(name, services[name], allow_bulk=False, finish=True)
+                    service = services[name]
+                    if service.type == "qbittorrent":
+                        self._restore_legacy_qb_download(name, service)
+                        if name in self._qb_bulk_limits:
+                            self._update_qb_bulk(name, service, allow_bulk=False, finish=True)
+                    if name not in self._original:
+                        continue
                     actual = self._read_limits(services[name])
                     applied = self._applied.get(name, {})
                     original = self._original[name]
