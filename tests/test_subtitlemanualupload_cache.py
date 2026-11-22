@@ -4030,6 +4030,7 @@ def test_neo_wechat_verification_pauses_batch_and_keeps_other_sources(
         candidate = selected[0]
         downloads.append(candidate["result_id"])
         if candidate["provider"] == "subhd":
+            assert model._automatic_download.get()
             raise model.SubHDWechatVerificationRequired(
                 candidate_id=candidate["result_id"], page_url=subhd_page, code="023456",
             )

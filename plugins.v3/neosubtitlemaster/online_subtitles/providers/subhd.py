@@ -126,6 +126,10 @@ class SubHDProvider(BaseSubtitleProvider):
     display_name = "SubHD"
     default_root_url = DEFAULT_PROVIDER_ROOTS["subhd"]
 
+    def __init__(self, fetcher, root_url="", wechat_download=None):
+        super().__init__(fetcher, root_url=root_url)
+        self.wechat_download = wechat_download
+
     def status(self) -> Dict[str, Any]:
         status = super().status()
         status["message"] = "使用豆瓣 ID 或标题自动搜索，必要时自动处理下载验证码"
@@ -485,6 +489,17 @@ class SubHDProvider(BaseSubtitleProvider):
         return None
 
     def download(self, result: Dict[str, Any], captcha_code: str = "") -> Tuple[str, bytes]:
+        if self.wechat_download is None:
+            return self._download_http(result, captcha_code)
+        source = str(result.get("page_url") or result.get("download_url") or "").removeprefix("subhd-page:")
+        match = re.fullmatch(r"/a/([A-Za-z0-9_-]+)", urlparse(source).path)
+        sid = match[1] if match else str(result.get("result_id") or "")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", sid):
+            raise ValueError("SubHD 缺少有效的字幕详情编号")
+        entry = SubHDWechatVerificationRequired(candidate_id=sid, page_url=f"{self.root_url.rstrip('/')}/a/{sid}")
+        return self.wechat_download.download(entry, urlparse(self.root_url).netloc)
+
+    def _download_http(self, result: Dict[str, Any], captcha_code: str) -> Tuple[str, bytes]:
         bypass_url = getattr(self.fetcher, "bypass_url", "")
         if not bypass_url:
             return self._download_session(result, captcha_code)

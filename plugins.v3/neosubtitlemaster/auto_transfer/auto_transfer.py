@@ -877,14 +877,15 @@ class AutoTransferService:
                 result.get("reason", ""),
             )
 
-        if waiting_targets and "subhd" in blocked_providers and not owner._auto_transfer_stopping:
+        if (waiting_targets and "subhd" in blocked_providers and not blocked_providers["subhd"].notified
+                and not owner._auto_transfer_stopping):
             try:
                 from app.schemas.types import NotificationType
 
                 verification = blocked_providers["subhd"]
                 owner.post_message(
                     mtype=NotificationType.Plugin,
-                    title="NEO字幕大师 · SubHD 待公众号验证",
+                    title="NEO字幕大师 · SubHD 下载待处理",
                     text="待处理\n" + "\n".join(dict.fromkeys(waiting_targets)) + f"\n\n{verification}",
                 )
             except Exception as exc:

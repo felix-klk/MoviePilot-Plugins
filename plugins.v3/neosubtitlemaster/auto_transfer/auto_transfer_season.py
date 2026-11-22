@@ -12,7 +12,7 @@ from ..matching.subtitle_language import required_auto_languages
 from ..online_subtitles.matcher import (
     AUTO_SEASON_ATTEMPT_LIMIT, log_auto_download_candidate, rank_auto_download_candidates,
 )
-from ..online_subtitles.models import SubHDWechatVerificationRequired
+from ..online_subtitles.models import SubHDWechatVerificationRequired, automatic_subtitle_download
 from ..matching.subtitle_validation import validate_online_subtitle_files
 from ..online.online_subtitle import build_search_keywords
 from .auto_transfer_models import transfer_download_attempts
@@ -219,7 +219,8 @@ class AutoTransferSeasonCache:
             session_dir.mkdir(parents=True, exist_ok=True)
             failure_stage = "下载/解析"
             try:
-                downloads = service.download([selected])
+                with automatic_subtitle_download():
+                    downloads = service.download([selected])
                 prepared_uploads: List[Dict[str, Any]] = []
                 for downloaded in downloads:
                     result = downloaded.get("result") or {}

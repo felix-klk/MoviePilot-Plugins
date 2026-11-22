@@ -180,3 +180,76 @@ def test_neo_v3_subhd_reports_wechat_verification_for_manual_download(monkeypatc
         assert code in message
     assert submitted == [("https://subhd.tv/api/sub/down", {"sid": "example", "cap": ""}, down_url)]
     assert closed == [True]
+
+
+def test_neo_wechat_browser_uses_rendered_digits_and_same_page(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock, PropertyMock
+
+    neo, _, _ = load_plugin_module("plugins.v3", "NeoSubtitleMaster")
+    module = plugin_submodule(neo, "online_subtitles.subhd_wechat")
+    plugin = neo.NeoSubtitleMaster()
+    notices = []
+    monkeypatch.setattr(plugin, "post_message", lambda **msg: notices.append(msg), raising=False)
+    monkeypatch.setattr(sys.modules["app.schemas.types"], "NotificationType", SimpleNamespace(Plugin="plugin"), raising=False)
+    context = MagicMock()
+    detail, down = context.new_page.return_value, MagicMock()
+    detail.url = "https://subhd.me/a/example"
+    down.url = "https://subhd.me/down/example"
+    type(context).pages = PropertyMock(side_effect=[[], [detail, down]] * 4)
+    down.get_by_text.return_value.first.is_visible.return_value = False
+    lines = down.locator.return_value.filter.return_value
+    lines.all_inner_texts.side_effect = [["在公众号里发送数字 获取中…"], ["在公众号里发送数字 012345"], []]
+    down.get_by_role.return_value.is_enabled.side_effect = [False, False, False, False, True]
+    file = tmp_path / "example.srt"
+    file.write_bytes(b"subtitle")
+    download = down.expect_download.return_value.__enter__.return_value.value
+    download.path.return_value = file
+    download.suggested_filename = file.name
+    context.storage_state.return_value = {"cookies": [], "origins": []}
+    manager = plugin.services.subhd_wechat
+    assert manager._download_page(context, detail.url, "subhd.me") == (file.name, b"subtitle")
+    assert len(notices) == 1 and "012345" in notices[0]["text"]
+    down.get_by_role.return_value.click.assert_called_once()
+    down.get_by_text.return_value.first.is_visible.return_value = True
+    with pytest.raises(ValueError, match="额外的人机验证"):
+        manager._download_page(context, detail.url, "subhd.me")
+    down.get_by_role.return_value.click.assert_called_once()
+    assert len(notices) == 1
+    down.get_by_role.return_value.is_enabled.side_effect = [False, True]
+    assert manager._download_page(context, detail.url, "subhd.me", interactive=True) == (file.name, b"subtitle")
+    assert len(notices) == 2 and "人工验证" in notices[-1]["title"]
+    models = plugin_submodule(neo, "online_subtitles.models")
+    with models.automatic_subtitle_download(), pytest.raises(ValueError, match="额外的人机验证"):
+        manager._download_page(context, detail.url, "subhd.me", interactive=True)
+    assert len(notices) == 2
+    assert not models._automatic_download.get()
+
+
+def test_neo_subhd_uses_configured_entry_and_shared_profile(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    neo, _, _ = load_plugin_module("plugins.v3", "NeoSubtitleMaster")
+    browser = plugin_submodule(neo, "online_subtitles.subhd_wechat")
+    plugin = neo.NeoSubtitleMaster()
+    monkeypatch.setattr(plugin, "get_data_path", lambda: tmp_path)
+    plugin._online_site_urls = {"subhd": "https://mirror.example"}
+    profiles, urls = [], []
+
+    @contextmanager
+    def open_profile(profile, interactive):
+        profiles.append(profile)
+        yield object()
+
+    def download(context, url, host, interactive):
+        urls.append(url)
+        assert host == "mirror.example"
+        return "episode.srt", b"subtitle"
+
+    monkeypatch.setattr(browser, "_browser", open_profile)
+    monkeypatch.setattr(plugin.services.subhd_wechat, "_download_page", download)
+    for sid in ("first", "second"):
+        service = plugin.services.online_subtitles()
+        result = service.download([{"provider": "subhd", "page_url": f"https://subhd.me/a/{sid}"}])
+        assert result[0]["content"] == b"subtitle"
+    assert urls == ["https://mirror.example/a/first", "https://mirror.example/a/second"]
+    assert profiles == [tmp_path / "subhd_browser" / "profile"] * 2

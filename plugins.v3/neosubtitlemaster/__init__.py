@@ -163,7 +163,7 @@ class NeoSubtitleMaster(_PluginBase):
     plugin_name = "NEO字幕大师"
     plugin_desc = "脱胎自 ChineseSubFinder，支持字幕搜索、上传、匹配、改名与智能调轴。"
     plugin_icon = "https://raw.githubusercontent.com/felix-klk/MoviePilot-Plugins/main/icons/hyrule-subtitle-master.png"
-    plugin_version = "1.0.2"
+    plugin_version = "1.0.3"
     plugin_author = "felix-klk"
     author_url = "https://github.com/felix-klk"
     plugin_config_prefix = "neosubtitlemaster_"
@@ -301,6 +301,9 @@ class NeoSubtitleMaster(_PluginBase):
     _language_suffix_aliases = dict(LANGUAGE_SUFFIX_ALIASES)
 
     def init_plugin(self, config: dict = None):
+        if getattr(self, "_services_registry", None) is not None:
+            self._services_registry.subhd_wechat.stopped.set()
+            self._services_registry = None
         normalized_config = normalize_plugin_config(
             config,
             subtitle_exts=self._subtitle_exts,
@@ -379,6 +382,7 @@ class NeoSubtitleMaster(_PluginBase):
         return registry
 
     def stop_service(self):
+        self.services.subhd_wechat.stopped.set()
         self.services.manual_strm_monitor().stop()
         self.services.auto_transfer().stop()
 

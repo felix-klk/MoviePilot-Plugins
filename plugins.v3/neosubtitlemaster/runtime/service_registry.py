@@ -4,11 +4,13 @@ from pathlib import Path
 from typing import Any
 
 from . import service_factories
+from ..online_subtitles.subhd_wechat import SubHDWechatDownload
 
 
 class NeoSubtitleMasterServices:
     def __init__(self, owner: Any) -> None:
         self._owner = owner
+        self.subhd_wechat = SubHDWechatDownload(owner)
 
     def archive_dependency(self, status_setter=None):
         return service_factories.archive_dependency_service(self._owner, status_setter=status_setter)

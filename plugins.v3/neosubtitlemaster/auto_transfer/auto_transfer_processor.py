@@ -10,7 +10,7 @@ from ..matching.subtitle_language import required_auto_languages
 from ..online_subtitles.matcher import (
     AUTO_DOWNLOAD_ATTEMPT_LIMIT, log_auto_download_candidate, rank_auto_download_candidates,
 )
-from ..online_subtitles.models import SubHDWechatVerificationRequired
+from ..online_subtitles.models import SubHDWechatVerificationRequired, automatic_subtitle_download
 from ..online.online_subtitle import build_search_keywords
 from .auto_transfer_models import WAITING_VERIFICATION, transfer_download_attempts
 
@@ -118,7 +118,8 @@ class AutoTransferProcessor:
             session_dir = owner.services.upload_session().get_session_root() / session_id
             session_dir.mkdir(parents=True, exist_ok=True)
             try:
-                downloads = service.download([selected])
+                with automatic_subtitle_download():
+                    downloads = service.download([selected])
                 prepared_uploads: List[Dict[str, Any]] = []
                 for downloaded in downloads:
                     result = downloaded.get("result") or {}
@@ -372,7 +373,7 @@ class AutoTransferProcessor:
             waiting_result = {
                 **base,
                 "status": WAITING_VERIFICATION,
-                "reason": "SubHD 待公众号验证，请在浏览器完成验证后下载并上传字幕",
+                "reason": verification.status_hint or "SubHD 待公众号验证，请在浏览器完成验证后下载并上传字幕",
                 "verification_url": verification.page_url,
                 "verification_candidate_id": verification.candidate_id,
             }

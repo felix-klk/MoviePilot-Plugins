@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Dict, List, Optional
 
 
@@ -92,16 +94,30 @@ class OnlineJSONError(ValueError):
         super().__init__(f"请求失败 HTTP {status}: {str(payload.get('msg') or payload.get('message') or '接口拒绝请求')[:160]}")
 
 
+_automatic_download = ContextVar("neo_automatic_subtitle_download", default=False)
+
+
+@contextmanager
+def automatic_subtitle_download():
+    token = _automatic_download.set(True)
+    try:
+        yield
+    finally:
+        _automatic_download.reset(token)
+
+
 class SubHDWechatVerificationRequired(ValueError):
-    def __init__(self, *, candidate_id: str, page_url: str, code: str = "") -> None:
+    def __init__(self, *, candidate_id: str, page_url: str, code: str = "", status_hint: str = "") -> None:
         self.candidate_id = candidate_id
         self.page_url = page_url
         self.code = code
+        self.notified = False
+        self.status_hint = status_hint
         hint = f"插件读取到的页面数字为 {code}。" if code else ""
-        super().__init__(
+        super().__init__(status_hint or (
             f"SubHD 需要微信公众号验证。{hint}"
             f"请在浏览器打开详情页 {page_url}，以浏览器显示的数字为准，验证后下载并上传。"
-        )
+        ))
 
 
 class CaptchaRequiredError(ValueError):
