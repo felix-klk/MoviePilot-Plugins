@@ -90,9 +90,14 @@ class SubHDWechatDownload:
                 raise original
             profile = self.owner.get_data_path() / "subhd_browser" / "profile"
             profile.mkdir(mode=0o700, parents=True, exist_ok=True)
-            interactive = os.name == "nt" or bool(os.environ.get("DISPLAY"))
-            with _browser(profile, interactive) as context:
-                return self._download_page(context, original.page_url, configured_host, interactive)
+            try:
+                with _browser(profile, False) as context:
+                    return self._download_page(context, original.page_url, configured_host, False)
+            except _HumanPrompt:
+                if self.stopped.is_set() or not (os.name == "nt" or os.environ.get("DISPLAY")):
+                    raise
+            with _browser(profile, True) as context:
+                return self._download_page(context, original.page_url, configured_host, True)
         except SubHDWechatVerificationRequired:
             raise
         except Exception as exc:
@@ -136,7 +141,7 @@ class SubHDWechatDownload:
             if _automatic_download.get():
                 raise _PageFailure("SubHD 要求额外的人机验证")
             if not interactive:
-                raise _PageFailure("SubHD 要求额外的人机验证，当前浏览器没有可交互的显示会话")
+                raise _HumanPrompt("SubHD 要求额外的人机验证，需要可交互的显示会话")
             page.bring_to_front()
             self._notice("SubHD 待人工验证", f"请在插件浏览器的原下载页完成人机验证，插件会继续下载。\n{url}")
             end = time.monotonic() + _VERIFY_SECONDS
@@ -196,4 +201,8 @@ class SubHDWechatDownload:
             download.delete()
 
 class _PageFailure(ValueError):
+    pass
+
+
+class _HumanPrompt(_PageFailure):
     pass

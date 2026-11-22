@@ -233,11 +233,12 @@ def test_neo_subhd_uses_configured_entry_and_shared_profile(tmp_path, monkeypatc
     plugin = neo.NeoSubtitleMaster()
     monkeypatch.setattr(plugin, "get_data_path", lambda: tmp_path)
     plugin._online_site_urls = {"subhd": "https://mirror.example"}
-    profiles, urls = [], []
+    profiles, urls, modes = [], [], []
 
     @contextmanager
     def open_profile(profile, interactive):
         profiles.append(profile)
+        modes.append(interactive)
         yield object()
 
     def download(context, url, host, interactive):
@@ -253,3 +254,15 @@ def test_neo_subhd_uses_configured_entry_and_shared_profile(tmp_path, monkeypatc
         assert result[0]["content"] == b"subtitle"
     assert urls == ["https://mirror.example/a/first", "https://mirror.example/a/second"]
     assert profiles == [tmp_path / "subhd_browser" / "profile"] * 2
+    assert modes == [False, False]
+
+    def challenge(context, url, host, interactive):
+        if not interactive:
+            raise browser._HumanPrompt("人工验证")
+        return "episode.srt", b"subtitle"
+
+    monkeypatch.setenv("DISPLAY", ":1")
+    monkeypatch.setattr(plugin.services.subhd_wechat, "_download_page", challenge)
+    service.download([{"provider": "subhd", "result_id": "third"}])
+    assert modes[2:] == [False, True]
+    assert profiles[2:] == profiles[:2]

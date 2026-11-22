@@ -163,7 +163,7 @@ class NeoSubtitleMaster(_PluginBase):
     plugin_name = "NEO字幕大师"
     plugin_desc = "脱胎自 ChineseSubFinder，支持字幕搜索、上传、匹配、改名与智能调轴。"
     plugin_icon = "https://raw.githubusercontent.com/felix-klk/MoviePilot-Plugins/main/icons/hyrule-subtitle-master.png"
-    plugin_version = "1.0.3"
+    plugin_version = "1.0.4"
     plugin_author = "felix-klk"
     author_url = "https://github.com/felix-klk"
     plugin_config_prefix = "neosubtitlemaster_"
