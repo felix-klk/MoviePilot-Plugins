@@ -1,10 +1,32 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Iterator, List
+
+from ..online_subtitles.matcher import auto_download_attempts
 
 
-AUTO_TRANSFER_ACTIVE_STATUSES = {"pending", "in_progress"}
-AUTO_TRANSFER_PUBLIC_STATUSES = {"pending", "in_progress", "completed", "skipped", "failed"}
+WAITING_VERIFICATION = "waiting_verification"
+AUTO_TRANSFER_ACTIVE_STATUSES = {"pending", "in_progress", WAITING_VERIFICATION}
+AUTO_TRANSFER_PUBLIC_STATUSES = AUTO_TRANSFER_ACTIVE_STATUSES | {"completed", "skipped", "failed"}
+AUTO_TRANSFER_RETRYABLE_STATUSES = {"failed", "skipped", WAITING_VERIFICATION}
+
+
+def transfer_download_attempts(
+    candidates: List[Dict[str, Any]], limit: int, blocked_providers: Dict[str, Any], *, logger: Any,
+) -> Iterator[Dict[str, Any]]:
+    attempted = set()
+    for candidate in auto_download_attempts(candidates, limit, logger=logger):
+        if candidate.get("provider") in blocked_providers:
+            continue
+        attempted.add((candidate.get("provider"), candidate.get("result_id")))
+        yield candidate
+    if blocked_providers and len(attempted) < limit:
+        remaining = [
+            candidate for candidate in candidates
+            if candidate.get("provider") not in blocked_providers
+            and (candidate.get("provider"), candidate.get("result_id")) not in attempted
+        ]
+        yield from auto_download_attempts(remaining, limit - len(attempted), logger=logger)
 
 
 def is_bilingual_followup_waiting(task: Dict[str, Any]) -> bool:
@@ -68,6 +90,6 @@ def public_auto_transfer_task(
     status = public_task.get("status")
     message = str(public_task.get("message") or "")
     public_task["waiting_bilingual"] = waiting
-    public_task["can_retry"] = waiting or status in {"failed", "skipped"}
+    public_task["can_retry"] = waiting or status in AUTO_TRANSFER_RETRYABLE_STATUSES
     public_task["can_force_low_confidence"] = status == "failed" and "低可信" in message
     return public_task

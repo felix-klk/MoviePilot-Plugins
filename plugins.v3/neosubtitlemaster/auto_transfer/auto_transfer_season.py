@@ -10,10 +10,12 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..matching.subtitle_language import required_auto_languages
 from ..online_subtitles.matcher import (
-    AUTO_SEASON_ATTEMPT_LIMIT, auto_download_attempts, log_auto_download_candidate, rank_auto_download_candidates,
+    AUTO_SEASON_ATTEMPT_LIMIT, log_auto_download_candidate, rank_auto_download_candidates,
 )
+from ..online_subtitles.models import SubHDWechatVerificationRequired
 from ..matching.subtitle_validation import validate_online_subtitle_files
 from ..online.online_subtitle import build_search_keywords
+from .auto_transfer_models import transfer_download_attempts
 
 
 @dataclass(frozen=True)
@@ -159,6 +161,7 @@ class AutoTransferSeasonCache:
         entries: List[Dict[str, Any]],
         *,
         task_ids: Optional[List[str]] = None,
+        blocked_providers: Optional[Dict[str, SubHDWechatVerificationRequired]] = None,
     ) -> Dict[str, Any]:
         owner = self._owner
         required = required_auto_languages(
@@ -167,7 +170,9 @@ class AutoTransferSeasonCache:
         )
         if not entries:
             return {"status": "skipped", "reason": "没有待处理目标", "written_by_target": {}}
-        providers = self._collaborators.search_providers()
+        if blocked_providers is None:
+            blocked_providers = {}
+        providers = [provider for provider in self._collaborators.search_providers() if provider not in blocked_providers]
         if not providers:
             return {"status": "skipped", "reason": "未配置可用在线字幕源", "written_by_target": {}}
         targets = [self._collaborators.target_from_entry(entry) for entry in entries]
@@ -205,8 +210,8 @@ class AutoTransferSeasonCache:
         best_partial_result: Optional[Dict[str, Any]] = None
         skipped_by_target: Dict[str, str] = {}
         conflicts_by_target: Dict[str, str] = {}
-        for selected in auto_download_attempts(
-            candidates, AUTO_SEASON_ATTEMPT_LIMIT, logger=self._logger,
+        for selected in transfer_download_attempts(
+            candidates, AUTO_SEASON_ATTEMPT_LIMIT, blocked_providers, logger=self._logger,
         ):
             log_auto_download_candidate(self._logger, selected)
             session_id = owner._hash_text(f"auto-season|{datetime.now().isoformat()}|{entries[0].get('id')}")[:16]
@@ -263,6 +268,10 @@ class AutoTransferSeasonCache:
                     "[NeoSubtitleMaster] 整季字幕候选未完整入库 provider=%s id=%s reason=%s",
                     selected.get("provider"), selected.get("result_id"), last_reason,
                 )
+            except SubHDWechatVerificationRequired as exc:
+                blocked_providers["subhd"] = exc
+                last_reason = "SubHD 待公众号验证"
+                self._logger.warning("[NeoSubtitleMaster] %s result=%s", exc, selected.get("title"))
             except Exception as exc:
                 last_reason = f"整季包{failure_stage}失败: {owner._normalize_text(exc)}"
                 self._logger.warning(
@@ -291,12 +300,20 @@ class AutoTransferSeasonCache:
             "search_results": len(search_result.get("results") or []),
         }
 
-    def process_group(self, entries: List[Dict[str, Any]], task_ids: Optional[List[str]] = None) -> Dict[str, Dict[str, Any]]:
+    def process_group(
+        self,
+        entries: List[Dict[str, Any]],
+        task_ids: Optional[List[str]] = None,
+        *,
+        blocked_providers: Optional[Dict[str, SubHDWechatVerificationRequired]] = None,
+    ) -> Dict[str, Dict[str, Any]]:
         owner = self._owner
         results: Dict[str, Dict[str, Any]] = {}
         strategy = owner._normalize_auto_transfer_subtitle_strategy(owner._auto_transfer_subtitle_strategy)
         if not entries:
             return results
+        if blocked_providers is None:
+            blocked_providers = {}
         if strategy == "ai_source_only":
             for entry in entries:
                 results[self._collaborators.task_result_key(entry)] = self._collaborators.process_entry(
@@ -344,7 +361,9 @@ class AutoTransferSeasonCache:
         )
 
         if remaining_entries:
-            season_result = self._collaborators.search_write_package(remaining_entries, task_ids=task_ids)
+            season_result = self._collaborators.search_write_package(
+                remaining_entries, task_ids=task_ids, blocked_providers=blocked_providers,
+            )
             write_conflicts.update(season_result.get("conflicts_by_target") or {})
             remaining_entries = self._collect_remaining_after_season_result(
                 entries=remaining_entries,
@@ -362,6 +381,7 @@ class AutoTransferSeasonCache:
                 entry,
                 queue_rate_limited=True,
                 task_ids=task_ids,
+                blocked_providers=blocked_providers,
                 **options,
             )
         return results

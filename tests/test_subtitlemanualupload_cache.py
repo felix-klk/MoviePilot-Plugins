@@ -3973,6 +3973,113 @@ def durable_auto_transfer_queue(tmp_path, request):
     return new_queue, clock, state_path, runtime
 
 
+@pytest.mark.parametrize("durable_auto_transfer_queue", [("plugins.v3", "NeoSubtitleMaster")], indirect=True)
+@pytest.mark.parametrize("alternate_count", [0, 1, 2])
+@pytest.mark.parametrize("challenge_scope", ["season", "auto"])
+def test_neo_wechat_verification_pauses_batch_and_keeps_other_sources(
+    tmp_path, durable_auto_transfer_queue, monkeypatch, alternate_count, challenge_scope,
+):
+    new_queue, clock, state_path, _ = durable_auto_transfer_queue
+    plugin, service, _ = new_queue()
+    module = sys.modules[type(plugin).__module__]
+    model = plugin_submodule(module, "online_subtitles.models")
+    entries = [
+        make_auto_entry(
+            tmp_path, filename=f"Dexter.S02E{episode:02}.mkv", id=f"ep{episode}",
+            media_key="dexter", media_type="tv", title="Dexter", season=2, episode=episode,
+        )
+        for episode in (2, 3)
+    ]
+    plugin._auto_skip_chinese_media_on_transfer = False
+    plugin._auto_check_emby_subtitles = False
+    plugin._auto_transfer_subtitle_strategy = "online_source_only"
+    plugin._auto_subtitle_language_strict = True
+    plugin._auto_subtitle_language_priority = ["chi&eng"]
+    plugin._auto_transfer_queue_debounce_seconds = 0
+    plugin._apply_tmdb_detail = lambda *_: None
+    plugin._update_auto_transfer_task = service.update_auto_transfer_task
+    notifications = []
+    monkeypatch.setattr(sys.modules["app.schemas.types"], "NotificationType", types.SimpleNamespace(Plugin="plugin"), raising=False)
+    monkeypatch.setattr(plugin, "post_message", lambda **message: notifications.append(message), raising=False)
+    monkeypatch.setattr(service, "auto_search_providers", lambda: ["subhd", "subtitlecat", "assrt"])
+    monkeypatch.setattr(service, "_wait_online_rate_limit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(service, "_auto_target_has_chinese_subtitle", lambda *args: False)
+
+    searches, downloads, writes = [], [], []
+    subhd_page = "https://subhd.tv/a/example"
+
+    def search(*, providers, scope, targets, **kwargs):
+        searches.append((scope, providers))
+        results = []
+        if "subhd" in providers and scope == challenge_scope:
+            results.extend(
+                {"provider": "subhd", "result_id": f"subhd-{i}", "title": "Dexter 简英双语", "score": 90 - i}
+                for i in (1, 2, 3)
+            )
+        if "subtitlecat" in providers:
+            results.extend(
+                {"provider": "subtitlecat", "result_id": f"eng-{i}", "title": f"Dexter_track{i}_[eng]",
+                 "translation_source": "original_upload", "score": 100}
+                for i in (3, 6)
+            )
+        if "assrt" in providers and scope == "auto" and targets[0]["episode"] < 2 + alternate_count:
+            results.append({"provider": "assrt", "result_id": "bilingual", "title": "Dexter 简英双语", "score": 90})
+        return {"results": results}
+
+    def download(selected):
+        candidate = selected[0]
+        downloads.append(candidate["result_id"])
+        if candidate["provider"] == "subhd":
+            raise model.SubHDWechatVerificationRequired(
+                candidate_id=candidate["result_id"], page_url=subhd_page, code="023456",
+            )
+        assert candidate["provider"] == "assrt"
+        return [{"source_name": "Dexter.ass", "content": b"ass", "result": candidate}]
+
+    def write(*, target_entries, **kwargs):
+        writes.append(target_entries[0]["id"])
+        return {"status": "written", "written_count": 1}
+
+    monkeypatch.setattr(service, "_online_service", lambda: types.SimpleNamespace(search=search, download=download))
+    monkeypatch.setattr(service, "_extract_subtitle_files", lambda name, *args: [{"source_name": name}])
+    monkeypatch.setattr(service, "auto_write_prepared_uploads_for_entries", write)
+    assert service.enqueue_transfer_auto_entries(entries) == (2, 0)
+    batch, _ = service.claim_next_auto_transfer_batch()
+    assert len(batch) == 2
+    service.process_transfer_auto_task_batch(batch)
+    assert downloads == ["subhd-1"] + ["bilingual"] * alternate_count
+    assert searches[-1] == ("auto", ["subtitlecat", "assrt"])
+    snapshot = service.auto_transfer_queue_snapshot()
+    assert writes == ["ep2", "ep3"][:alternate_count]
+    assert snapshot["summary"]["completed"] == alternate_count, snapshot["tasks"]
+    if alternate_count == 2:
+        assert notifications == []
+        return
+
+    waiting = [task for task in snapshot["tasks"] if task["status"] == "waiting_verification"]
+    assert snapshot["summary"]["waiting_verification"] == len(waiting) == 2 - alternate_count
+    assert all(task["can_retry"] and task["result"]["verification_url"] == subhd_page for task in waiting)
+    assert len(notifications) == 1
+    assert all(word in notifications[0]["text"] for word in ("023456", "S02E03", subhd_page))
+    assert ("S02E02" in notifications[0]["text"]) == (alternate_count == 0)
+    assert "023456" not in state_path.read_text(encoding="utf-8")
+    clock.now += 4 * 86400
+    restored, restored_service, _ = new_queue()
+    assert restored_service.auto_transfer_queue_snapshot()["summary"]["waiting_verification"] == len(waiting)
+    assert restored_service.claim_next_auto_transfer_batch()[0] == []
+    assert restored_service.enqueue_transfer_auto_entries(entries[alternate_count:]) == (0, len(waiting))
+    task_id = waiting[0]["id"]
+    assert restored_service.retry_auto_transfer_task(task_id)
+    retry, _ = restored_service.claim_next_auto_transfer_batch()
+    assert [task["id"] for task in retry] == [task_id]
+    monkeypatch.setattr(restored_service, "_auto_target_has_chinese_subtitle", lambda *args: True)
+    monkeypatch.setattr(restored_service, "_online_service", lambda: pytest.fail("existing subtitle should skip online search"))
+    restored._update_auto_transfer_task = restored_service.update_auto_transfer_task
+    restored_service.process_transfer_auto_task_batch(retry)
+    assert restored._auto_transfer_tasks[task_id]["status"] == "skipped"
+    assert len(notifications) == 1
+
+
 def test_v3_auto_transfer_queue_restores_history_and_interrupted_work(tmp_path, durable_auto_transfer_queue):
     new_queue, clock, state_path, runtime = durable_auto_transfer_queue
     plugin, service, _ = new_queue()
@@ -4206,7 +4313,7 @@ def test_v3_bilingual_followup_survives_restart_and_stops_after_matching(tmp_pat
     entry = make_auto_entry(tmp_path, filename="Show.S01E06.mkv", media_type="tv", season=1, episode=6)
     first_failure = clock.now
     missing = {"status": "skipped", "reason": "未找到双语", "needs_online_retry": True}
-    service.auto_process_transfer_group = lambda entries, task_ids: {entry["id"]: missing}
+    service.auto_process_transfer_group = lambda entries, task_ids, **kwargs: {entry["id"]: missing}
     assert service.enqueue_transfer_auto_entries([entry]) == (1, 0)
     batch, _ = service.claim_next_auto_transfer_batch()
     service.process_transfer_auto_task_batch(batch)
@@ -4356,7 +4463,7 @@ def test_v3_bilingual_followup_can_run_now_or_be_cancelled(tmp_path, durable_aut
     plugin._auto_transfer_queue_debounce_seconds = 0
     entry = make_auto_entry(tmp_path, filename="Show.S01E06.mkv", media_type="tv", season=1, episode=6)
     missing = {"status": "skipped", "reason": "未找到双语", "needs_online_retry": True}
-    service.auto_process_transfer_group = lambda entries, task_ids: {entry["id"]: missing}
+    service.auto_process_transfer_group = lambda entries, task_ids, **kwargs: {entry["id"]: missing}
     assert service.enqueue_transfer_auto_entries([entry]) == (1, 0)
     batch, _ = service.claim_next_auto_transfer_batch()
     task_id = batch[0]["id"]

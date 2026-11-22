@@ -13,7 +13,8 @@ from ..online_subtitles.matcher import (
     auto_download_attempts,
     rank_auto_download_candidates,
 )
-from ..online_subtitles.models import OnlineSubtitleResult
+from ..online_subtitles.models import OnlineSubtitleResult, SubHDWechatVerificationRequired
+from .auto_transfer_models import WAITING_VERIFICATION
 
 from .auto_transfer_processor import AutoTransferProcessor, AutoTransferProcessorCollaborators
 from .auto_transfer_queue import AutoTransferQueue
@@ -190,10 +191,7 @@ class AutoTransferService:
                 ),
                 load_cache=lambda entry: self.load_auto_season_package_cache(entry),
                 write_from_cache=lambda entries: self.auto_write_from_season_cache(entries),
-                search_write_package=lambda entries, task_ids=None: self.auto_search_write_season_package(
-                    entries,
-                    task_ids=task_ids,
-                ),
+                search_write_package=lambda entries, **kwargs: self.auto_search_write_season_package(entries, **kwargs),
                 process_entry=lambda entry, **kwargs: self.auto_process_transfer_entry(entry, **kwargs),
             ),
         )
@@ -266,6 +264,7 @@ class AutoTransferService:
         *,
         queue_rate_limited: bool = False,
         task_ids: Optional[List[str]] = None,
+        blocked_providers: Optional[Dict[str, SubHDWechatVerificationRequired]] = None,
     ) -> Dict[str, Any]:
         try:
             return self.auto_search_write_subtitle(
@@ -273,6 +272,7 @@ class AutoTransferService:
                 target,
                 queue_rate_limited=queue_rate_limited,
                 task_ids=task_ids,
+                blocked_providers=blocked_providers,
             )
         except TypeError as exc:
             if "unexpected keyword argument" not in str(exc):
@@ -540,12 +540,14 @@ class AutoTransferService:
         *,
         queue_rate_limited: bool = False,
         task_ids: Optional[List[str]] = None,
+        blocked_providers: Optional[Dict[str, SubHDWechatVerificationRequired]] = None,
     ) -> Dict[str, Any]:
         return self._processor.search_write_subtitle(
             entry,
             target,
             queue_rate_limited=queue_rate_limited,
             task_ids=task_ids,
+            blocked_providers=blocked_providers,
         )
 
 
@@ -569,12 +571,14 @@ class AutoTransferService:
         queue_rate_limited: bool = False,
         task_ids: Optional[List[str]] = None,
         prior_write_conflict: str = "",
+        blocked_providers: Optional[Dict[str, SubHDWechatVerificationRequired]] = None,
     ) -> Dict[str, Any]:
         return self._processor.process_entry(
             entry,
             queue_rate_limited=queue_rate_limited,
             task_ids=task_ids,
             prior_write_conflict=prior_write_conflict,
+            blocked_providers=blocked_providers,
         )
 
 
@@ -632,12 +636,23 @@ class AutoTransferService:
         entries: List[Dict[str, Any]],
         *,
         task_ids: Optional[List[str]] = None,
+        blocked_providers: Optional[Dict[str, SubHDWechatVerificationRequired]] = None,
     ) -> Dict[str, Any]:
-        return self._season_cache.search_write_package(entries, task_ids=task_ids)
+        return self._season_cache.search_write_package(
+            entries, task_ids=task_ids, blocked_providers=blocked_providers,
+        )
 
 
-    def auto_process_transfer_group(self, entries: List[Dict[str, Any]], task_ids: Optional[List[str]] = None) -> Dict[str, Dict[str, Any]]:
-        return self._season_cache.process_group(entries, task_ids=task_ids)
+    def auto_process_transfer_group(
+        self,
+        entries: List[Dict[str, Any]],
+        task_ids: Optional[List[str]] = None,
+        *,
+        blocked_providers: Optional[Dict[str, SubHDWechatVerificationRequired]] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        return self._season_cache.process_group(
+            entries, task_ids=task_ids, blocked_providers=blocked_providers,
+        )
 
 
     def _check_emby_subtitles_for_task(self, task: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -804,21 +819,28 @@ class AutoTransferService:
             and all(owner._normalize_text(entry.get("media_type")) == "tv" for entry in entries)
             and len({self.auto_transfer_group_key(entry) for entry in entries}) == 1
         )
+        blocked_providers: Dict[str, SubHDWechatVerificationRequired] = {}
         if is_tv_batch:
-            results = self.auto_process_transfer_group(entries, task_ids=task_ids)
+            results = self.auto_process_transfer_group(
+                entries, task_ids=task_ids, blocked_providers=blocked_providers,
+            )
         else:
             results = {
                 self._auto_task_result_key(entry): self.auto_process_transfer_entry(
                     entry,
                     queue_rate_limited=True,
                     task_ids=task_ids,
+                    blocked_providers=blocked_providers,
                 )
                 for entry in entries
             }
+        waiting_targets = []
         for task in pending:
             entry = task.get("entry") or {}
             if task.get("bilingual_retry_since") is not None:
-                result = self.auto_process_transfer_entry(entry, queue_rate_limited=True, task_ids=[task["id"]])
+                result = self.auto_process_transfer_entry(
+                    entry, queue_rate_limited=True, task_ids=[task["id"]], blocked_providers=blocked_providers,
+                )
             else:
                 result = results.get(self._auto_task_result_key(entry))
             result = result or {
@@ -826,6 +848,13 @@ class AutoTransferService:
                 "reason": "入库自动字幕任务没有返回结果",
             }
             if result.get("status") not in {"written", "completed", "ai_submitted"} and self._defer_unavailable_directory(task):
+                continue
+            if result.get("status") == WAITING_VERIFICATION:
+                owner._update_auto_transfer_task(
+                    task["id"], status=WAITING_VERIFICATION, next_run_ts=0, bilingual_retry_since=None,
+                    message=result["reason"], result=result,
+                )
+                waiting_targets.append(result.get("target") or task.get("target_label") or task["id"])
                 continue
             if result.get("needs_online_retry") and self.can_follow_up_bilingual_subtitle(entry):
                 self._queue.defer_bilingual_followup(task, result)
@@ -847,6 +876,19 @@ class AutoTransferService:
                 result.get("status"),
                 result.get("reason", ""),
             )
+
+        if waiting_targets and "subhd" in blocked_providers and not owner._auto_transfer_stopping:
+            try:
+                from app.schemas.types import NotificationType
+
+                verification = blocked_providers["subhd"]
+                owner.post_message(
+                    mtype=NotificationType.Plugin,
+                    title="NEO字幕大师 · SubHD 待公众号验证",
+                    text="待处理\n" + "\n".join(dict.fromkeys(waiting_targets)) + f"\n\n{verification}",
+                )
+            except Exception as exc:
+                self._logger.warning("[NeoSubtitleMaster] 发送 SubHD 验证通知失败: %s", exc)
 
     def process_transfer_auto_subtitles(self, entries: List[Dict[str, Any]]) -> None:
         owner = self._owner

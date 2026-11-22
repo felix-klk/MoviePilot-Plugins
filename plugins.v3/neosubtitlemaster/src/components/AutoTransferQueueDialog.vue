@@ -113,6 +113,12 @@ defineEmits([
                   <span v-bind="tooltipProps" class="auto-queue-message">{{ queueTaskMessage(task) }}</span>
                 </template>
               </VTooltip>
+              <a
+                v-if="task.status === 'waiting_verification' && /^https?:\/\//i.test(task.result?.verification_url || '')"
+                :href="task.result.verification_url"
+                target="_blank"
+                rel="noopener noreferrer"
+              >打开触发验证的 SubHD 页面</a>
               <small v-if="task.next_run_at">下次 {{ task.next_run_at }}</small>
             </div>
             <div v-if="task.can_retry" class="auto-queue-actions">
@@ -134,7 +140,7 @@ defineEmits([
                 :disabled="autoQueueMutating && autoQueueActionTaskId !== task.id"
                 @click="$emit('retry-auto-transfer-task', task)"
               >
-                {{ task.waiting_bilingual ? '立即补搜' : '重试' }}
+                {{ task.status === 'waiting_verification' ? '重新检查' : task.waiting_bilingual ? '立即补搜' : '重试' }}
               </VBtn>
               <VBtn
                 v-if="task.waiting_bilingual"

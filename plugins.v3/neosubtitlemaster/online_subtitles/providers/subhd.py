@@ -30,6 +30,23 @@ _SUBHD_LANGUAGE_BADGES = {
 _SUBHD_BADGE_TRANSLATION = str.maketrans("雙簡體語韓", "双简体语韩")
 
 
+def _wechat_download_code(page_html: str) -> str:
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(page_html, "html.parser")
+    for element in soup.select(
+        'script, style, template, [hidden], [aria-hidden="true"], .d-none, '
+        '[style*="display:none" i], [style*="display: none" i]'
+    ):
+        if element.parent is not None:
+            element.decompose()
+    codes = set(re.findall(
+        r"公众号\s*[里内中]?\s*发送\s*数字\s*[:：]?\s*([0-9]{6})(?![0-9])",
+        soup.get_text(" ", strip=True),
+    ))
+    return codes.pop() if len(codes) == 1 else ""
+
+
 def _subtitle_listing_metadata(text: str) -> Dict[str, Dict[str, Any]]:
     from bs4 import BeautifulSoup
 
@@ -530,8 +547,18 @@ class SubHDProvider(BaseSubtitleProvider):
             try:
                 return self.fetcher.post_json(api_url, payload, referer=down_url)
             except OnlineJSONError as exc:
-                if exc.status == 403 and exc.payload.get("turnstileRequired") is True:
-                    return exc.payload
+                if exc.status == 403:
+                    message = str(exc.payload.get("msg") or exc.payload.get("message") or "")
+                    if "公众号" in message and ("发送" in message or "验证" in message):
+                        code = _wechat_download_code(down_text)
+                        detail_url = parsed_page._replace(
+                            netloc=parsed_page.netloc.rsplit("@", 1)[-1], params="", query="", fragment="",
+                        ).geturl()
+                        raise SubHDWechatVerificationRequired(
+                            candidate_id=str(result.get("result_id") or sid), page_url=detail_url, code=code,
+                        ) from exc
+                    if exc.payload.get("turnstileRequired") is True:
+                        return exc.payload
                 raise
 
         data = submit()

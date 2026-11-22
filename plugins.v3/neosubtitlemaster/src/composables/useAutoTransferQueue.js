@@ -36,7 +36,8 @@ export function useAutoTransferQueue({
 
   const autoQueueSummary = computed(() => autoTransferQueue.value?.summary || {})
   const autoQueueTasks = computed(() => autoTransferQueue.value?.tasks || [])
-  const autoQueueActive = computed(() => Number(autoQueueSummary.value.active || 0) > 0)
+  const autoQueueActive = computed(() =>
+    Number(autoQueueSummary.value.active || 0) > Number(autoQueueSummary.value.waiting_verification || 0))
   const autoQueueSummaryText = computed(() => {
     const parts = []
     if (autoQueueSummary.value.in_progress) parts.push(`${autoQueueSummary.value.in_progress} 个处理中`)
@@ -44,6 +45,7 @@ export function useAutoTransferQueue({
     const pending = Number(autoQueueSummary.value.pending || 0) - waiting
     if (pending) parts.push(`${pending} 个排队`)
     if (waiting) parts.push(`${waiting} 个等待补搜`)
+    if (autoQueueSummary.value.waiting_verification) parts.push(`${autoQueueSummary.value.waiting_verification} 个待公众号验证`)
     if (autoQueueSummary.value.failed) parts.push(`${autoQueueSummary.value.failed} 个失败`)
     if (autoQueueSummary.value.completed) parts.push(`${autoQueueSummary.value.completed} 个完成`)
     if (autoQueueSummary.value.skipped) parts.push(`${autoQueueSummary.value.skipped} 个跳过`)

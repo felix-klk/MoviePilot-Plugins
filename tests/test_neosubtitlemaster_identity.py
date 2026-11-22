@@ -130,3 +130,53 @@ def test_neo_v2_discovers_and_scopes_emby_connections(monkeypatch):
     assert service._configured_instances(emby_only=True, selected_names={"NAS"}) == {"NAS": servers["NAS"].instance}
     assert service._configured_instances(emby_only=True, selected_names=set()) == {}
     assert calls == [{"type_filter": "emby", "name_filters": ["NAS"]}]
+
+
+@pytest.mark.parametrize(
+    ("page_html", "code"),
+    [
+        ("<li>在公众号里发送数字 <strong>023456</strong></li>", "023456"),
+        (
+            '<li hidden>在公众号里发送数字 123456</li>'
+            '<li style="display: none">在公众号里发送数字 654321</li>'
+            '<script>let copy = "在公众号里发送数字 777777";</script>'
+            '<li>在公众号里发送数字 <strong></strong></li>',
+            "",
+        ),
+    ],
+)
+def test_neo_v3_subhd_reports_wechat_verification_for_manual_download(monkeypatch, page_html, code):
+    neo, _, _ = load_plugin_module("plugins.v3", "NeoSubtitleMaster")
+    subhd = plugin_submodule(neo, "online_subtitles.providers.subhd")
+    detail_url = "https://subhd.tv/a/example?t=private-value"
+    down_url = "https://subhd.tv/down/example"
+    submitted = []
+    closed = []
+
+    def get_text(url, *, referer):
+        if url == detail_url:
+            return 200, '<a href="/down/example">下载字幕文件</a>', url
+        assert url == down_url
+        return 200, page_html, url
+
+    def post_json(url, payload, *, referer):
+        submitted.append((url, payload, referer))
+        raise subhd.OnlineJSONError(403, {"msg": "请先在公众号发送页面上的数字，再点击下载。"})
+
+    def make_client(**options):
+        assert options == {"use_proxy": False, "timeout": 5, "browser_recovery": False}
+        return SimpleNamespace(get_text=get_text, post_json=post_json, close=lambda: closed.append(True))
+
+    monkeypatch.setattr(subhd, "OnlinePageClient", make_client)
+    provider = subhd.SubHDProvider(SimpleNamespace(bypass_url="https://proxy.example", timeout=5))
+    with pytest.raises(ValueError, match="SubHD 需要微信公众号验证") as result:
+        provider.download({"page_url": detail_url})
+
+    message = str(result.value)
+    assert "https://subhd.tv/a/example，" in message and "private-value" not in message
+    assert "以浏览器显示的数字为准，验证后下载并上传" in message
+    assert ("插件读取到的页面数字为" in message) == bool(code)
+    if code:
+        assert code in message
+    assert submitted == [("https://subhd.tv/api/sub/down", {"sid": "example", "cap": ""}, down_url)]
+    assert closed == [True]

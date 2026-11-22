@@ -560,6 +560,9 @@ def auto_candidate_language_bucket(item: Dict[str, Any]) -> str:
     bucket = online_result_language_bucket(item)
     if bucket in LEGACY_BILINGUAL_BUCKETS:
         return bucket
+    if (item.get("provider") == "subtitlecat" and item.get("translation_source") == "original_upload"
+            and re.search(r"\btrack\d+[\s_.-]*\[eng\]\s*$", normalize_text(item.get("title")).replace("_", " "), re.I)):
+        return "eng"
     # Provider language fields are coarse: a Chinese result can contain Chinese-English subtitles.
     return "und"
 

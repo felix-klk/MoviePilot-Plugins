@@ -8,9 +8,11 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..matching.subtitle_language import required_auto_languages
 from ..online_subtitles.matcher import (
-    AUTO_DOWNLOAD_ATTEMPT_LIMIT, auto_download_attempts, log_auto_download_candidate, rank_auto_download_candidates,
+    AUTO_DOWNLOAD_ATTEMPT_LIMIT, log_auto_download_candidate, rank_auto_download_candidates,
 )
+from ..online_subtitles.models import SubHDWechatVerificationRequired
 from ..online.online_subtitle import build_search_keywords
+from .auto_transfer_models import WAITING_VERIFICATION, transfer_download_attempts
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,7 @@ class AutoTransferProcessor:
         *,
         queue_rate_limited: bool = False,
         task_ids: Optional[List[str]] = None,
+        blocked_providers: Optional[Dict[str, SubHDWechatVerificationRequired]] = None,
     ) -> Dict[str, Any]:
         owner = self._owner
         required = required_auto_languages(
@@ -66,7 +69,9 @@ class AutoTransferProcessor:
             strict=bool(getattr(owner, "_auto_subtitle_language_strict", False)),
         )
         target = target or self._collaborators.target_from_entry(entry)
-        providers = self._collaborators.search_providers()
+        if blocked_providers is None:
+            blocked_providers = {}
+        providers = [provider for provider in self._collaborators.search_providers() if provider not in blocked_providers]
         if not providers:
             return {"status": "skipped", "reason": "未配置可用在线字幕源", "target": target.get("label")}
         keywords = self._collaborators.search_keywords_for_entry(entry, target)
@@ -105,8 +110,8 @@ class AutoTransferProcessor:
         last_reason = ""
         write_conflict = ""
         target_id = owner._normalize_text(entry.get("id"))
-        for selected in auto_download_attempts(
-            candidates, AUTO_DOWNLOAD_ATTEMPT_LIMIT, logger=self._logger,
+        for selected in transfer_download_attempts(
+            candidates, AUTO_DOWNLOAD_ATTEMPT_LIMIT, blocked_providers, logger=self._logger,
         ):
             log_auto_download_candidate(self._logger, selected)
             session_id = owner._hash_text(f"auto|{datetime.now().isoformat()}|{entry.get('id')}")[:16]
@@ -216,6 +221,10 @@ class AutoTransferProcessor:
                     "[NeoSubtitleMaster] 自动字幕候选未入库 provider=%s id=%s reason=%s",
                     selected.get("provider"), selected.get("result_id"), last_reason,
                 )
+            except SubHDWechatVerificationRequired as exc:
+                blocked_providers["subhd"] = exc
+                last_reason = "SubHD 待公众号验证"
+                self._logger.warning("[NeoSubtitleMaster] %s target=%s", exc, target.get("label"))
             except Exception as exc:
                 last_reason = f"自动下载在线字幕失败: {owner._normalize_text(exc)}"
                 self._logger.warning(
@@ -320,6 +329,7 @@ class AutoTransferProcessor:
         queue_rate_limited: bool = False,
         task_ids: Optional[List[str]] = None,
         prior_write_conflict: str = "",
+        blocked_providers: Optional[Dict[str, SubHDWechatVerificationRequired]] = None,
     ) -> Dict[str, Any]:
         owner = self._owner
         required = required_auto_languages(
@@ -341,19 +351,38 @@ class AutoTransferProcessor:
                 return {**base, "status": "skipped", "reason": "所选语言要求无法由自动 AI 来源生成保证，请使用在线字幕策略"}
             return {**base, **self._collaborators.submit_ai_for_entry(entry, target, "策略 ai_source_only")}
 
+        if blocked_providers is None:
+            blocked_providers = {}
         search_result = self._collaborators.call_search_write_subtitle(
             entry,
             target,
             queue_rate_limited=queue_rate_limited,
             task_ids=task_ids,
+            blocked_providers=blocked_providers,
         )
-        if prior_write_conflict and search_result.get("needs_online_retry"):
+        verification = blocked_providers.get("subhd")
+        if prior_write_conflict and (search_result.get("needs_online_retry") or verification) and not (
+            search_result.get("status") == "written" or search_result.get("existing_subtitle")
+        ):
             return {**base, "status": "skipped", "reason": prior_write_conflict, "write_conflict": True}
+        waiting_result = None
+        if verification and search_result.get("status") != "written" and not (
+            search_result.get("existing_subtitle") or search_result.get("write_conflict")
+        ):
+            waiting_result = {
+                **base,
+                "status": WAITING_VERIFICATION,
+                "reason": "SubHD 待公众号验证，请在浏览器完成验证后下载并上传字幕",
+                "verification_url": verification.page_url,
+                "verification_candidate_id": verification.candidate_id,
+            }
         if (required is not None or strategy == "online_source_only" or search_result.get("status") == "written"
                 or search_result.get("existing_subtitle") or search_result.get("write_conflict")):
-            return {**base, **search_result}
+            return {**base, **(waiting_result or search_result)}
 
         ai_result = self._collaborators.submit_ai_for_entry(entry, target, "搜索无单一高置信结果后兜底")
+        if waiting_result and ai_result.get("status") != "ai_submitted":
+            return waiting_result
         return {**base, **ai_result, "search": search_result}
 
     def target_skip_reason(self, entry: Dict[str, Any], target: Dict[str, Any], *, log: bool = False) -> str:

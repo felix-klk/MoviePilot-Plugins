@@ -9,6 +9,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .auto_transfer_models import (
     AUTO_TRANSFER_ACTIVE_STATUSES,
     AUTO_TRANSFER_PUBLIC_STATUSES,
+    AUTO_TRANSFER_RETRYABLE_STATUSES,
+    WAITING_VERIFICATION,
     build_auto_transfer_task,
     is_auto_transfer_task_active,
     is_bilingual_followup_waiting,
@@ -289,7 +291,9 @@ class AutoTransferQueue:
                 return False
             self.trim_locked()
             task = (owner._auto_transfer_tasks or OrderedDict()).get(task_id)
-            if not task or (task.get("status") not in {"failed", "skipped"} and not is_bilingual_followup_waiting(task)):
+            if not task or (
+                task.get("status") not in AUTO_TRANSFER_RETRYABLE_STATUSES and not is_bilingual_followup_waiting(task)
+            ):
                 return False
             if force_low_confidence and not (
                 task.get("status") == "failed" and "低可信" in str(task.get("message") or "")
@@ -418,6 +422,7 @@ class AutoTransferQueue:
         summary = {
             "pending": 0,
             "waiting_bilingual": 0,
+            WAITING_VERIFICATION: 0,
             "in_progress": 0,
             "completed": 0,
             "skipped": 0,
