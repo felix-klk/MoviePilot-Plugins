@@ -20,6 +20,7 @@ from ..catalog.target_resolver import (
     auto_fill_missing_targets as fill_missing_target_ids,
     suggest_target as suggest_target_id,
 )
+from ..matching.subtitle_language import detect_prepared_subtitle_language
 
 
 class UploadApi:
@@ -47,7 +48,7 @@ class UploadApi:
         for prepared in prepared_uploads:
             file_path = Path(prepared["stored_path"])
             raw_bytes = file_path.read_bytes()
-            language_profile = owner._detect_language_profile(prepared["source_name"], raw_bytes)
+            language_profile = detect_prepared_subtitle_language(prepared, raw_bytes, owner._detect_language_profile)
             preview_item = {
                 "upload_id": prepared["upload_id"],
                 "source_name": prepared["source_name"],

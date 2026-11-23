@@ -38,7 +38,11 @@ EMBY_FILENAME_TAGS = {
     "chi": "zh-CN",
     "cht": "zh-TW",
     "chi&eng": "中英双语.zh-CN",
+    "chi&jp": "中日双语.zh-CN",
+    "chi&kr": "中韩双语.zh-CN",
     "cht&eng": "繁英双语.zh-TW",
+    "cht&jp": "繁日双语.zh-TW",
+    "cht&kr": "繁韩双语.zh-TW",
 }
 
 

@@ -21,7 +21,11 @@ LANGUAGE_SUFFIX_ALIASES = {
     "zh-tw": "cht",
     "zh_tw": "cht",
     "中英双语": "chi&eng",
+    "中日双语": "chi&jp",
+    "中韩双语": "chi&kr",
     "繁英双语": "cht&eng",
+    "繁日双语": "cht&jp",
+    "繁韩双语": "cht&kr",
     "chs": "chi",
     "cht": "cht",
     "tw": "cht",
@@ -63,6 +67,8 @@ LANGUAGE_PAIR_LABELS = {
     "chi&jp": "中日双语",
     "chi&kr": "中韩双语",
     "cht&eng": "中英双语",
+    "cht&jp": "中日双语",
+    "cht&kr": "中韩双语",
 }
 
 LEGACY_BILINGUAL_BUCKETS = ["chi&eng", "chi&jp", "chi&kr", "other_bilingual"]
@@ -176,16 +182,38 @@ def language_suffix_from_filename(file_name: str, subtitle_exts: Iterable[str]) 
     return {"suffix": suffix, "label": label}
 
 
-def detect_language_profile(file_name: str, raw_bytes: bytes, subtitle_exts: Iterable[str]) -> Dict[str, str]:
+def detect_prepared_subtitle_language(
+    prepared: Dict[str, Any],
+    raw_bytes: bytes,
+    detect_profile: Callable[[str, bytes], Dict[str, str]],
+) -> Dict[str, str]:
+    file_name = prepared.get("source_name") or ""
+    if prepared.get("online_source") == "subtitlecat" and prepared.get("translation_source") == "site_translation":
+        # SubtitleCat appends the translation language to the untranslated source name.
+        translation = re.search(r"-(zh-cn|zh-tw)\.srt$", file_name, re.I)
+        if translation:
+            return detect_language_profile(
+                file_name, raw_bytes, {".srt"}, translated_chinese=normalize_language_suffix(translation[1]),
+            )
+    return detect_profile(file_name, raw_bytes)
+
+
+def detect_language_profile(
+    file_name: str,
+    raw_bytes: bytes,
+    subtitle_exts: Iterable[str],
+    *,
+    translated_chinese: str = "",
+) -> Dict[str, str]:
     lowered = file_name.lower()
     ass_format = Path(lowered).suffix in {".ass", ".ssa"}
-    filename_suffix = language_suffix_from_filename(file_name, subtitle_exts)
+    filename_suffix = language_suffix_from_filename("" if translated_chinese else file_name, subtitle_exts)
     filename_language = filename_suffix["suffix"]
     if filename_language != "und" and not (ass_format and filename_language in {"chi", "cht"}):
         return filename_suffix
 
     # ASS/SSA attachments can appear before the dialogue section.
-    sample = raw_bytes if ass_format else raw_bytes[:16000]
+    sample = raw_bytes if ass_format or translated_chinese else raw_bytes[:16000]
     preview = "" if is_bitmap_subtitle(file_name, raw_bytes) else decode_preview_bytes(sample)
     preview = _subtitle_dialogue_text(file_name, preview)
     cjk_count = len(re.findall(r"[\u4e00-\u9fff]", preview))
@@ -201,10 +229,24 @@ def detect_language_profile(file_name: str, raw_bytes: bytes, subtitle_exts: Ite
         if not re.search(r"[\u3040-\u30ff\uac00-\ud7af]", line)
     )
     has_chinese_content = has_cjk and (
-        not has_kana
+        not (has_kana or (translated_chinese and has_hangul))
         or len(re.findall(r"[\u4e00-\u9fff]", chinese_lines)) >= 20
         or len(re.findall(r"[这這们們吗嗎呢]", preview)) >= 3
     )
+    if translated_chinese:
+        foreign_language = ""
+        if has_kana:
+            foreign_language = "jpn"
+        elif has_hangul:
+            foreign_language = "kor"
+        elif _has_english_dialogue(preview):
+            foreign_language = "eng"
+        if has_chinese_content or (cjk_count and not (kana_count or hangul_count or foreign_language)):
+            suffix = normalize_language_suffix(f"{translated_chinese}&{foreign_language}")
+        else:
+            suffix = foreign_language or "und"
+        return {"suffix": suffix, "label": LANGUAGE_PAIR_LABELS.get(suffix) or LANGUAGE_LABELS.get(suffix, "未知")}
+
     if filename_language != "und":
         if has_chinese_content and not has_kana and not has_hangul and _has_english_dialogue(preview):
             suffix = f"{filename_language}&eng"

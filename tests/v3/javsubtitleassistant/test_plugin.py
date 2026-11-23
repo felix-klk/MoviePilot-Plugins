@@ -27,11 +27,15 @@ from app.plugins.javsubtitleassistant.auto_transfer.auto_transfer_models import 
 from app.plugins.javsubtitleassistant.catalog.local_media_catalog import LOCAL_CACHE_VERSION
 from app.plugins.javsubtitleassistant.matching.subtitle_history import MATCH_HISTORY_CACHE_VERSION
 from app.plugins.javsubtitleassistant.api.catalog_api import CatalogApi
+from app.plugins.javsubtitleassistant.api.online_api import OnlineApi
 from app.plugins.javsubtitleassistant.catalog.local_artwork import local_poster_thumbnail
 from app.plugins.javsubtitleassistant.catalog.manual_strm import ManualStrmCatalog
 from app.plugins.javsubtitleassistant.config.config_schema import normalize_plugin_config
 from app.plugins.javsubtitleassistant.matching.subtitle_language import (
-    auto_target_has_chinese_subtitle, required_auto_languages,
+    auto_target_has_chinese_subtitle,
+    detect_prepared_subtitle_language,
+    language_suffix_from_filename,
+    required_auto_languages,
 )
 from app.plugins.javsubtitleassistant.online_subtitles import service
 from app.plugins.javsubtitleassistant.online_subtitles.keyword_builder import build_search_keywords
@@ -223,6 +227,102 @@ class JavForkTests(unittest.TestCase):
         self.assertEqual([item.language for item in results], ["English", "Chinese", "Japanese"])
         ranked = rank_auto_download_candidates([item.to_dict() for item in results], [target], ["chi", "cht"], strict=True)
         self.assertEqual([item["language"] for item in ranked], ["Chinese"])
+
+    def test_subtitlecat_translation_distinguishes_target_language_from_source_name(self):
+        chinese = "请把桌上的那本书拿过来，我们等会儿一起读。\n知道了，我这就拿给你。"
+        japanese = "つくえのうえのほんをとってきてください。\nわかりました、すぐにおとどけします。"
+        korean = "책상 위에 있는 책을 가져다 주세요.\n알겠습니다. 제가 바로 가져다 드리겠습니다."
+        filename = "4k688.com@EBWH-378.ja.whisperjav-zh-CN.srt"
+        for name, dialogue, suffix in (
+            (filename, chinese, "chi"),
+            (filename.replace(".ja.", ".ko."), chinese, "chi"),
+            (filename, f"{chinese}\n{japanese}", "chi&jp"),
+            (filename, f"{chinese}\n{korean}", "chi&kr"),
+            (filename.replace("-zh-CN", "-zh-TW"), f"{chinese}\n{korean}", "cht&kr"),
+            (filename.replace("-zh-CN", "-zh-TW"), "請等一下。", "cht"),
+            (filename, japanese, "jpn"),
+            (filename, korean, "kor"),
+        ):
+            with self.subTest(name=name, suffix=suffix):
+                content = f"1\n00:00:01,000 --> 00:00:05,000\n{dialogue}\n".encode()
+                prepared = {"source_name": name, "online_source": "subtitlecat", "translation_source": "site_translation"}
+                profile = detect_prepared_subtitle_language(prepared, content, JavSubtitleAssistant._detect_language_profile)
+                self.assertEqual(profile["suffix"], suffix)
+
+    def test_subtitlecat_chinese_translation_previews_writes_and_skips_existing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            video = root / "EBWH-378.mp4"
+            video.touch()
+            entry = {
+                "id": "movie", "path": str(video), "basename": video.stem, "jav_number": video.stem,
+                "filename": video.name, "target_label": video.stem, "media_type": "movie",
+            }
+            selected = {
+                "result_id": "fixture", "provider": "subtitlecat", "title": "4k688.com@EBWH-378.ja.whisperjav",
+                "language": "简体中文", "language_category": "chinese", "translation_source": "site_translation",
+                "download_url": "subtitlecat-zh-CN:fixture", "score": 100, "identity_status": "strong",
+            }
+            content = (
+                "1\n00:00:01,000 --> 00:00:05,000\n请把桌上的那本书拿过来，我们等会儿一起读。\n\n"
+                "2\n00:00:06,000 --> 00:00:09,000\n知道了，我这就拿给你。\n"
+            ).encode()
+            provider = SimpleNamespace(
+                search=lambda **_: {"results": [selected]},
+                download=lambda results: [
+                    {
+                        "provider": "subtitlecat", "source_name": "4k688.com@EBWH-378.ja.whisperjav-zh-CN.srt",
+                        "content": content, "result": dict(item),
+                    }
+                    for item in results
+                ],
+            )
+            plugin = JavSubtitleAssistant.__new__(JavSubtitleAssistant)
+            plugin._online_providers = ["subtitlecat"]
+            media_catalog = plugin.services.local_media_catalog()
+
+            async def preview_body():
+                return {"target_ids": [entry["id"]], "results": [selected]}
+
+            request = SimpleNamespace(json=preview_body)
+            with (
+                patch.object(JavSubtitleAssistant, "get_data_path", return_value=root / "plugin-data"),
+                patch.object(plugin, "_check_online_rate_limit"),
+                patch.object(plugin.services, "online_subtitles", return_value=provider),
+                patch.object(plugin.services, "local_media_catalog", return_value=media_catalog),
+                patch.object(media_catalog, "resolve_targets", return_value={entry["id"]: entry}),
+            ):
+                preview = asyncio.run(OnlineApi(plugin).online_download_preview(request))["data"]["items"][0]
+                self.assertEqual(preview["language_suffix"], "chi")
+                self.assertEqual(preview["output_name"], "EBWH-378.zh-CN.srt")
+                runner = plugin.services.auto_transfer()
+                written = runner._processor.search_and_write_entry(entry)
+                self.assertEqual(written["status"], "written", written)
+                subtitle = video.with_suffix(".zh-CN.srt")
+                self.assertEqual(subtitle.read_bytes(), content)
+                target = plugin.services.target_resolver().target_from_entry(entry)
+                self.assertEqual([item["language_suffix"] for item in target["subtitles"]], ["chi"])
+                self.assertEqual(runner._processor.search_and_write_entry(entry)["status"], "skipped")
+                self.assertEqual(list(root.glob("*.srt")), [subtitle])
+
+    def test_bilingual_display_names_round_trip_including_legacy_names(self):
+        plugin = JavSubtitleAssistant.__new__(JavSubtitleAssistant)
+        writer = plugin.services.writer()
+        for suffix, tag in (
+            ("chi&eng", "中英双语.zh-CN"),
+            ("chi&jp", "中日双语.zh-CN"),
+            ("chi&kr", "中韩双语.zh-CN"),
+            ("cht&eng", "繁英双语.zh-TW"),
+            ("cht&jp", "繁日双语.zh-TW"),
+            ("cht&kr", "繁韩双语.zh-TW"),
+        ):
+            with self.subTest(suffix=suffix):
+                destination = writer.build_destination_name(
+                    {"basename": "sample"}, {"language_suffix": suffix, "ext": ".srt", "default_subtitle": True},
+                )
+                self.assertEqual(destination, f"sample.{tag}.default.srt")
+                for filename in (destination, f"sample.{suffix}.srt"):
+                    self.assertEqual(language_suffix_from_filename(filename, {".srt"})["suffix"], suffix)
 
     def test_only_subtitlecat_and_fixed_auto_policy_after_upgrade(self):
         config = normalize_plugin_config({"online_providers": ["subhd", "subdl"],

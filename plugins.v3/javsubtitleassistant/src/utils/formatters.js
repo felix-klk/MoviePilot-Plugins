@@ -160,13 +160,16 @@ const languageAliases = new Map(Object.entries({
   zh: 'chi', 'zh-hans': 'chi', zh_hans: 'chi', 'zh-cn': 'chi', zh_cn: 'chi',
   'zh-hant': 'cht', zh_hant: 'cht', 'zh-tw': 'cht', zh_tw: 'cht',
   chs: 'chi', tw: 'cht', hk: 'cht', zho: 'chi', cmn: 'chi', cn: 'chi',
-  中英双语: 'chi&eng', 繁英双语: 'cht&eng',
+  中英双语: 'chi&eng', 中日双语: 'chi&jp', 中韩双语: 'chi&kr',
+  繁英双语: 'cht&eng', 繁日双语: 'cht&jp', 繁韩双语: 'cht&kr',
   en: 'eng', ja: 'jpn', jp: 'jpn', ko: 'kor', kr: 'kor',
   fr: 'fre', fra: 'fre', de: 'ger', deu: 'ger', es: 'spa', pt: 'por', it: 'ita', ru: 'rus',
 }))
 
 const embyFilenameTags = new Map(Object.entries({
-  chi: 'zh-CN', cht: 'zh-TW', 'chi&eng': '中英双语.zh-CN', 'cht&eng': '繁英双语.zh-TW',
+  chi: 'zh-CN', cht: 'zh-TW',
+  'chi&eng': '中英双语.zh-CN', 'chi&jp': '中日双语.zh-CN', 'chi&kr': '中韩双语.zh-CN',
+  'cht&eng': '繁英双语.zh-TW', 'cht&jp': '繁日双语.zh-TW', 'cht&kr': '繁韩双语.zh-TW',
 }))
 
 export function buildOutputName(target, item) {

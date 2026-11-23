@@ -6,7 +6,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..api.online_api import download_online_results_to_uploads
 from .online_subtitle import CaptchaRequiredError
-from ..matching.subtitle_language import auto_subtitle_sort_key, autosub_lang_from_suffix, is_chinese_language_suffix
+from ..matching.subtitle_language import (
+    auto_subtitle_sort_key,
+    autosub_lang_from_suffix,
+    detect_prepared_subtitle_language,
+    is_chinese_language_suffix,
+)
 from ..matching.subtitle_formats import is_text_subtitle, pysubs2_format
 from ..timeline.timeline_vad import load_subtitle_file
 from ..catalog.target_resolver import (
@@ -42,7 +47,7 @@ class OnlineAiService:
                 continue
             file_path = Path(prepared["stored_path"])
             raw_bytes = file_path.read_bytes()
-            language_profile = owner._detect_language_profile(prepared["source_name"], raw_bytes)
+            language_profile = detect_prepared_subtitle_language(prepared, raw_bytes, owner._detect_language_profile)
             suffix = language_profile["suffix"]
             if is_chinese_language_suffix(suffix):
                 continue

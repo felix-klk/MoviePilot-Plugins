@@ -6,7 +6,13 @@ import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..config.config_schema import normalize_auto_multi_subtitle_mode, safe_int
-from ..matching.subtitle_language import auto_subtitle_sort_key, is_chinese_language_suffix, language_matches_preferences, required_auto_languages
+from ..matching.subtitle_language import (
+    auto_subtitle_sort_key,
+    detect_prepared_subtitle_language,
+    is_chinese_language_suffix,
+    language_matches_preferences,
+    required_auto_languages,
+)
 from ..matching.subtitle_formats import is_bitmap_subtitle
 from ..catalog.target_resolver import (
     auto_fill_missing_targets as fill_missing_target_ids,
@@ -62,7 +68,9 @@ class AutoTransferWriteStrategy:
                 raw_bytes = Path(prepared["stored_path"]).read_bytes()
             except Exception:
                 raw_bytes = b""
-            language_profile = self._collaborators.detect_language_profile(prepared.get("source_name", ""), raw_bytes)
+            language_profile = detect_prepared_subtitle_language(
+                prepared, raw_bytes, self._collaborators.detect_language_profile,
+            )
             items.append(
                 {
                     "upload_id": prepared["upload_id"],
