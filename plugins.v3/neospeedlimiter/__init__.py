@@ -27,11 +27,11 @@ class NeoSpeedLimiter(_PluginBase):
     # 插件名称
     plugin_name = "NEO播放限速"
     # 插件描述
-    plugin_desc = "外网播放时按带宽调整下载器限速。无播放时可在 qBittorrent 下载任务达到 3 个后临时解除上传限速。"
+    plugin_desc = "外网播放时按带宽调整下载器限速。无外网播放且 qBittorrent 有下载任务时可临时解除上传限速。"
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/Librespeed_A.png"
     # 插件版本
-    plugin_version = "3.0.1"
+    plugin_version = "3.0.2"
     # 插件作者
     plugin_author = "felix-klk"
     # 作者主页
@@ -107,7 +107,7 @@ class NeoSpeedLimiter(_PluginBase):
             if self._enabled:
                 bulk = "已启用" if self._qb_bulk_download else "未启用"
                 logger.info(f"NEO播放限速已启用，每 {self._interval} 秒检查，共配置 "
-                            f"{len(self._downloader)} 台下载器，qB 批量下载时解除上传限速{bulk}")
+                            f"{len(self._downloader)} 台下载器，无外网播放时放开 qB 上传{bulk}")
             else:
                 logger.info("NEO播放限速已加载，当前未启用")
 
@@ -507,7 +507,7 @@ class NeoSpeedLimiter(_PluginBase):
     def _allocation_form() -> list:
         """追加带宽分配和恢复设置，沿用插件表单组件。"""
         fields = [
-            ("VSwitch", "qb_bulk_download", "无播放且 qB 下载任务达到 3 个时解除上传限速", {}),
+            ("VSwitch", "qb_bulk_download", "无外网播放且 qB 有下载任务时解除上传限速", {}),
             ("VSelect", "allocation_mode", "分配方式", {"items": [
                 {"title": "按比例", "value": "ratio"},
                 {"title": "按下载器顺序", "value": "priority"}]}),
@@ -616,11 +616,14 @@ class NeoSpeedLimiter(_PluginBase):
             # 暂停或换集保留限速一段时间，再逐步恢复。
             self.__set_limiter(services, "未播放", self._noplay_up_speed, self._noplay_down_speed,
                                allow_bulk=not block_bulk)
+        elif self._qb_bulk_download or self._qb_bulk_limits:
+            # 普通限速继续按配置延时恢复，qB 上传放开只看本轮的外网播放和下载状态。
+            self.__set_limiter(services, None, 0, 0, allow_bulk=not block_bulk)
 
     def _playback_status(self) -> Optional[Tuple[bool, bool, float]]:
         """返回批量下载是否应让出带宽、外网播放状态和总码率。"""
         # 播放状态与比特率必须分开统计，避免 Jellyfin 未返回比特率时误判为未播放。
-        has_playback = False
+        blocked_by_video = False
         has_remote_playback = False
         total_bit_rate = 0
         helper = MediaServerHelper()
@@ -645,7 +648,8 @@ class NeoSpeedLimiter(_PluginBase):
                             return None
                         for session in sessions:
                             if session.get("NowPlayingItem") and not session.get("PlayState", {}).get("IsPaused"):
-                                has_playback |= self.__is_video_item(session["NowPlayingItem"])
+                                if check_bulk and self.__is_video_item(session["NowPlayingItem"]):
+                                    blocked_by_video |= self.__blocks_qb_upload(session.get("RemoteEndPoint"))
                                 if not self.__path_excluded(session.get("NowPlayingItem").get("Path")):
                                     playing_sessions.append(session)
 
@@ -687,7 +691,10 @@ class NeoSpeedLimiter(_PluginBase):
                             item = self.__jellyfin_playing_item(session)
                             if item is None:
                                 continue
-                            has_playback = True
+                            if check_bulk:
+                                blocked_by_video |= self.__blocks_qb_upload(self.__get_compatible_value(
+                                    session, "RemoteEndPoint", "remoteEndPoint", "RemoteEndpoint", "remoteEndpoint"
+                                ))
                             bit_rate = self.__jellyfin_session_bitrate(session, item)
                             if bit_rate is None:
                                 continue
@@ -705,7 +712,8 @@ class NeoSpeedLimiter(_PluginBase):
                     sessions = _plex.sessions()
                     for session in sessions:
                         paused = getattr(session.player, "state", None) == "paused"
-                        has_playback |= session.TAG == "Video" and not paused
+                        if check_bulk and not paused and session.TAG == "Video":
+                            blocked_by_video |= self.__blocks_qb_upload(session.player.address)
                         if paused and self._qb_bulk_download:
                             continue
                         bitrate = sum([m.bitrate or 0 for m in session.media])
@@ -731,7 +739,16 @@ class NeoSpeedLimiter(_PluginBase):
             else:
                 all_servers_checked = False
 
-        return has_playback or not all_servers_checked, has_remote_playback, total_bit_rate
+        return blocked_by_video or not all_servers_checked, has_remote_playback, total_bit_rate
+
+    def __blocks_qb_upload(self, endpoint: Any) -> bool:
+        """正在播放的视频只有确认来自内网或免限速地址时，才允许放开 qB 上传。"""
+        address = self.__normalize_remote_ip(endpoint)
+        if not address:
+            return True
+        if self._unlimited_ips["ipv4"] or self._unlimited_ips["ipv6"]:
+            return not self.__allow_access(self._unlimited_ips, address)
+        return not IpUtils.is_private_ip(address)
 
     @staticmethod
     def segment_rate(buckets: list, offset: float) -> float:
@@ -1276,28 +1293,24 @@ class NeoSpeedLimiter(_PluginBase):
             logger.info(f"{name} 恢复旧版批量下载修改的下载限速")
         return restored
 
-    def _update_qb_bulk(self, name: str, service: ServiceInfo, allow_bulk: bool,
-                        finish: bool = False) -> bool:
-        """处理当前批次的上传限速，返回本轮是否由批量下载控制。"""
+    def _update_qb_bulk(self, name: str, service: ServiceInfo, allow_bulk: bool) -> bool:
+        """按是否有下载任务处理 qB 上传限速，返回本轮是否解除限速。"""
         saved = self._qb_bulk_limits.get(name)
-        finished = finish or not self._qb_bulk_download
-        count = None
-        if allow_bulk and not finished:
+        downloading = None
+        if allow_bulk and self._qb_bulk_download:
             try:
                 torrents = service.instance.get_downloading_torrents()
                 if torrents is not None:
                     states = {"allocating", "checkingDL", "downloading", "forcedDL", "forcedMetaDL",
                               "metaDL", "queuedDL", "stalledDL"}
-                    count = sum(torrent["state"] in states for torrent in torrents)
+                    downloading = any(torrent["state"] in states for torrent in torrents)
             except Exception:
                 pass
-            if count is None:
+            if downloading is None:
                 logger.warning(f"获取 qB 下载器 {name} 的下载任务失败")
-            elif count == 0:
-                finished = True
 
         qbc = service.instance.qbc
-        if count and (saved is not None or count >= 3):
+        if downloading:
             prefs = qbc.app_preferences()
             # 独立保存两套上传限速，避免 qB 定时切换备用限速时丢失原值。
             active_caps = {}
@@ -1307,18 +1320,18 @@ class NeoSpeedLimiter(_PluginBase):
                     raise ValueError("qB 上传限速无效")
                 if value:
                     active_caps[key] = value
-            backup = {**(saved or {}), **active_caps}
-            if backup != saved:
-                self._save_qb_bulk_limits(name, backup)
             if active_caps:
+                backup = {**(saved or {}), **active_caps}
+                if backup != saved:
+                    self._save_qb_bulk_limits(name, backup)
                 self._write_qb_caps(qbc, dict.fromkeys(active_caps, 0))
-                logger.info(f"{name} 批量下载，临时解除上传限速")
+                logger.info(f"{name} 有下载任务且无外网播放，临时解除上传限速")
             return True
 
         if self._restore_qb_caps(qbc, saved):
-            logger.info(f"{name} 恢复批量下载前的上传限速")
-        if saved is not None and (saved or finished):
-            self._save_qb_bulk_limits(name, None if finished else {})
+            logger.info(f"{name} 恢复解除前的上传限速")
+        if saved is not None:
+            self._save_qb_bulk_limits(name, None)
         return False
 
     def _upload_targets(self, valid: list, ceilings: list, units: list,
@@ -1365,7 +1378,7 @@ class NeoSpeedLimiter(_PluginBase):
                 continue
             bulk_policy = service.type == "qbittorrent" and (
                 name in self._qb_bulk_limits or name in self._legacy_qb_download_limits
-                or (limit_type == "未播放" and self._qb_bulk_download))
+                or (self._qb_bulk_download and (allow_bulk or limit_type == "未播放")))
             if not regular and not bulk_policy:
                 continue
             try:
@@ -1522,7 +1535,7 @@ class NeoSpeedLimiter(_PluginBase):
                     if service.type == "qbittorrent":
                         self._restore_legacy_qb_download(name, service)
                         if name in self._qb_bulk_limits:
-                            self._update_qb_bulk(name, service, allow_bulk=False, finish=True)
+                            self._update_qb_bulk(name, service, allow_bulk=False)
                     if name not in self._original:
                         continue
                     actual = self._read_limits(services[name])
