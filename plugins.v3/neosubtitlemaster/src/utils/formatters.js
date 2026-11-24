@@ -160,14 +160,21 @@ const languageAliases = new Map(Object.entries({
   zh: 'chi', 'zh-hans': 'chi', zh_hans: 'chi', 'zh-cn': 'chi', zh_cn: 'chi',
   'zh-hant': 'cht', zh_hant: 'cht', 'zh-tw': 'cht', zh_tw: 'cht',
   chs: 'chi', tw: 'cht', hk: 'cht', zho: 'chi', cmn: 'chi', cn: 'chi',
-  中英双语: 'chi&eng', 繁英双语: 'cht&eng',
   en: 'eng', ja: 'jpn', jp: 'jpn', ko: 'kor', kr: 'kor',
   fr: 'fre', fra: 'fre', de: 'ger', deu: 'ger', es: 'spa', pt: 'por', it: 'ita', ru: 'rus',
 }))
 
-const embyFilenameTags = new Map(Object.entries({
-  chi: 'zh-CN', cht: 'zh-TW', 'chi&eng': '中英双语.zh-CN', 'cht&eng': '繁英双语.zh-TW',
-}))
+const embyFilenameTags = new Map([['chi', 'zh-CN'], ['cht', 'zh-TW']])
+const chineseBilingualNames = {
+  eng: '英', jp: '日', kr: '韩', fre: '法', rus: '俄', spa: '西', ger: '德', por: '葡', ita: '意',
+}
+
+for (const [foreign, name] of Object.entries(chineseBilingualNames)) {
+  languageAliases.set(`中${name}双语`, `chi&${foreign}`)
+  languageAliases.set(`繁${name}双语`, `cht&${foreign}`)
+  embyFilenameTags.set(`chi&${foreign}`, `中${name}双语.zh-CN`)
+  embyFilenameTags.set(`cht&${foreign}`, `繁${name}双语.zh-TW`)
+}
 
 export function buildOutputName(target, item) {
   if (!target) return ''

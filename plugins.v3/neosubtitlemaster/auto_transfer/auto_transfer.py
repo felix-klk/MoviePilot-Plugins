@@ -710,6 +710,11 @@ class AutoTransferService:
             )
             return None
 
+        local_subtitle_languages = {
+            str(subtitle["name"]).casefold(): subtitle.get("language_suffix") or "und"
+            for subtitle in target.get("subtitles") or []
+            if isinstance(subtitle, dict) and subtitle.get("name")
+        }
         for track in tracks:
             external = track.get("IsExternal")
             if not isinstance(external, bool) or track.get("IsTextSubtitleStream") is False:
@@ -733,7 +738,7 @@ class AutoTransferService:
             if external:
                 file_name = str(track.get("Path") or "").replace("\\", "/").rsplit("/", 1)[-1]
                 video_stem = str(entry.get("basename") or "")
-                if video_stem and file_name.startswith(video_stem + "."):
+                if video_stem and file_name.casefold().startswith(video_stem.casefold() + "."):
                     tags = file_name[len(video_stem) + 1:].lower().split(".")[:-1]
                     if set(tags) & {"forced", "foreign", "sdh", "hi"}:
                         continue
@@ -741,6 +746,7 @@ class AutoTransferService:
                         tagged_language = inventory.embedded_subtitle_language_suffix("", tag)
                         if "&" in tagged_language or (suffix == "und" and tagged_language != "und"):
                             suffix = tagged_language
+                suffix = local_subtitle_languages.get(file_name.casefold(), suffix)
 
             subtitle = {"language_suffix": suffix}
             if suffix != "und" and target_satisfies_auto_subtitle_policy({"subtitles": [subtitle]}, required):

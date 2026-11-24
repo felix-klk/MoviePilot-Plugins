@@ -7,6 +7,8 @@ from threading import Lock
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from .subtitle_language import (
+    CHINESE_BILINGUAL_NAMES,
+    detect_language_profile,
     is_chinese_language_suffix,
     language_suffix_from_filename,
     subtitle_filename_has_forced_tag,
@@ -37,8 +39,11 @@ def _write_group_id(operation: Dict[str, Any]) -> str:
 EMBY_FILENAME_TAGS = {
     "chi": "zh-CN",
     "cht": "zh-TW",
-    "chi&eng": "中英双语.zh-CN",
-    "cht&eng": "繁英双语.zh-TW",
+    **{
+        f"{chinese}&{foreign}": f"{prefix}{name}双语.{locale}"
+        for chinese, prefix, locale in (("chi", "中", "zh-CN"), ("cht", "繁", "zh-TW"))
+        for foreign, name in CHINESE_BILINGUAL_NAMES.items()
+    },
 }
 
 
@@ -387,10 +392,19 @@ class SubtitleWriter:
                     continue
                 if writing_full_subtitle and subtitle_filename_has_forced_tag(existing.name, video_stem):
                     continue
-                language = language_suffix_from_filename(existing.name[len(prefix):], {ext})["suffix"]
-                if sorted(language.split("&")) == languages:
-                    row["other_names"].append(existing.name)
-                    row["state"].append(("keep", str(existing), str(destination)))
+                suffix_name = "subtitle" + existing.name[len(video_stem):]
+                language = language_suffix_from_filename(suffix_name, {ext})["suffix"]
+                if sorted(language.split("&")) != languages:
+                    continue
+                if write_conflicts is not None and not existing.is_symlink():
+                    try:
+                        actual = detect_language_profile(suffix_name, existing.read_bytes(), {ext})["suffix"]
+                    except OSError:
+                        actual = "und"
+                    if actual != "und" and sorted(actual.split("&")) != languages:
+                        continue
+                row["other_names"].append(existing.name)
+                row["state"].append(("keep", str(existing), str(destination)))
 
         conflicts = []
         for row in groups.values():

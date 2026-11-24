@@ -209,7 +209,7 @@ class SubtitleInventory:
             return None
         # Ownership was already matched. Keep the extension for content-based detection.
         suffix_name = "subtitle" + sub_file.name[len(video_stem):]
-        language_profile = self._detect_language_profile(suffix_name, raw_bytes)
+        language_profile = self._detect_language_profile(suffix_name, raw_bytes) if raw_bytes else {"suffix": "und"}
         backup_path = self._subtitle_backup_path(sub_file)
         backup_available = backup_path.exists()
         return {
@@ -219,6 +219,7 @@ class SubtitleInventory:
             "ext": sub_file.suffix.lower(),
             "is_bitmap": is_bitmap_subtitle(sub_file, raw_bytes),
             "language_suffix": language_profile.get("suffix", ""),
+            "language_label": language_profile.get("label", "未知"),
             "language_category": language_profile.get("category", ""),
             "backup_path": str(backup_path) if backup_available else "",
             "backup_available": backup_available,
@@ -448,7 +449,7 @@ class SubtitleInventory:
             return "und"
         if not completed.stdout:
             return "und"
-        return self._detect_language_profile(f"embedded.{codec}.srt", completed.stdout[:20000]).get("suffix", "und")
+        return self._detect_language_profile(f"embedded.{codec}.srt", completed.stdout).get("suffix", "und")
 
     def _is_stream_path(self, path: Any) -> bool:
         return is_stream_path(path, normalize_text=self._normalize_text, stream_exts=self._stream_exts)

@@ -100,7 +100,10 @@ function toggleSelection(value) {
         <div v-for="subtitle in subtitles" :key="subtitle.path" class="mobile-subtitle-row">
           <div>
             <strong>{{ subtitle.name }}</strong>
-            <span>{{ detail.formatBytes(subtitle.size) }} · {{ subtitle.modified_at || '未知时间' }}</span>
+            <span>
+              <template v-if="subtitle.language_label">{{ subtitle.language_label }} · </template>
+              {{ detail.formatBytes(subtitle.size) }} · {{ subtitle.modified_at || '未知时间' }}
+            </span>
           </div>
           <div class="mobile-subtitle-buttons">
             <VBtn

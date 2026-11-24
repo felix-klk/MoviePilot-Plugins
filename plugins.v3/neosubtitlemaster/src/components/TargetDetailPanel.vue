@@ -349,7 +349,10 @@ defineExpose({
                 >
                   <div class="subtitle-history-copy">
                     <strong>{{ subtitle.name }}</strong>
-                    <span>{{ formatBytes(subtitle.size) }} · {{ subtitle.modified_at || '未知时间' }}</span>
+                    <span>
+                      <template v-if="subtitle.language_label">{{ subtitle.language_label }} · </template>
+                      {{ formatBytes(subtitle.size) }} · {{ subtitle.modified_at || '未知时间' }}
+                    </span>
                   </div>
                   <div class="subtitle-history-actions">
                     <VBtn

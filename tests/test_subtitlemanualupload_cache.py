@@ -4146,13 +4146,26 @@ def test_v3_auto_transfer_expiry_and_manual_clear_keep_pending_task(tmp_path, du
     assert [item["id"] for item in json.loads(state_path.read_text(encoding="utf-8"))["tasks"]] == [pending_id]
 
 
+def _queue_subtitle_text(*, bilingual):
+    dialogue = [
+        ("我们已经完成了所有准备工作。", "We have finished all of the preparations."),
+        ("你们现在可以和他们一起出发。", "You can leave with them now."),
+        ("他们会在车站等我们回来。", "They will wait for us at the station."),
+    ]
+    return "\n\n".join(
+        f"{index}\n00:00:0{index},000 --> 00:00:0{index + 1},000\n"
+        + "\n".join((chinese, english) if bilingual else (chinese,))
+        for index, (chinese, english) in enumerate(dialogue, 1)
+    ) + "\n"
+
+
 def test_v3_directory_scan_checks_each_version_and_rechecks_after_mount_recovers(
     tmp_path, durable_auto_transfer_queue, monkeypatch,
 ):
     new_queue, clock, _, _ = durable_auto_transfer_queue
     media = tmp_path / "media"
     media.mkdir()
-    subtitles = "1\n00:00:01,000 --> 00:00:02,000\n你好\nHello\n"
+    subtitles = _queue_subtitle_text(bilingual=True)
 
     def configure(plugin, service):
         plugin._enabled = True
@@ -4177,7 +4190,9 @@ def test_v3_directory_scan_checks_each_version_and_rechecks_after_mount_recovers
         )
         for name in ("Show.S01E01.mkv", "Show.S01E01.2160p.mkv")
     ]
-    Path(hd["path"]).with_suffix(".zh-CN.srt").write_text(subtitles.replace("Hello\n", ""), encoding="utf-8")
+    Path(hd["path"]).with_suffix(".zh-CN.srt").write_text(
+        _queue_subtitle_text(bilingual=False), encoding="utf-8",
+    )
     Path(four_k["path"]).with_suffix(".中英双语.zh-CN.srt").write_text(subtitles, encoding="utf-8")
     monitor = plugin.services.manual_strm_monitor()
     monkeypatch.setattr(monitor, "_running", lambda: True)
@@ -4427,10 +4442,12 @@ def test_v3_batch_followup_keeps_existing_bilingual_and_retries_missing_episode(
         make_auto_entry(tmp_path, filename=f"Show.S01E{episode:02d}.mkv", media_type="tv", season=1, episode=episode)
         for episode in (1, 2)
     ]
-    subtitles = "1\n00:00:01,000 --> 00:00:02,000\n你好\nHello\n"
+    subtitles = _queue_subtitle_text(bilingual=True)
     bilingual = Path(existing["path"]).with_suffix(".中英双语.zh-CN.srt")
     bilingual.write_text(subtitles, encoding="utf-8")
-    Path(missing["path"]).with_suffix(".zh-CN.srt").write_text(subtitles.replace("Hello\n", ""), encoding="utf-8")
+    Path(missing["path"]).with_suffix(".zh-CN.srt").write_text(
+        _queue_subtitle_text(bilingual=False), encoding="utf-8",
+    )
     catalog = plugin.services.local_media_catalog()
     entries = {entry["id"]: entry for entry in (existing, missing)}
     monkeypatch.setattr(catalog, "resolve_targets", lambda target_ids: {target_id: entries[target_id] for target_id in target_ids})

@@ -20,7 +20,7 @@
     "name": "NEO字幕大师",
     "description": "支持字幕搜索、上传、智能调轴、Emby 字幕检查和本地目录缺字幕补搜。",
     "labels": "字幕,ChineseSubFinder,媒体库,整理",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "icon": "https://raw.githubusercontent.com/felix-klk/MoviePilot-Plugins/main/icons/hyrule-subtitle-master.png",
     "author": "felix-klk",
     "author_url": "https://github.com/felix-klk",
@@ -28,6 +28,7 @@
     "system_version": ">=3.0.0",
     "release": true,
     "history": {
+      "v1.0.5": "完善字幕语种核验，使用完整解码与对白证据识别单语和双语。自动入库复核语言偏好，已有外挂优先使用正文判定。新增中法、中俄、中西、中德、中葡、中意及对应繁中双语文件名，并显示实测语种。",
       "v1.0.4": "修复 SubHD 普通下载弹出浏览器的问题。默认在后台复用专用浏览器配置，公众号验证通过 MoviePilot 通知。手动下载遇到额外人机验证时，仅在有图形界面的主机上打开窗口。",
       "v1.0.3": "SubHD 下载沿用配置的站点入口和持久浏览器配置。公众号验证数字通过 MoviePilot 通知。自动入库遇到额外人机验证时继续尝试其他字幕源，仅对仍缺字幕的任务发送待处理通知。",
       "v1.0.2": "新增 SubHD 公众号验证提示和待验证队列。批次首次触发验证后暂停该源，继续尝试其他字幕源。缺字幕的剧集合并通过 MoviePilot 通知，支持重新检查。",

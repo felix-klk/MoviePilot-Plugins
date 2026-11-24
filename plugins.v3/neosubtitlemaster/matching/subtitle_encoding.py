@@ -37,7 +37,9 @@ def decode_subtitle_bytes(raw: bytes) -> Tuple[str, str]:
             return raw.decode(declared), declared
         except (LookupError, UnicodeDecodeError) as exc:
             raise ValueError(f"字幕编码声明无效或与内容不符: {declared}") from exc
-    match = from_bytes(raw, cp_isolation=["gb18030", "big5", "cp1252", "cp1251", "shift_jis", "euc_kr"]).best()
+    match = from_bytes(raw, cp_isolation=[
+        "gb18030", "big5", "cp1252", "cp1251", "shift_jis", "cp932", "euc_kr", "cp949",
+    ]).best()
     if match is None or match.percent_chaos > 20:
         raise ValueError("无法可靠识别字幕编码，请将文字字幕转换为 UTF-8 后重试")
     text = raw.decode(match.encoding)

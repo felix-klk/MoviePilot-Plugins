@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..config.config_schema import normalize_auto_multi_subtitle_mode, safe_int
 from ..matching.subtitle_language import (
+    auto_language_bucket,
     auto_subtitle_sort_key,
     is_chinese_language_suffix,
     language_matches_preferences,
@@ -68,6 +69,8 @@ class AutoTransferWriteStrategy:
                 raw_bytes = Path(prepared["stored_path"]).read_bytes()
             except Exception:
                 raw_bytes = b""
+            if not raw_bytes:
+                continue
             language_profile = self._collaborators.detect_language_profile(prepared.get("source_name", ""), raw_bytes)
             items.append(
                 {
@@ -103,6 +106,8 @@ class AutoTransferWriteStrategy:
         target_lookup = {item.get("id"): item for item in targets if item.get("id")}
         grouped: Dict[str, List[Dict[str, Any]]] = {}
         for item in items:
+            if auto_language_bucket(item.get("language_suffix")) == "und":
+                continue
             if required is not None and not language_matches_preferences(item.get("language_suffix"), required):
                 continue
             target_id = owner._normalize_text(item.get("target_id"))

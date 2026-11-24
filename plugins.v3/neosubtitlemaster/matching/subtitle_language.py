@@ -1,14 +1,29 @@
 from __future__ import annotations
 
 import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
+from .subtitle_encoding import decode_subtitle_bytes
 from .subtitle_formats import is_bitmap_subtitle
+from .tongwen import load_sami_subtitles, load_ttml_subtitles
 
 
 DEFAULT_AUTO_LANGUAGE_PRIORITY = ["chi&eng", "chi&jp", "chi&kr", "other_bilingual", "chi", "cht", "eng"]
 DEFAULT_AUTO_FORMAT_PRIORITY = [".ass", ".srt", ".ssa", ".vtt"]
+
+CHINESE_BILINGUAL_NAMES = {
+    "eng": "英",
+    "jp": "日",
+    "kr": "韩",
+    "fre": "法",
+    "rus": "俄",
+    "spa": "西",
+    "ger": "德",
+    "por": "葡",
+    "ita": "意",
+}
 
 LANGUAGE_SUFFIX_ALIASES = {
     "zh": "chi",
@@ -20,8 +35,11 @@ LANGUAGE_SUFFIX_ALIASES = {
     "zh_hant": "cht",
     "zh-tw": "cht",
     "zh_tw": "cht",
-    "中英双语": "chi&eng",
-    "繁英双语": "cht&eng",
+    **{
+        f"{prefix}{name}双语": f"{chinese}&{foreign}"
+        for chinese, prefix in (("chi", "中"), ("cht", "繁"))
+        for foreign, name in CHINESE_BILINGUAL_NAMES.items()
+    },
     "chs": "chi",
     "cht": "cht",
     "tw": "cht",
@@ -59,10 +77,9 @@ LANGUAGE_LABELS = {
 }
 
 LANGUAGE_PAIR_LABELS = {
-    "chi&eng": "中英双语",
-    "chi&jp": "中日双语",
-    "chi&kr": "中韩双语",
-    "cht&eng": "中英双语",
+    f"{chinese}&{foreign}": f"中{name}双语"
+    for chinese in ("chi", "cht")
+    for foreign, name in CHINESE_BILINGUAL_NAMES.items()
 }
 
 LEGACY_BILINGUAL_BUCKETS = ["chi&eng", "chi&jp", "chi&kr", "other_bilingual"]
@@ -95,17 +112,6 @@ LANGUAGE_PAIR_ALIASES = {
 
 def normalize_text(value: Any) -> str:
     return str(value or "").strip()
-
-
-def decode_preview_bytes(raw_bytes: bytes) -> str:
-    if not raw_bytes:
-        return ""
-    for encoding in ("utf-8-sig", "utf-16", "gb18030", "big5"):
-        try:
-            return raw_bytes.decode(encoding)
-        except Exception:
-            continue
-    return raw_bytes.decode("utf-8", errors="ignore")
 
 
 def normalize_language_suffix(value: Any) -> str:
@@ -184,134 +190,134 @@ def language_suffix_from_filename(file_name: str, subtitle_exts: Iterable[str]) 
     return {"suffix": suffix, "label": label}
 
 
+_HAN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
+_KANA = re.compile(r"[\u3041-\u3096\u30a1-\u30fa\uff66-\uff9d]")
+_HANGUL = re.compile(r"[\uac00-\ud7a3\u1100-\u11ff\u3131-\u318e]")
+_SIMPLIFIED = re.compile(r"[这们吗让个给说还为从没对]")
+_TRADITIONAL = re.compile(r"[這們嗎讓個給說還為從沒對]")
+_LATIN_WORD = re.compile(r"[^\W\d_]+")
+_LATIN_LANGUAGE_WORDS = {
+    "eng": set("the and you your are was were have not that this with what when where will would can for our they we my me it is to of in".split()),
+    "fre": set("vous nous avec dans pourquoi mais cette parce merci vraiment bonjour alors".split()),
+    "spa": set("pero usted ustedes gracias cómo dónde entonces nosotros estamos quiero puedo contigo".split()),
+    "por": set("não você vocês então também mesmo ninguém com isto isso vamos obrigado aconteceu".split()),
+    "ger": set("ich nicht sind wir euch ihnen wirklich warum haben noch dich und bitte".split()),
+    "ita": set("sono siete questo questa quello allora perché davvero grazie nella abbiamo voglio".split()),
+}
+
+
 def detect_language_profile(file_name: str, raw_bytes: bytes, subtitle_exts: Iterable[str]) -> Dict[str, str]:
-    lowered = file_name.lower()
-    ass_format = Path(lowered).suffix in {".ass", ".ssa"}
-    filename_suffix = language_suffix_from_filename(file_name, subtitle_exts)
-    filename_language = filename_suffix["suffix"]
-    if filename_language != "und" and not (ass_format and filename_language in {"chi", "cht"}):
-        return filename_suffix
+    declared = language_suffix_from_filename(file_name, subtitle_exts)
+    if not raw_bytes or is_bitmap_subtitle(file_name, raw_bytes):
+        return declared
+    try:
+        extension = Path(file_name).suffix.lower()
+        if extension in {".smi", ".sami", ".ttml", ".dfxp"}:
+            import pysubs2
 
-    # ASS/SSA attachments can appear before the dialogue section.
-    sample = raw_bytes if ass_format else raw_bytes[:16000]
-    preview = "" if is_bitmap_subtitle(file_name, raw_bytes) else decode_preview_bytes(sample)
-    preview = _subtitle_dialogue_text(file_name, preview)
-    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", preview))
-    kana_count = len(re.findall(r"[\u3040-\u30ff]", preview))
-    hangul_count = len(re.findall(r"[\uac00-\ud7af]", preview))
-    has_cjk = cjk_count >= 20
-    has_kana = kana_count >= 20
-    has_hangul = hangul_count >= 20
-    # Kanji density cannot distinguish Chinese from Japanese. Look for separate
-    # Chinese dialogue or particles that are not part of normal Japanese text.
-    chinese_lines = "\n".join(
-        line for line in preview.splitlines()
-        if not re.search(r"[\u3040-\u30ff\uac00-\ud7af]", line)
+            load = load_sami_subtitles if extension in {".smi", ".sami"} else load_ttml_subtitles
+            subtitles = load(pysubs2, raw_bytes)
+            dialogue = "\n".join(event.plaintext for event in subtitles if event.end > event.start)
+        else:
+            text, _ = decode_subtitle_bytes(raw_bytes)
+            dialogue = _subtitle_dialogue_text(file_name, text)
+    except (ValueError, ET.ParseError, KeyError, NotImplementedError):
+        return {"suffix": "und", "label": "未知"}
+    if not dialogue.strip():
+        return {"suffix": "und", "label": "未知"}
+
+    suffix = _dialogue_language_suffix(dialogue, declared["suffix"])
+    label = LANGUAGE_PAIR_LABELS.get(suffix) or LANGUAGE_LABELS.get(suffix)
+    if label is None:
+        label = "中外双语" if is_chinese_language_suffix(suffix) and "&" in suffix else "未知"
+    return {"suffix": suffix, "label": label}
+
+
+def _dialogue_language_suffix(dialogue: str, declared: str) -> str:
+    lines = [line.strip() for line in dialogue.splitlines() if line.strip()]
+    han_count = len(_HAN.findall(dialogue))
+    kana_count = len(_KANA.findall(dialogue))
+    hangul_count = len(_HANGUL.findall(dialogue))
+    han_only_lines = [line for line in lines if not (_KANA.search(line) or _HANGUL.search(line))]
+    han_only = "\n".join(han_only_lines)
+    simplified_markers = _SIMPLIFIED.findall(han_only)
+    traditional_markers = _TRADITIONAL.findall(han_only)
+    simplified = len(simplified_markers)
+    traditional = len(traditional_markers)
+    separated_han = len(_HAN.findall(han_only))
+
+    # Japanese names and Korean Hanja can also occupy whole lines.
+    has_chinese = han_count >= 8 and (
+        max(kana_count, hangul_count) < 4
+        or (separated_han >= 20 and len(set(simplified_markers + traditional_markers)) >= 2)
+        or (separated_han >= 20 and separated_han * 3 >= han_count
+            and sum(len(_HAN.findall(line)) >= 6 for line in han_only_lines) >= 2)
     )
-    has_chinese_content = has_cjk and (
-        not has_kana
-        or len(re.findall(r"[\u4e00-\u9fff]", chinese_lines)) >= 20
-        or len(re.findall(r"[这這们們吗嗎呢]", preview)) >= 3
-    )
-    if filename_language != "und":
-        if has_chinese_content and not has_kana and not has_hangul and _has_english_dialogue(preview):
-            suffix = f"{filename_language}&eng"
-            return {"suffix": suffix, "label": LANGUAGE_PAIR_LABELS[suffix]}
-        return filename_suffix
+    latin_suffix = _latin_dialogue_language(lines)
+    if not latin_suffix and "rus" in declared.split("&") and len(re.findall(r"[А-Яа-яЁё]", dialogue)) >= 8:
+        latin_suffix = "rus"
 
-    has_ascii = len(re.findall(r"\b[A-Za-z]{3,}\b", preview)) >= 20
-    has_chinese_name = bool(
-        re.search(r"(^|[\s._\-\[\]()])(?:zh|chi|chs|cht|zho|cmn)(?=$|[\s._\-\[\]()])", lowered)
-        or any(token in lowered for token in ("中英", "中日", "中韩", "中文", "中字"))
-    )
-    has_english_name = bool(
-        re.search(r"(^|[\s._\-\[\]()])(?:en|eng)(?=$|[\s._\-\[\]()])", lowered)
-        or any(token in lowered for token in ("english", "英文", "英语", "中英"))
-    )
-    has_japanese_name = bool(
-        re.search(r"(^|[\s._\-\[\]()])(?:ja|jp|jpn)(?=$|[\s._\-\[\]()])", lowered)
-        or any(token in lowered for token in ("japanese", "日文", "日语", "中日"))
-    )
-    has_korean_name = bool(
-        re.search(r"(^|[\s._\-\[\]()])(?:ko|kr|kor)(?=$|[\s._\-\[\]()])", lowered)
-        or any(token in lowered for token in ("korean", "韩文", "韩语", "中韩"))
-    )
+    if has_chinese:
+        # A few Chinese signs or isolated foreign words do not establish a second dialogue language.
+        if latin_suffix and (han_count < 20 or sum(len(_HAN.findall(line)) >= 4 for line in lines) < 2):
+            return latin_suffix
+        foreign = set()
+        if han_count >= 20:
+            for script, count, suffix in ((_KANA, kana_count, "jp"), (_HANGUL, hangul_count, "kr")):
+                if count >= 20 and sum(len(script.findall(line)) >= 4 for line in lines) >= 2:
+                    foreign.add(suffix)
+            if latin_suffix:
+                foreign.add(latin_suffix)
+        if len(foreign) > 1:
+            return "und"
+        use_traditional = traditional > simplified if simplified + traditional >= 3 else "cht" in declared.split("&")
+        chinese = "cht" if use_traditional else "chi"
+        return f"{chinese}&{next(iter(foreign))}" if foreign else chinese
 
-    suffix = "und"
-    label = "未知"
-
-    if (has_chinese_name or has_chinese_content) and (has_japanese_name or has_kana):
-        suffix = "chi&jp"
-        label = "中日双语"
-    elif (has_chinese_name or has_chinese_content) and (has_korean_name or has_hangul):
-        suffix = "chi&kr"
-        label = "中韩双语"
-    elif (has_chinese_name or (has_cjk and not has_kana and not has_hangul)) and (has_english_name or has_ascii):
-        suffix = "chi&eng"
-        label = "中英双语"
-    elif any(token in lowered for token in ("zh-hant", "zh_tw", "zh-tw", "cht", "繁体", "繁中", "big5")) or re.search(
-        r"(^|[\s._\-\[\]()])(?:tw|hk)(?=$|[\s._\-\[\]()])",
-        lowered,
-    ):
-        suffix = "cht"
-        label = "繁中"
-    elif any(token in lowered for token in ("zh-hans", "zh_cn", "zh-cn", "chs", "简体", "简中", "gb")):
-        suffix = "chi"
-        label = "简中"
-    elif any(token in lowered for token in ("zh", "chi", "zho", "cmn", "中文", "中字")) or (has_cjk and not has_kana and not has_hangul):
-        suffix = "chi"
-        label = "中文"
-    elif any(token in lowered for token in ("jpn", "japanese", "日文", "日语", ".ja.")) or has_kana:
-        suffix = "jpn"
-        label = "日文"
-    elif any(token in lowered for token in ("kor", "korean", "韩文", "韩语", ".ko.")) or has_hangul:
-        suffix = "kor"
-        label = "韩文"
-    elif any(token in lowered for token in ("eng", "english", "英文", "英语", ".en.")) or has_ascii:
-        suffix = "eng"
-        label = "英文"
-    elif any(token in lowered for token in ("fre", "fra", "french", "français", ".fr.")):
-        suffix = "fre"
-        label = "法文"
-    elif any(token in lowered for token in ("spa", "spanish", "español", ".es.")):
-        suffix = "spa"
-        label = "西文"
-    elif any(token in lowered for token in ("ger", "deu", "german", "deutsch", ".de.")):
-        suffix = "ger"
-        label = "德文"
-    elif any(token in lowered for token in ("por", "portuguese", "português", ".pt.")):
-        suffix = "por"
-        label = "葡文"
-    elif any(token in lowered for token in ("ita", "italian", "italiano", ".it.")):
-        suffix = "ita"
-        label = "意文"
-    elif any(token in lowered for token in ("rus", "russian", ".ru.")):
-        suffix = "rus"
-        label = "俄文"
-
-    if suffix == "chi" and has_ascii:
-        suffix = "chi&eng"
-        label = f"{label}/双语"
-
-    return {
-        "suffix": normalize_language_suffix(suffix),
-        "label": label,
-    }
+    if max(kana_count, hangul_count) >= 4:
+        if min(kana_count, hangul_count) >= 4:
+            return "und"
+        return "jpn" if kana_count > hangul_count else "kor"
+    return latin_suffix or "und"
 
 
-def _has_english_dialogue(text: str) -> bool:
-    common_words = re.compile(r"\b(?:the|and|you|your|are|was|were|have|not|that|this|with|what|when|where|will|would|can|for|our|they|we|my|me|it|is|to|of|in)\b")
-    english_lines = {
-        line.strip()
-        for line in text.lower().splitlines()
-        if len(common_words.findall(line)) >= 2 and len(re.findall(r"\b[a-z]+\b", line)) >= 4
-    }
-    return len(english_lines) >= 3
+def _latin_dialogue_language(lines: List[str]) -> str:
+    evidence: Dict[str, set[str]] = {code: set() for code in _LATIN_LANGUAGE_WORDS}
+    for line in lines:
+        words = _LATIN_WORD.findall(line.casefold())
+        if len(words) < 4:
+            continue
+        distinct = set(words)
+        for code, markers in _LATIN_LANGUAGE_WORDS.items():
+            if len(distinct & markers) >= 2:
+                evidence[code].add(" ".join(words))
+    scores = sorted(((len(matches), code) for code, matches in evidence.items()), reverse=True)
+    count, code = scores[0]
+    runner_up = scores[1][0]
+    return code if count >= 3 and (runner_up < 3 or count >= 2 * runner_up) else ""
 
 
 def _subtitle_dialogue_text(file_name: str, text: str) -> str:
     """Remove common subtitle metadata so format headers cannot imply languages."""
-    if Path(file_name).suffix.lower() in {".ass", ".ssa"}:
+    extension = Path(file_name).suffix.lower()
+    if re.match(r"(?is)^\s*(?:<!doctype\s+html\b|<html\b)", text):
+        return ""
+    if extension in {".vtt", ".webvtt"}:
+        dialogue = []
+        for block in re.split(r"\r?\n[ \t]*\r?\n", text):
+            rows = block.strip().splitlines()
+            if not rows or re.match(r"^(?:NOTE|STYLE|REGION|WEBVTT)(?:\s|$)", rows[0]):
+                continue
+            for index, row in enumerate(rows):
+                if re.match(r"^\d{2,}:\d{2}(?::\d{2})?\.\d{3}\s+-->", row):
+                    dialogue.extend(rows[index + 1:])
+                    break
+        text = "\n".join(dialogue)
+    elif extension == ".sub":
+        text = text.replace("|", "\n")
+    elif extension == ".sbv":
+        text = re.sub(r"(?m)^\d+:\d{2}:\d{2}\.\d{3},\d+:\d{2}:\d{2}\.\d{3}\s*$", "", text)
+    if extension in {".ass", ".ssa"}:
         in_events = False
         dialogue = []
         field_count = 10
@@ -608,6 +614,12 @@ def language_profile_from_text(value: Any) -> Dict[str, str]:
             languages.add("eng" if marker in {"中英", "简英", "繁英"} else {"中日": "jp", "中韩": "kr", "中法": "fre", "中西": "spa", "中德": "ger"}[marker])
             explicit_chinese = True
             explicit_traditional = marker == "繁英"
+    for name, suffix in LANGUAGE_SUFFIX_ALIASES.items():
+        if name.endswith("双语") and name in text:
+            chinese, foreign = suffix.split("&")
+            languages.add(foreign)
+            explicit_chinese = True
+            explicit_traditional = explicit_traditional or chinese == "cht"
     if any(marker in text for marker in ("中文", "简体", "简中", "繁体", "繁中", "chinese", "chs", "cht", "zh-cn", "zh-hans", "zh-hant")):
         explicit_chinese = True
         explicit_traditional = explicit_traditional or any(marker in text for marker in ("繁体", "繁中", "cht", "zh-hant"))

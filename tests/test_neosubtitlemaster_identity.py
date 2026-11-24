@@ -10,6 +10,221 @@ import pytest
 from test_subtitlemanualupload_cache import load_plugin_module, plugin_submodule
 
 
+@pytest.mark.parametrize(("dialogue", "suffix"), [
+    ("请告诉我你们准备什么时候出发", "chi"),
+    ("우리 모두 지금 어디로 가야 하는지 알려 주세요", "kor"),
+])
+def test_neo_v3_detects_utf8_subtitle_when_preview_ends_inside_character(dialogue, suffix):
+    neo, _, _ = load_plugin_module("plugins.v3", "NeoSubtitleMaster")
+    language = plugin_submodule(neo, "matching.subtitle_language")
+    header = b"1\n00:00:01,000 --> 00:00:04,000\n"
+    raw = header + (dialogue.replace(" ", "") * 600).encode("utf-8")
+    with pytest.raises(UnicodeDecodeError):
+        raw[:16000].decode("utf-8")
+    assert language.detect_language_profile("episode.srt", raw, {".srt"})["suffix"] == suffix
+
+
+def test_neo_v3_japanese_names_do_not_count_as_chinese_dialogue():
+    neo, _, _ = load_plugin_module("plugins.v3", "NeoSubtitleMaster")
+    language = plugin_submodule(neo, "matching.subtitle_language")
+    japanese = "国際連合安全保障理事会\n" * 3 + "緊急会議の開催について報告します。\n" * 24
+    chinese = "所有客人已抵達，今晚一起出發。\n" * 20
+    assert language.detect_language_profile("episode.srt", japanese.encode(), {".srt"})["suffix"] == "jpn"
+    assert language.detect_language_profile("episode.srt", (japanese + chinese).encode(), {".srt"})["suffix"] == "chi&jp"
+
+
+@pytest.mark.parametrize(("foreign", "label"), [
+    ("eng", "英"), ("jp", "日"), ("kr", "韩"),
+    ("fre", "法"), ("rus", "俄"), ("spa", "西"), ("ger", "德"), ("por", "葡"), ("ita", "意"),
+])
+@pytest.mark.parametrize(("chinese", "prefix", "locale"), [("chi", "中", "zh-CN"), ("cht", "繁", "zh-TW")])
+def test_neo_v3_bilingual_filename_round_trip(foreign, label, chinese, prefix, locale):
+    neo, _, _ = load_plugin_module("plugins.v3", "NeoSubtitleMaster")
+    language = plugin_submodule(neo, "matching.subtitle_language")
+    writer = plugin_submodule(neo, "matching.subtitle_writer")
+    suffix = f"{chinese}&{foreign}"
+    named_alias = f"{prefix}{label}双语"
+    name = writer.build_destination_name(
+        {"basename": "Episode"}, {"language_suffix": f"{foreign}&{chinese}", "ext": ".srt"},
+        normalize_text=language.normalize_text, normalize_language_suffix=language.normalize_language_suffix,
+    )
+    assert name == f"Episode.{named_alias}.{locale}.srt"
+    assert language.normalize_language_suffix(named_alias) == suffix
+    assert language.language_suffix_from_filename(name, {".srt"})["suffix"] == suffix
+    assert language.language_profile_from_text(name)["suffix"] == suffix
+    assert language.language_suffix_from_filename(f"Episode.{suffix}.srt", {".srt"})["suffix"] == suffix
+
+
+CHINESE_LINES = [
+    "这件事情必须先告诉他们。",
+    "如果你们已经准备好了，我们现在出发。",
+    "他说等大家回来以后再一起决定。",
+]
+ENGLISH_LINES = [
+    "We will tell them what happened tomorrow.",
+    "Have you finished all of your work?",
+    "They are waiting for us at the station.",
+]
+JAPANESE_LINES = [
+    "この部屋にいる皆さんに伝えてください。",
+    "今日はとても大切な日です。",
+    "もう少ししたら家に帰ります。",
+]
+KOREAN_LINES = [
+    "여기에 있는 모든 사람에게 알려 주세요.",
+    "우리 모두 오늘 일을 끝내고 돌아가야 해요.",
+    "나는 바로 그쪽으로 가겠다고 말했습니다.",
+]
+PORTUGUESE_LINES = [
+    "Não sei se você já contou o que aconteceu.",
+    "Então vamos conversar com eles também.",
+    "Ninguém mesmo acredita que isso seja verdade.",
+]
+
+
+def _srt_text(lines):
+    return "\n\n".join(
+        f"{index}\n00:00:01,000 --> 00:00:05,000\n{line}" for index, line in enumerate(lines, 1)
+    ) + "\n"
+
+
+@pytest.mark.parametrize(("encoding", "lines", "expected"), [
+    ("utf-8", CHINESE_LINES, "chi"),
+    ("utf-8-sig", KOREAN_LINES, "kor"),
+    ("utf-16", JAPANESE_LINES, "jpn"),
+    ("utf-16-le", KOREAN_LINES, "kor"),
+    ("utf-16-be", CHINESE_LINES, "chi"),
+    ("gb18030", CHINESE_LINES, "chi"),
+    ("big5", ["我們說過了，請把這個交給他。"] * 4, "cht"),
+    ("cp932", JAPANESE_LINES, "jpn"),
+    ("cp949", KOREAN_LINES, "kor"),
+    ("cp1252", PORTUGUESE_LINES, "por"),
+])
+def test_neo_v3_subtitle_dialogue_overrides_claimed_bilingual_tag(encoding, lines, expected):
+    neo, _, _ = load_plugin_module("plugins.v3", "NeoSubtitleMaster")
+    raw = _srt_text(lines * 12).encode(encoding)
+    assert neo.NeoSubtitleMaster._detect_language_profile("Show.S01E01.chi&eng.srt", raw)["suffix"] == expected
+
+
+@pytest.mark.parametrize(("lines", "expected"), [
+    (KOREAN_LINES, "chi&kr"),
+    (JAPANESE_LINES, "chi&jp"),
+    (ENGLISH_LINES, "chi&eng"),
+    (PORTUGUESE_LINES, "chi&por"),
+])
+def test_neo_v3_detects_two_dialogue_languages_beyond_first_sample(lines, expected):
+    neo, _, _ = load_plugin_module("plugins.v3", "NeoSubtitleMaster")
+    raw = _srt_text(CHINESE_LINES * 180 + lines).encode()
+    assert len(_srt_text(CHINESE_LINES * 180).encode()) > 16000
+    assert neo.NeoSubtitleMaster._detect_language_profile("episode.srt", raw)["suffix"] == expected
+
+
+def test_neo_v3_ignores_vtt_notes_and_cue_ids_when_checking_language():
+    neo, _, _ = load_plugin_module("plugins.v3", "NeoSubtitleMaster")
+    text = "WEBVTT\n\nNOTE\n" + "\n".join(ENGLISH_LINES) + "\n\n"
+    text += "\n\n".join(
+        f"{english}\n00:00.000 --> 00:04.000\n{chinese}"
+        for english, chinese in zip(ENGLISH_LINES, CHINESE_LINES)
+    )
+    assert neo.NeoSubtitleMaster._detect_language_profile("episode.eng.vtt", text.encode())["suffix"] == "chi"
+
+
+@pytest.mark.parametrize("raw", [
+    b"\xff\xfe\x00", b"<html><body>Authentication failed</body></html>",
+    b"1\n00:00:00,000 --> 00:00:01,000\nA12345.",
+    _srt_text(["東京"]).encode(),
+    _srt_text(["你好\nHello"]).encode(),
+])
+def test_neo_v3_does_not_use_filename_to_hide_unconfirmed_text(raw):
+    neo, _, _ = load_plugin_module("plugins.v3", "NeoSubtitleMaster")
+    assert neo.NeoSubtitleMaster._detect_language_profile("episode.chi&eng.srt", raw)["suffix"] == "und"
+
+
+def test_neo_v3_bitmap_keeps_explicit_language_tag():
+    neo, _, _ = load_plugin_module("plugins.v3", "NeoSubtitleMaster")
+    raw = b"\x00\x00\x01\xba\x00\x01"
+    assert neo.NeoSubtitleMaster._detect_language_profile("episode.chi&eng.sub", raw)["suffix"] == "chi&eng"
+    assert neo.NeoSubtitleMaster._detect_language_profile("episode.sub", raw)["suffix"] == "und"
+
+
+def test_neo_v3_mislabeled_foreign_subtitle_does_not_block_or_pass_bilingual_auto_write(tmp_path):
+    neo, _, _ = load_plugin_module("plugins.v3", "NeoSubtitleMaster")
+    plugin = neo.NeoSubtitleMaster()
+    plugin._auto_subtitle_language_priority = ["chi&eng"]
+    plugin._auto_subtitle_language_strict = True
+    path = tmp_path / "Show.S01E01.chi&eng.srt"
+    path.write_text(_srt_text(KOREAN_LINES), encoding="utf-8")
+    inventory = plugin.services.subtitle_inventory()
+    subtitle = inventory._subtitle_file_metadata(path, "Show.S01E01")
+    assert (subtitle["language_suffix"], subtitle["language_label"]) == ("kor", "韩文")
+    language = plugin_submodule(neo, "matching.subtitle_language")
+    target = {"id": "ep1", "basename": "Show.S01E01", "season": 1, "episode": 1, "subtitles": [subtitle]}
+    assert not language.target_satisfies_auto_subtitle_policy(target, ["chi&eng"])
+    prepared = [{"upload_id": "one", "source_name": path.name, "stored_path": str(path), "ext": ".srt"}]
+    service = plugin.services.auto_transfer()
+    assert service.select_auto_subtitle_items(prepared, [target]) == []
+    assert plugin.services.online_ai().online_ai_candidate_items(prepared_uploads=prepared, targets=[target])[0]["language_suffix"] == "kor"
+    path.write_bytes(b"uncertain")
+    assert plugin.services.online_ai().online_ai_candidate_items(prepared_uploads=prepared, targets=[target]) == []
+    path.write_text(_srt_text(CHINESE_LINES + ENGLISH_LINES), encoding="utf-8")
+    assert service.select_auto_subtitle_items(prepared, [target])[0]["language_suffix"] == "chi&eng"
+
+
+@pytest.mark.parametrize("extension", [".smi", ".ttml"])
+def test_neo_v3_reads_timed_dialogue_from_structured_subtitles(extension):
+    from test_subtitlemanualupload_text_formats import make_sami, make_ttml
+
+    neo, _, _ = load_plugin_module("plugins.v3", "NeoSubtitleMaster")
+    text = "這是一段只包含繁體中文的對白，請等我們做好準備。"
+    raw = make_sami(text, "big5") if extension == ".smi" else make_ttml(text, "utf-16")
+    assert neo.NeoSubtitleMaster._detect_language_profile(f"episode.eng{extension}", raw)["suffix"] == "cht"
+
+
+def test_neo_v3_emby_fallback_respects_verified_local_subtitle_language(monkeypatch):
+    neo, _, _ = load_plugin_module("plugins.v3", "NeoSubtitleMaster")
+    plugin = neo.NeoSubtitleMaster()
+    plugin._auto_subtitle_language_priority = ["chi&kr"]
+    plugin._auto_subtitle_language_strict = True
+    plugin._auto_skip_chinese_media_on_transfer = False
+    name = "Show.S01E01.chi&kr.srt"
+    entry = {"basename": "Show.S01E01"}
+    target = {**entry, "subtitles": [{"name": name, "language_suffix": "kor"}]}
+    inventory = plugin.services.subtitle_inventory()
+    monkeypatch.setattr(inventory, "probe_embedded_subtitle_tracks", lambda entry: None)
+    monkeypatch.setattr(plugin.services, "subtitle_inventory", lambda: inventory)
+    emby = SimpleNamespace(subtitle_tracks_for_entry=lambda *args, **kwargs: ("ready", [
+        {"IsExternal": True, "Codec": "subrip", "Language": "chi", "Path": "/media/" + name}
+    ]))
+    monkeypatch.setattr(plugin.services, "emby_refresh", lambda: emby)
+    service = plugin.services.auto_transfer()
+    monkeypatch.setattr(service, "_target_from_entry", lambda entry: target)
+
+    assert service._check_emby_subtitles_for_task({"entry": entry}) is None
+    target["subtitles"] = []
+    assert service._check_emby_subtitles_for_task({"entry": entry})["status"] == "skipped"
+
+
+def test_neo_v3_mislabeled_legacy_sidecar_does_not_conflict_with_new_filename(tmp_path):
+    neo, _, _ = load_plugin_module("plugins.v3", "NeoSubtitleMaster")
+    writer = neo.NeoSubtitleMaster().services.writer()
+    video = tmp_path / "Show.S01E01.mkv"
+    legacy = video.with_suffix(".chi&kr.srt")
+    original = _srt_text(KOREAN_LINES).encode()
+    legacy.write_bytes(original)
+    source = tmp_path / "downloaded.srt"
+    source.write_text(_srt_text(CHINESE_LINES + KOREAN_LINES), encoding="utf-8")
+    operation = {
+        "source_path": source, "destination_path": video.with_suffix(".中韩双语.zh-CN.srt"),
+        "video_path": video, "target_entry": {"id": "ep1"}, "language_suffix": "chi&kr",
+    }
+    conflicts = {}
+    assert writer._confirm_write_conflicts([operation], None, conflicts) == [operation]
+    assert conflicts == {} and legacy.read_bytes() == original
+    legacy.write_bytes(source.read_bytes())
+    assert writer._confirm_write_conflicts([operation], None, conflicts) == []
+    assert conflicts == {"ep1": legacy.name}
+
+
 @pytest.mark.parametrize("generation", ["v2", "v3"])
 def test_neo_and_legacy_register_as_independent_plugins(monkeypatch, generation):
     package_dir = f"plugins.{generation}"

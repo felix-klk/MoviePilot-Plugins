@@ -44,7 +44,7 @@ class OnlineAiService:
             raw_bytes = file_path.read_bytes()
             language_profile = owner._detect_language_profile(prepared["source_name"], raw_bytes)
             suffix = language_profile["suffix"]
-            if is_chinese_language_suffix(suffix):
+            if not raw_bytes or suffix == "und" or is_chinese_language_suffix(suffix):
                 continue
             items.append(
                 {
@@ -54,7 +54,7 @@ class OnlineAiService:
                     "ext": prepared["ext"],
                     "target_id": suggest_target_id(prepared, targets, extract_episode_hint=owner._extract_episode_hint),
                     "detected_label": language_profile["label"],
-                    "language_suffix": suffix if suffix != "und" else "eng",
+                    "language_suffix": suffix,
                     "online_source": prepared.get("online_source", ""),
                 }
             )
@@ -88,7 +88,7 @@ class OnlineAiService:
         if not is_text_subtitle(source_path, raw_bytes) or pysubs2_format(source_path) is None:
             return None
         profile = owner._detect_language_profile(prepared.get("source_name", ""), raw_bytes)
-        if is_chinese_language_suffix(profile.get("suffix")):
+        if profile["suffix"] == "und" or is_chinese_language_suffix(profile["suffix"]):
             return None
         output_dir = session_dir / "ai_srt_sources"
         output_dir.mkdir(parents=True, exist_ok=True)
